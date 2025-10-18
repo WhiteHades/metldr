@@ -8,6 +8,11 @@
   "side_panel": {
     "default_path": "index.html"
   },
-  "permissions": ["sidePanel"],
-  "host_permissions": ["http://*/*", "https://*/*"]
+  "permissions": [
+    "sidePanel"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ]
 }
