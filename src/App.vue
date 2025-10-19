@@ -1,30 +1,40 @@
 <script setup>
-import HelloWorld from './components/HelloWorld.vue'
 </script>
 
 <template>
-  <div>
-    <a href="https://vite.dev" target="_blank">
-      <img src="/vite.svg" class="logo" alt="Vite logo" />
-    </a>
-    <a href="https://vuejs.org/" target="_blank">
-      <img src="./assets/vue.svg" class="logo vue" alt="Vue logo" />
-    </a>
+  <div class="container">
+    <header>
+      <h1>
+        MeTLDR
+        <p class="subtitle">local and private ai assistant</p>
+      </h1>
+    </header>
+    <main>
+    </main>
   </div>
-  <HelloWorld msg="Vite + Vue" />
 </template>
 
 <style scoped>
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: filter 300ms;
+.container {
+  padding: 16px;
+  width: 100%;
+  box-sizing: border-box;
 }
-.logo:hover {
-  filter: drop-shadow(0 0 2em #646cffaa);
+
+header {
+  border-bottom: 1px solid #444;
+  padding-bottom: 8px;
+  margin-bottom: 16px;
 }
-.logo.vue:hover {
-  filter: drop-shadow(0 0 2em #42b883aa);
+
+h1 {
+  font-size: 1.5em;
+  margin: 0;
+}
+
+.subtitle {
+  font-size: 0.9em;
+  color: #888;
+  margin: 4px 0 0;
 }
 </style>
