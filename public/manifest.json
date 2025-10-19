@@ -9,7 +9,7 @@
     "default_path": "index.html"
   },
   "background": {
-    "service_worker": "src/background.js"
+    "service_worker": "background.js"
   },
   "content_scripts": [
     {
@@ -17,7 +17,7 @@
         "<all_urls>"
       ],
       "js": [
-        "src/content.js"
+        "content.js"
       ]
     }
   ],
