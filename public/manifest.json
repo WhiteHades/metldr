@@ -9,8 +9,18 @@
     "default_path": "index.html"
   },
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "src/background.js"
   },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "src/content.js"
+      ]
+    }
+  ],
   "permissions": [
     "sidePanel"
   ],

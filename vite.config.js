@@ -9,12 +9,13 @@ export default defineConfig({
     rollupOptions: {
       input: {
         side_panel: 'index.html',
-        background: 'src/background/index.js'
+        background: 'src/background/index.js',
+        content: 'src/content/main.js',
       },
       output: {
         entryFileNames: '[name].js',
         chunkFileNames: 'chunks/[name].js',
-        assetFileNames: 'assets/[name][extreme]',
+        assetFileNames: 'assets/[name][extname]',
       }
     }
   }
