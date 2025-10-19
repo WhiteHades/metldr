@@ -22,7 +22,9 @@
     }
   ],
   "permissions": [
-    "sidePanel"
+    "sidePanel",
+    "storage",
+    "contextMenus"
   ],
   "host_permissions": [
     "http://*/*",
