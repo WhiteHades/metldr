@@ -1,4 +1,5 @@
 let sidePanelPort = null;
+let lastSelectionMessage = null;
 
 // side panel behaviour
 chrome.sidePanel
@@ -9,6 +10,12 @@ chrome.sidePanel
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name === "side_panel") {
     sidePanelPort = port;
+    console.log("side panel connected")
+
+    if (lastSelectionMessage) {
+      console.log("sending stored message to newly connected side panel:", lastSelectionMessage)
+      sidePanelPort.postMessage(lastSelectionMessage);
+    }
 
     port.onMessage.addListener((msg) => {
       console.log("message from side panel:", msg);
@@ -16,6 +23,7 @@ chrome.runtime.onConnect.addListener((port) => {
 
     port.onDisconnect.addListener(() => {
       sidePanelPort = null;
+      console.log("side panel disconnected");
     });
   }
 });
@@ -23,6 +31,10 @@ chrome.runtime.onConnect.addListener((port) => {
 // messages from content scripts
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log("received message from content script:", message);
+
+  if (message.type === 'SELECTION_TEXT') {
+    lastSelectionMessage = message;
+  }
 
   if (sidePanelPort) {
     sidePanelPort.postMessage(message);
