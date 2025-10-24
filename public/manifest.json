@@ -2,8 +2,9 @@
   "manifest_version": 3,
   "version": "0.1.0",
   "name": "MeTLDR",
+  "description": "Local and private AI assistant powered by Ollama",
   "action": {
-    "default_title": "Click to open side panel"
+    "default_title": "MeTLDR - Click to open"
   },
   "side_panel": {
     "default_path": "index.html"
@@ -13,12 +14,9 @@
   },
   "content_scripts": [
     {
-      "matches": [
-        "<all_urls>"
-      ],
-      "js": [
-        "content.js"
-      ]
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
     }
   ],
   "permissions": [
@@ -27,7 +25,7 @@
     "contextMenus"
   ],
   "host_permissions": [
-    "http://*/*",
-    "https://*/*"
+    "http://localhost:11434/*",
+    "http://127.0.0.1:11434/*"
   ]
 }
