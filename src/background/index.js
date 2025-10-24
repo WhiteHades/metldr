@@ -1,42 +1,14 @@
-let sidePanelPort = null;
-let lastSelectionMessage = null;
+// background service worker handling ollama communication and message routing
 
-// side panel behaviour
 chrome.sidePanel
   .setPanelBehavior({ openPanelOnActionClick: true })
-  .catch((error) => console.error(error));
+  .catch((error) => console.error('Side panel error:', error));
 
-// connections from the side panel
-chrome.runtime.onConnect.addListener((port) => {
-  if (port.name === "side_panel") {
-    sidePanelPort = port;
-    console.log("side panel connected")
-
-    if (lastSelectionMessage) {
-      console.log("sending stored message to newly connected side panel:", lastSelectionMessage)
-      sidePanelPort.postMessage(lastSelectionMessage);
-    }
-
-    port.onMessage.addListener((msg) => {
-      console.log("message from side panel:", msg);
-    });
-
-    port.onDisconnect.addListener(() => {
-      sidePanelPort = null;
-      console.log("side panel disconnected");
-    });
-  }
-});
-
-// messages from content scripts
+// TODO: milestone 2, message handler, expanded for email processing
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  console.log("received message from content script:", message);
-
-  if (message.type === 'SELECTION_TEXT') {
-    lastSelectionMessage = message;
+  if (message.type === 'SUMMARIZE_EMAIL') {
+    sendResponse({ error: 'Not implemented yet' });
   }
-
-  if (sidePanelPort) {
-    sidePanelPort.postMessage(message);
-  }
+  
+  return true;
 });
