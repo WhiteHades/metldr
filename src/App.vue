@@ -1,57 +1,86 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue';
 
-const selectedText = ref('');
-const isGpuAvailable = ref(false);
-let port = null;
+const ollamaStatus = ref('checking');
+const setupCommands = `curl -fsSL https://ollama.com/install.sh | sh
+OLLAMA_ORIGINS="chrome-extension://*" ollama serve`;
 
-onMounted(() => {
-  if (navigator.gpu) {
-    console.log("gpu available")
-    isGpuAvailable.value = true;
+let statusCheckInterval = null;
+
+const OLLAMA_URL = 'http://127.0.0.1:11434';
+
+async function checkOllama() {
+  try {
+    const response = await fetch(`${OLLAMA_URL}/api/tags`, {
+      method: 'GET',
+      signal: AbortSignal.timeout(2000)
+    });
+    
+    ollamaStatus.value = response.ok ? 'ready' : 'error';
+    return response.ok;
+  } catch (error) {
+    ollamaStatus.value = 'not-found';
+    return false;
   }
-  else {
-    console.log("gpu not available")
-  }
+}
 
-  port = chrome.runtime.connect({ name: "side_panel" });
+async function retryDetection() {
+  ollamaStatus.value = 'checking';
+  await checkOllama();
+}
 
-  port.onMessage.addListener((message) => {
-    if (message.type === 'SELECTION_TEXT') {
-      selectedText.value = message.text;
+onMounted(async () => {
+  await checkOllama();
+
+  statusCheckInterval = setInterval(async () => {
+    if (ollamaStatus.value !== 'ready') {
+      await checkOllama();
     }
-  });
-})
+  }, 5000);
+});
 
 onUnmounted(() => {
-  if (port) {
-    port.disconnect();
-  }
-})
-
+  if (statusCheckInterval) clearInterval(statusCheckInterval);
+});
 </script>
 
 <template>
   <div class="container">
     <header>
-      <h1>
-        MeTLDR
-        <p class="subtitle">local and private ai assistant</p>
-      </h1>
+      <h1>MeTLDR</h1>
+      <p class="subtitle">local and private ai assistant</p>
     </header>
-    <main v-if='isGpuAvailable'>
-      <div v-if='selectedText' class='selection-box'>
-        <h2>Selected Text</h2>
-        <p>{{ selectedText }}</p>
+
+    <main>
+      <div v-if="ollamaStatus === 'checking'" class="status-box">
+        <p>checking for ollama...</p>
       </div>
-      <div v-else class='placeholder'>
-        <p>select text on any page to get started</p>
+
+      <div v-else-if="ollamaStatus === 'not-found'" class="not-found">
+        <p>ollama not detected</p>
+        <button @click="retryDetection" class="secondary-btn">
+          check again
+        </button>
       </div>
-    </main>
-    <main v-else class='errorbox'>
-      <h2>WebGPU not available</h2>
-      <p>MeTLDR requires the WebGPU to run AI models locally.</p>
-      <p>Please update to the latest version of Chrome or enable WebGPU in <code>chrome://flags</code></p>
+
+      <div v-else-if="ollamaStatus === 'ready'" class="dashboard">
+        <div class="status-indicator">
+          <span class="status-dot"></span>
+          <span>ollama ready</span>
+        </div>
+
+        <div class="welcome-card">
+          <h2>Welcome to MeTLDR</h2>
+          <p>local, private AI assistant.</p>
+        </div>
+      </div>
+
+      <div v-else-if="ollamaStatus === 'error'" class="error-box">
+        <p>connection error</p>
+        <button @click="retryDetection" class="secondary-btn">
+          check again
+        </button>
+      </div>
     </main>
   </div>
 </template>
@@ -65,13 +94,14 @@ onUnmounted(() => {
 
 header {
   border-bottom: 1px solid #444;
-  padding-bottom: 8px;
-  margin-bottom: 16px;
+  padding-bottom: 12px;
+  margin-bottom: 20px;
 }
 
 h1 {
-  font-size: 1.5em;
+  font-size: 1.8em;
   margin: 0;
+  color: #fff;
 }
 
 .subtitle {
@@ -80,26 +110,50 @@ h1 {
   margin: 4px 0 0;
 }
 
-.selection-box {
-  background-color: #333;
-  border-radius: 8px;
+h2 {
+  font-size: 1.2em;
+  margin: 0 0 12px 0;
+}
+
+h3 {
+  font-size: 1em;
+  margin: 12px 0 8px 0;
+}
+
+.status-box {
+  text-align: center;
+  padding: 40px 20px;
+  color: #ccc;
+}
+
+.not-found {
+  text-align: center;
+  padding: 40px 20px;
+  color: #ccc;
+}
+
+.status-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 12px;
-  font-family: monospace;
-  white-space: pre-wrap;
-  word-wrap: break-word;
-}
-
-.errorbox {
-  background-color: #4d2d2d;
-  border: 1px solid #a55;
+  background-color: #2a3a2a;
+  border: 1px solid #5a5;
   border-radius: 8px;
-  padding: 16px;
-  text-align: center;
+  margin-bottom: 20px;
 }
 
-.placeholder {
-  color: #888;
+.status-dot {
+  width: 8px;
+  height: 8px;
+  background-color: #5a5;
+  border-radius: 50%;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.error-box {
   text-align: center;
-  padding: 20px;
+  padding: 40px 20px;
+  color: #a55;
 }
 </style>
