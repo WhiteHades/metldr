@@ -1,5 +1,4 @@
-// MeTLDR Gmail Integration
-// Seamless email summaries directly in Gmail with smooth animations
+// metldr gmail integration
 
 console.log('MeTLDR: Content script loaded');
 console.log('MeTLDR: Current URL:', window.location.href);
@@ -11,10 +10,30 @@ console.log('MeTLDR: Is Gmail?', isGmail);
 // track processed emails globally
 const processedEmails = new Set();
 
+if (!document.getElementById('metldr-animations')) {
+  const style = document.createElement('style');
+  style.id = 'metldr-animations';
+  style.textContent = `
+    @keyframes statusPulse {
+      0%, 100% {
+        opacity: 0.85;
+        box-shadow: 0 0 8px currentColor, 0 0 12px currentColor;
+      }
+      50% {
+        opacity: 1;
+        box-shadow: 0 0 16px currentColor, 0 0 24px currentColor, 0 0 32px currentColor;
+      }
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+loadCurrentTheme();
+
 if (isGmail) {
   console.log('MeTLDR: Gmail detected');
   
-  // wait for Gmail to be ready
+  // wait for gmail to be ready
   waitForGmail().then(() => {
     console.log('MeTLDR: Gmail ready, initializing...');
     initInjector();
@@ -43,7 +62,7 @@ async function waitForGmail() {
   });
 }
 
-// inject summary UI into Gmail
+// inject summary UI into gmail
 function initInjector() {
   console.log('MeTLDR: initInjector called');
   let lastProcessedUrl = '';
@@ -53,7 +72,7 @@ function initInjector() {
     const currentUrl = window.location.href;
     console.log('MeTLDR: Mutation detected, URL:', currentUrl);
     
-    // check if URL changed (user opened new email)
+    // check if url changed (user opened new email)
     if (currentUrl === lastProcessedUrl) {
       console.log('MeTLDR: Same URL, skipping');
       return;
@@ -72,13 +91,13 @@ function initInjector() {
     }
   };
 
-  // observe Gmail's DOM for email thread changes
+  // observe gmail's DOM for email thread changes
   const observer = new MutationObserver(() => {
     clearTimeout(initInjector.debounceTimer);
     initInjector.debounceTimer = setTimeout(processEmails, 300);
   });
 
-  // observe the main Gmail container
+  // observe the main gmail container
   const mainContainer = document.querySelector('div[role="main"]') || document.body;
   console.log('MeTLDR: Main container found?', !!mainContainer);
   
@@ -104,7 +123,7 @@ function initInjector() {
   initInjector.observer = observer;
   console.log('MeTLDR: initInjector complete');
 
-  // hook URL changes (Gmail SPA navigation)
+  // hook url changes (gmail spa navigation)
   hookUrlChanges(() => {
     clearTimeout(initInjector.debounceTimer);
     initInjector.debounceTimer = setTimeout(processEmails, 200);
@@ -116,7 +135,7 @@ function getCurrentThreadId() {
   const url = window.location.href;
   console.log('MeTLDR: Checking URL for thread ID:', url);
   
-  // try different Gmail URL patterns
+  // try different gmail url patterns
   let match = url.match(/#inbox\/([a-zA-Z0-9_-]+)/); // #inbox/THREAD_ID
   if (match) {
     console.log('MeTLDR: Found thread ID:', match[1]);
@@ -133,7 +152,7 @@ function getCurrentThreadId() {
   return null;
 }
 
-// observe Gmail SPA URL changes
+// observe rmail SPA url changes
 function hookUrlChanges(onChange) {
   try {
     if (hookUrlChanges._installed) return;
@@ -241,16 +260,16 @@ async function processEmailThread(threadElement) {
   }
 }
 
-// extract email text from Gmail DOM
+// extract email text from gmail DOM
 function extractEmailText(threadElement) {
   console.log('MeTLDR: Extracting email text...');
   
-  // get the email content area (the actual email message body)
+  // get the email content area
   const selectors = [
     '.ii.gt', // email body class
-    '.a3s.aiL', // modern Gmail body
-    '.ii', // general email content
-    '[dir="ltr"]', // emails typically have this
+    '.a3s.aiL', //  Gmail body
+    '.ii', //  email content
+    '[dir="ltr"]', // emails
     '.gmail_signature' // before signature
   ];
 
@@ -294,7 +313,6 @@ function extractEmailText(threadElement) {
 // get summary via background script
 async function getSummaryFromBackground(emailText, emailId, forceRegenerate = false) {
   return new Promise((resolve) => {
-    // Check if chrome.runtime is available (extension context valid)
     if (!chrome || !chrome.runtime || !chrome.runtime.sendMessage) {
       console.error('MeTLDR: Chrome runtime not available - extension may need reload');
       resolve(null);
@@ -322,37 +340,43 @@ async function getSummaryFromBackground(emailText, emailId, forceRegenerate = fa
   });
 }
 
-// show loading animation with Material You style
+// show loading animation matching current theme
 function showLoading(threadElement) {
+  const theme = THEME_COLORS[currentTheme] || THEME_COLORS.cyberpunk;
+  
   const loading = document.createElement('div');
   loading.className = 'metldr-loading';
   loading.innerHTML = `
     <div style="
-      padding: 12px 16px;
-      background: rgba(241, 243, 244, 0.8);
-      backdrop-filter: blur(10px);
-      border-radius: 12px;
+      padding: 10px 14px;
+      background: linear-gradient(135deg, ${theme.bg}, ${theme.bgSecondary});
+      border: 1px solid ${theme.border};
+      border-radius: 16px;
       margin: 12px 0;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      box-shadow: 0 4px 24px rgba(0,0,0,0.15), 0 2px 8px rgba(0,0,0,0.1), inset 0 1px 0 ${theme.border}40;
+      backdrop-filter: blur(20px) saturate(130%);
+      -webkit-backdrop-filter: blur(20px) saturate(130%);
       animation: fadeInUp 0.3s ease-out;
+      -webkit-font-smoothing: antialiased;
     ">
       <div style="
         display: flex;
         align-items: center;
-        gap: 12px;
+        gap: 10px;
       ">
         <div style="
-          width: 20px;
-          height: 20px;
-          border: 3px solid rgba(26, 115, 232, 0.2);
-          border-top-color: rgb(26, 115, 232);
+          width: 16px;
+          height: 16px;
+          border: 2px solid ${theme.border};
+          border-top-color: ${theme.primary};
           border-radius: 50%;
-          animation: spin 0.8s linear infinite;
+          animation: spin 0.6s linear infinite;
         "></div>
         <span style="
-          color: rgb(60, 64, 67);
-          font-size: 0.925em;
-          font-weight: 500;
+          color: ${theme.text};
+          font-size: 13px;
+          font-weight: 600;
+          -webkit-font-smoothing: antialiased;
         ">Generating summary...</span>
       </div>
     </div>
@@ -387,9 +411,79 @@ function showLoading(threadElement) {
   return loading;
 }
 
-// inject beautiful summary UI with Material You style
+// theme
+const THEME_COLORS = {
+  cyberpunk: {
+    primary: '#00f0ff',
+    secondary: '#ff0080',
+    accent: '#fcee09',
+    bg: 'rgba(0, 0, 0, 0.95)',
+    bgSecondary: 'rgba(10, 10, 10, 0.95)',
+    text: '#e4e4e7',
+    textMuted: '#71717a',
+    border: 'rgba(0, 240, 255, 0.3)',
+    glow: 'rgba(0, 240, 255, 0.4)',
+  },
+  catppuccin: {
+    primary: '#f5e0dc',
+    secondary: '#cba6f7',
+    accent: '#fab387',
+    bg: 'rgba(30, 30, 46, 0.95)',
+    bgSecondary: 'rgba(24, 24, 37, 0.95)',
+    text: '#cdd6f4',
+    textMuted: '#6c7086',
+    border: 'rgba(245, 224, 220, 0.2)',
+    glow: 'rgba(245, 224, 220, 0.3)',
+  },
+  gruvbox: {
+    primary: '#fe8019',
+    secondary: '#8ec07c',
+    accent: '#fabd2f',
+    bg: 'rgba(40, 40, 40, 0.95)',
+    bgSecondary: 'rgba(29, 32, 33, 0.95)',
+    text: '#ebdbb2',
+    textMuted: '#928374',
+    border: 'rgba(254, 128, 25, 0.3)',
+    glow: 'rgba(254, 128, 25, 0.4)',
+  },
+};
+
+// current theme state (from chrome.storage)
+let currentTheme = 'cyberpunk';
+
+// load theme from chrome.storage
+async function loadCurrentTheme() {
+  try {
+    const result = await chrome.storage.local.get('theme');
+    currentTheme = result.theme || 'cyberpunk';
+    console.log('MeTLDR: Loaded theme from storage:', currentTheme);
+  } catch (error) {
+    console.error('MeTLDR: Failed to load theme:', error);
+    currentTheme = 'cyberpunk';
+  }
+}
+
+// listen for theme changes from side panel
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes.theme) {
+    const newTheme = changes.theme.newValue;
+    console.log('MeTLDR: Theme changed to:', newTheme);
+    currentTheme = newTheme;
+    
+    // update existing summary if visible
+    const existingSummary = document.querySelector('.metldr-summary');
+    if (existingSummary) {
+      console.log('MeTLDR: Refreshing summary with new theme');
+      const threadId = getCurrentThreadId();
+      if (threadId) {
+        existingSummary.remove();
+        processCurrentEmail();
+      }
+    }
+  }
+});
+
 function injectSummaryUI(threadElement, summary) {
-  // check if already injected (prevent duplicates)
   const existingSummary = threadElement.querySelector('.metldr-summary') || 
                           document.querySelector('.metldr-summary');
   if (existingSummary) {
@@ -397,131 +491,192 @@ function injectSummaryUI(threadElement, summary) {
     return;
   }
   
-  console.log('MeTLDR: Injecting summary UI...');
+  console.log('MeTLDR: Injecting summary UI with theme:', currentTheme);
 
   const summaryText = summary.summary || '';
   const actions = summary.action_items || [];
   const dates = summary.dates || [];
-  
-  // get current thread ID for regenerate button
+  const confidence = summary.confidence || 'medium';
   const currentThreadId = getCurrentThreadId();
+  const theme = THEME_COLORS[currentTheme] || THEME_COLORS.cyberpunk;
 
-  // create modern Material You glossy card
+  const confidenceColors = {
+    high: '#10b981',
+    medium: '#f59e0b',
+    low: '#ef4444'
+  };
+  const confColor = confidenceColors[confidence] || '#6b7280';
+
+  // create card
   const summaryDiv = document.createElement('div');
   summaryDiv.className = 'metldr-summary';
+  summaryDiv.style.cssText = 'opacity: 0; transform: translateY(-10px) scale(0.98);';
+  
   summaryDiv.innerHTML = `
     <div style="
-      background: linear-gradient(135deg, rgba(241, 243, 244, 0.9) 0%, rgba(255, 255, 255, 0.95) 100%);
-      backdrop-filter: blur(20px);
-      border: 1px solid rgba(26, 115, 232, 0.2);
+      background: linear-gradient(135deg, ${theme.bg}, ${theme.bgSecondary});
+      border: 1px solid ${theme.border};
       border-radius: 16px;
+      padding: 10px 14px;
       margin: 12px 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.15), 0 2px 8px rgba(0,0,0,0.1), inset 0 1px 0 ${theme.border}40;
+      backdrop-filter: blur(20px) saturate(130%);
+      -webkit-backdrop-filter: blur(20px) saturate(130%);
       position: relative;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.04);
-      animation: slideInUp 0.4s cubic-bezier(0.16, 1, 0.3, 1);
-      transition: all 0.2s ease;
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      transform: translateZ(0);
+      will-change: transform;
     ">
       <div style="
-        position: absolute;
-        top: -10px;
-        left: 12px;
-        background: linear-gradient(135deg, rgb(26, 115, 232) 0%, rgb(11, 87, 208) 100%);
-        color: white;
-        font-size: 0.7em;
-        padding: 4px 10px;
-        border-radius: 6px;
-        font-weight: 600;
-        box-shadow: 0 2px 4px rgba(26, 115, 232, 0.3);
-        z-index: 1;
-      ">MeTLDR</div>
-      
-      <button class="metldr-regenerate-btn" data-thread-id="${currentThreadId}" style="
-        position: absolute;
-        top: -10px;
-        right: 12px;
-        padding: 4px 8px;
-        background: rgba(255, 255, 255, 0.95);
-        border: 1px solid rgba(26, 115, 232, 0.3);
-        border-radius: 6px;
-        color: rgb(26, 115, 232);
-        font-size: 0.7em;
-        font-weight: 500;
-        cursor: pointer;
-        transition: all 0.2s ease;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-        z-index: 1;
-      ">↻</button>
-      
-      <div style="padding: 20px 16px 16px;">
-        <div style="
-          font-size: 1em;
-          line-height: 1.6;
-          color: rgb(32, 33, 36);
-          margin-bottom: ${actions.length > 0 || dates.length > 0 ? '12px' : '0'};
-          font-weight: 400;
-        ">${escapeHtml(summaryText)}</div>
-        
-        ${actions.length > 0 ? `
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: ${summaryText || actions.length > 0 ? '8px' : '0'};
+        gap: 8px;
+      ">
+        <div style="display: flex; align-items: center; gap: 6px;">
           <div style="
-            margin-top: 12px;
-            padding-top: 12px;
-            border-top: 1px solid rgba(0,0,0,0.08);
-          ">
-            <div style="
-              font-size: 0.85em;
-              font-weight: 600;
-              color: rgb(95, 99, 104);
-              margin-bottom: 6px;
-              letter-spacing: 0.3px;
-            ">ACTION ITEMS</div>
-            <div style="
-              font-size: 0.925em;
-              color: rgb(95, 99, 104);
-              line-height: 1.5;
-            ">
-              ${actions.map(a => escapeHtml(a)).join(' • ')}
-            </div>
-          </div>
-        ` : ''}
-        
-        ${dates.length > 0 ? `
-          <div style="
-            margin-top: 8px;
-            font-size: 0.875em;
-            color: rgb(128, 134, 139);
-            display: flex;
-            align-items: center;
-            gap: 4px;
-          ">
-            📅 ${escapeHtml(dates.join(', '))}
-          </div>
-        ` : ''}
-        
-        ${summary.time_ms ? `
-          <div style="
-            margin-top: 8px;
-            font-size: 0.75em;
-            color: rgb(154, 160, 166);
-            display: flex;
-            align-items: center;
-            gap: 4px;
-            opacity: 0.8;
-          ">
-            ⏱️ ${formatTime(summary.time_ms)}${summary.cached ? ' (cached)' : ''}
-          </div>
-        ` : ''}
+            width: 7px;
+            height: 7px;
+            background: ${confColor};
+            border-radius: 50%;
+            box-shadow: 0 0 8px ${confColor}, 0 0 12px ${confColor}80;
+            animation: statusPulse 2s ease-in-out infinite;
+          "></div>
+          <strong style="
+            font-size: 13px;
+            font-weight: 600;
+            color: ${theme.primary};
+            letter-spacing: -0.01em;
+            -webkit-font-smoothing: antialiased;
+          ">MeTLDR</strong>
+          <span title="confidence level: how certain the AI is about this summary's accuracy" style="
+            font-size: 11px;
+            color: ${theme.text};
+            padding: 2px 7px;
+            background: ${theme.bgSecondary};
+            border-radius: 8px;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            -webkit-font-smoothing: antialiased;
+            cursor: help;
+          ">${confidence}</span>
+        </div>
+        <button class="metldr-regenerate-btn" data-thread-id="${currentThreadId}" title="regenerate summary with fresh AI analysis" style="
+          padding: 4px 10px;
+          background: ${theme.bgSecondary};
+          border: 1px solid ${theme.border};
+          border-radius: 8px;
+          color: ${theme.primary};
+          font-size: 11px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+          -webkit-font-smoothing: antialiased;
+        ">↻</button>
       </div>
+
+      ${summaryText ? `
+        <div class="metldr-summary-item" style="
+          background: ${theme.bgSecondary};
+          border-radius: 10px;
+          padding: 10px 12px;
+          margin-bottom: ${actions.length > 0 || dates.length > 0 ? '6px' : '0'};
+          font-size: 14px;
+          line-height: 1.5;
+          color: ${theme.text};
+          font-weight: 400;
+          -webkit-font-smoothing: antialiased;
+          -moz-osx-font-smoothing: grayscale;
+        ">${escapeHtml(summaryText)}</div>
+      ` : ''}
+        
+      ${actions.length > 0 ? `
+        <div class="metldr-summary-item" style="
+          margin-bottom: ${dates.length > 0 ? '6px' : '0'};
+          padding: 10px 12px;
+          background: ${theme.bgSecondary};
+          border-radius: 10px;
+        ">
+          <div style="
+            font-size: 11px;
+            color: ${theme.secondary};
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            font-weight: 700;
+            margin-bottom: 6px;
+            opacity: 0.8;
+          ">Actions</div>
+          <ul style="
+            margin: 0;
+            padding-left: 0;
+            list-style: none;
+            color: ${theme.text};
+            line-height: 1.4;
+            font-size: 13px;
+          ">
+            ${actions.map(action => `
+              <li style="
+                padding-left: 14px;
+                position: relative;
+                margin-bottom: 4px;
+                font-weight: 400;
+              ">
+                <span style="
+                  position: absolute;
+                  left: 0;
+                  top: 2px;
+                  color: ${theme.secondary};
+                  font-size: 10px;
+                ">•</span>
+                ${escapeHtml(action)}
+              </li>
+            `).join('')}
+          </ul>
+        </div>
+      ` : ''}
+        
+      ${dates.length > 0 ? `
+        <div class="metldr-summary-item" style="
+          font-size: 12px;
+          color: ${theme.accent};
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          gap: 4px;
+          font-weight: 600;
+          -webkit-font-smoothing: antialiased;
+        ">
+          ${dates.map(d => `<span style="background: ${theme.bgSecondary}; padding: 3px 8px; border-radius: 6px; font-size: 11px; -webkit-font-smoothing: antialiased;">${escapeHtml(d)}</span>`).join('')}
+        </div>
+      ` : ''}
+        
+      ${summary.time_ms ? `
+        <div style="
+          font-size: 11px;
+          color: ${theme.textMuted};
+          opacity: 0.85;
+          margin-top: 8px;
+          letter-spacing: 0.01em;
+          font-weight: 500;
+          -webkit-font-smoothing: antialiased;
+        ">
+          <span style="opacity: 0.7; font-weight: 400;">Time taken:</span> ${formatTime(summary.time_ms)}${summary.cached ? ' • cached' : ''}
+        </div>
+      ` : ''}
     </div>
+    
     <style>
-      @keyframes slideInUp {
-        from {
-          opacity: 0;
-          transform: translateY(20px);
-        }
-        to {
-          opacity: 1;
-          transform: translateY(0);
-        }
+      .metldr-regenerate-btn:hover {
+        background: ${theme.primary}20 !important;
+        border-color: ${theme.primary}60 !important;
+        transform: scale(1.05);
+      }
+      .metldr-regenerate-btn:active {
+        transform: scale(0.95);
       }
     </style>
   `;
@@ -533,9 +688,26 @@ function injectSummaryUI(threadElement, summary) {
   
   if (emailHeader && emailHeader.parentNode) {
     emailHeader.parentNode.insertBefore(summaryDiv, emailHeader.nextSibling);
-    console.log('MeTLDR: Summary injected');
+    console.log('MeTLDR: Summary injected, animating...');
     
-    // attach event listener to regenerate button (CSP-safe)
+    setTimeout(() => {
+      summaryDiv.style.transition = 'all 0.6s cubic-bezier(0.16, 1, 0.3, 1)';
+      summaryDiv.style.opacity = '1';
+      summaryDiv.style.transform = 'translateY(0) scale(1)';
+      
+      // stagger items
+      const items = summaryDiv.querySelectorAll('.metldr-summary-item');
+      items.forEach((item, i) => {
+        item.style.opacity = '0';
+        item.style.transform = 'translateY(10px)';
+        setTimeout(() => {
+          item.style.transition = 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)';
+          item.style.opacity = '1';
+          item.style.transform = 'translateY(0)';
+        }, 300 + (i * 80));
+      });
+    }, 50);
+    
     const regenerateBtn = summaryDiv.querySelector('.metldr-regenerate-btn');
     if (regenerateBtn) {
       regenerateBtn.addEventListener('click', async () => {
@@ -544,14 +716,11 @@ function injectSummaryUI(threadElement, summary) {
         await regenerateSummary(threadId);
       });
       
-      // add hover effects
       regenerateBtn.addEventListener('mouseenter', () => {
-        regenerateBtn.style.background = 'rgba(26, 115, 232, 0.95)';
-        regenerateBtn.style.color = 'white';
+        regenerateBtn.style.transform = 'scale(1.05)';
       });
       regenerateBtn.addEventListener('mouseleave', () => {
-        regenerateBtn.style.background = 'rgba(255, 255, 255, 0.95)';
-        regenerateBtn.style.color = 'rgb(26, 115, 232)';
+        regenerateBtn.style.transform = 'scale(1)';
       });
     }
   } else {
@@ -563,7 +732,7 @@ function injectSummaryUI(threadElement, summary) {
 function findInsertionPoint() {
   console.log('MeTLDR: Finding insertion point...');
   
-  // try Gmail-specific selectors to find where to inject
+  // try Gmail specific selectors to find where to inject
   const selectors = [
     '.nH.if', // expanded email view
     '.gE.iv.gt', // email header
