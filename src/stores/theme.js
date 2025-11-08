@@ -8,7 +8,7 @@ export const useThemeStore = defineStore('theme', () => {
       primary: '#00f0ff',      
       secondary: '#ff0080',
       accent: '#fcee09', 
-      bg: '#000000'
+      bg: '#000000',
       bgSecondary: '#0a0a0a',
       text: '#e4e4e7',
       textMuted: '#71717a',
