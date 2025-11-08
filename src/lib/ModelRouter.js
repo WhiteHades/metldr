@@ -34,13 +34,12 @@ export class ModelRouter {
 
     const preferred = preferences[taskType] || preferences['general'];
     
-    // Find first available model from preferences
+    // find first available model from preferences
     for (const model of preferred) {
       const found = this.availableModels.find(m => m.includes(model));
       if (found) return found;
     }
 
-    // Fallback to default or first available
     return this.availableModels[0] || this.defaultModel;
   }
 
@@ -52,6 +51,16 @@ export class ModelRouter {
   // get all available models
   getAvailableModels() {
     return this.availableModels;
+  }
+
+  // format model name 
+  formatModelName(modelName) {
+    if (!modelName) return 'No model selected';
+    return modelName
+      .split(':')[0]
+      .split(/[._-]/)
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
   }
 }
 
