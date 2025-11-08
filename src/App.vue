@@ -23,7 +23,7 @@ const client = new OllamaClient();
 const cache = new CacheManager();
 const router = new ModelRouter(client);
 
-// custom dropdown logic - pure CSS animations
+// custom dropdown logic
 const toggleModelDropdown = () => {
   showModelDropdown.value = !showModelDropdown.value;
 };
@@ -86,7 +86,7 @@ async function clearCache() {
 }
 
 onMounted(async () => {
-  // Load saved theme
+  // load saved theme
   await themeStore.loadSavedTheme();
   
   await checkOllama();
@@ -155,7 +155,7 @@ onMounted(async () => {
     </header>
 
     <main class="flex-1 overflow-y-auto px-6 py-4 scroll-smooth">
-      <!-- Checking State -->
+      <!-- checking state -->
       <Transition name="fade" mode="out-in">
         <div v-if="ollamaStatus === 'checking'" class="flex flex-col items-center justify-center py-20">
           <div 
@@ -165,7 +165,7 @@ onMounted(async () => {
           <p class="text-sm transition-colors duration-200" :style="{ color: theme.textMuted }">checking for ollama...</p>
         </div>
 
-        <!-- Not Found State -->
+        <!-- not found state -->
         <div v-else-if="ollamaStatus === 'not-found'" class="space-y-4">
           <div 
             class="rounded-xl p-5 backdrop-blur-sm transition-all duration-200 "
@@ -209,7 +209,7 @@ onMounted(async () => {
           </div>
         </div>
 
-        <!-- Dashboard -->
+        <!-- dashboard -->
         <div v-else-if="ollamaStatus === 'ready' && activeTab === 'dashboard'" class="dashboard-content space-y-3">
           <div 
             class="flex items-center gap-2 px-3 py-2 rounded-xl transition-all duration-200"
@@ -247,7 +247,7 @@ onMounted(async () => {
           </div>
         </div>
 
-        <!-- Settings -->
+        <!-- settings -->
         <div v-else-if="ollamaStatus === 'ready' && activeTab === 'settings'" class="settings-content space-y-4">
           <h2 
             class="text-sm font-semibold mb-3 pb-2 transition-all duration-200 tracking-tight"
@@ -364,7 +364,7 @@ onMounted(async () => {
             </p>
           </div>
 
-          <!-- Theme Selector -->
+          <!-- theme selector -->
           <div class="space-y-2">
             <label class="text-[10px] font-semibold uppercase tracking-wide transition-colors duration-200" :style="{ color: theme.textMuted }">Appearance</label>
           <div class="grid grid-cols-3 gap-2">
@@ -413,7 +413,6 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-/* Buttery smooth animations */
 * {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -427,13 +426,11 @@ pre {
   font-variant-ligatures: none;
 }
 
-/* Smooth scrolling with momentum */
 main {
   scroll-behavior: smooth;
   overscroll-behavior: contain;
 }
 
-/* Minimal scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
 }
@@ -452,13 +449,11 @@ main {
   background: rgba(255, 255, 255, 0.2);
 }
 
-/* Smooth text selection */
 ::selection {
   background: rgba(255, 255, 255, 0.2);
   color: inherit;
 }
 
-/* Fade transition for view switching */
 .fade-enter-active,
 .fade-leave-active {
   transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
@@ -474,7 +469,6 @@ main {
   transform: translateY(-10px);
 }
 
-/* Sharp text rendering globally - NO SCALE to prevent blur */
 * {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -482,7 +476,6 @@ main {
   backface-visibility: hidden;
 }
 
-/* Smooth hover states WITHOUT scale (scale causes text blur) */
 button,
 .model-option,
 .stat-card,
@@ -495,7 +488,6 @@ button,
   transform: translate3d(0, 0, 0);
 }
 
-/* Noticeable hover effects: translate + shadow + brightness */
 button:hover,
 .model-option:hover {
   transform: translate3d(0, -2px, 0);
