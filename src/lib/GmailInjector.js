@@ -1,6 +1,4 @@
-// inject email summaries into Gmail UI
-// detects email threads, extracts content, processes with Ollama
-// displays summaries with smooth animations
+// inject email summaries into gmails
 
 export class GmailInjector {
   constructor(emailProcessor) {
@@ -10,18 +8,18 @@ export class GmailInjector {
     this.summaryCache = new Map();
   }
 
-  // initialize Gmail injection
+  // initialise gmail injection
   init() {
     console.log('MeTLDR: Initializing Gmail injector');
     
-    // observe Gmail's DOM for email threads
+    // observe gmails DOM for email threads
     this.startObserving();
     
     // inject into existing emails
     this.scanExistingEmails();
   }
 
-  // start mutation observer for Gmail's dynamic DOM
+  // start mutation observer for gmail's dynamic dom
   startObserving() {
     const targetNode = document.body;
     
@@ -127,7 +125,7 @@ export class GmailInjector {
     }
   }
 
-  // extract email content from Gmail DOM
+  // extract email content from gmail dom
   extractEmailContent(threadElement) {
     // try multiple Gmail DOM structures
     const selectors = [
@@ -170,40 +168,96 @@ export class GmailInjector {
     return text;
   }
 
-  // inject summary into Gmail UI
+  // inject summary into gmail
   injectSummary(threadElement, summary) {
-    // check if already injected
     const existingSummary = threadElement.querySelector('.metldr-summary');
     if (existingSummary) {
-      return; // already injected
+      return;
     }
+
+    // detect gmail theme
+    const isDarkMode = this.isGmailDarkMode();
 
     // create summary container
     const summaryContainer = document.createElement('div');
     summaryContainer.className = 'metldr-summary';
+    
     summaryContainer.style.cssText = `
-      background: linear-gradient(135deg, #2a2a3a 0%, #1a1a2a 100%);
-      border-left: 3px solid #5a5;
-      padding: 16px;
-      margin: 12px 0;
-      border-radius: 8px;
-      animation: fadeIn 0.3s ease-out;
+      opacity: 0;
+      transform: translateY(-10px) scale(0.98);
     `;
 
     // build summary HTML
-    const html = this.buildSummaryHTML(summary);
+    const html = this.buildSummaryHTML(summary, isDarkMode);
     summaryContainer.innerHTML = html;
 
     // find insertion point in Gmail
     const insertionPoint = this.findInsertionPoint(threadElement);
     
-    if (insertionPoint) {
+    if (insertionPoint && insertionPoint.parentNode) {
       insertionPoint.parentNode.insertBefore(summaryContainer, insertionPoint);
+      
+      this.animateSummaryEntrance(summaryContainer);
+      
       console.log('MeTLDR: Summary injected into Gmail');
     }
   }
 
-  // find best place to inject summary
+  isGmailDarkMode() {
+    const html = document.documentElement;
+    const body = document.body;
+    
+    return html.classList.contains('dark') || 
+           body.classList.contains('dark') ||
+           body.getAttribute('data-darkreader-mode') === 'dynamic' ||
+           window.matchMedia('(prefers-color-scheme: dark)').matches;
+  }
+
+  async animateSummaryEntrance(container) {
+    if (!window.gsap) {
+      await this.loadGSAP();
+    }
+
+    if (window.gsap) {
+      const tl = window.gsap.timeline();
+      
+      tl.to(container, {
+        opacity: 1,
+        y: 0,
+        scale: 1,
+        duration: 0.6,
+        ease: 'power3.out',
+      })
+      .from(container.querySelectorAll('.metldr-summary-item'), {
+        y: 10,
+        opacity: 0,
+        duration: 0.4,
+        stagger: 0.08,
+        ease: 'power2.out',
+      }, '-=0.3');
+    } else {
+      container.style.opacity = '1';
+      container.style.transform = 'translateY(0) scale(1)';
+      container.style.transition = 'all 0.6s ease-out';
+    }
+  }
+
+  // load gsap from cdn
+  async loadGSAP() {
+    return new Promise((resolve, reject) => {
+      if (window.gsap) {
+        resolve();
+        return;
+      }
+
+      const script = document.createElement('script');
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js';
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error('failed to load gsap'));
+      document.head.appendChild(script);
+    });
+  }
+
   findInsertionPoint(threadElement) {
     // try to insert after thread header, before messages
     const selectors = [
@@ -223,57 +277,203 @@ export class GmailInjector {
     return threadElement.firstChild;
   }
 
-  // build HTML for summary display
-  buildSummaryHTML(summary) {
+  buildSummaryHTML(summary, isDarkMode = false) {
     const bullets = summary.bullets || [];
     const actions = summary.action_items || [];
     const dates = summary.dates || [];
     const confidence = summary.confidence || 'medium';
+    const isGenerating = summary.generating || false;
 
-    const confidenceColor = {
-      high: '#5a5',
-      medium: '#aa5',
-      low: '#a55'
-    }[confidence] || '#888';
+    const theme = isDarkMode ? {
+      bg: 'rgba(10, 10, 10, 0.95)',
+      border: 'rgba(52, 211, 153, 0.3)',
+      glow: 'rgba(52, 211, 153, 0.4)',
+      text: '#e4e4e7',
+      textMuted: '#a1a1aa',
+      accentBg: 'rgba(52, 211, 153, 0.1)',
+      accentText: '#34d399',
+      badgeBg: 'rgba(52, 211, 153, 0.15)',
+    } : {
+      bg: 'rgba(255, 255, 255, 0.98)',
+      border: 'rgba(16, 185, 129, 0.4)',
+      glow: 'rgba(16, 185, 129, 0.5)',
+      text: '#27272a',
+      textMuted: '#71717a',
+      accentBg: 'rgba(16, 185, 129, 0.08)',
+      accentText: '#059669',
+      badgeBg: 'rgba(16, 185, 129, 0.12)',
+    };
+
+    const confidenceColors = {
+      high: '#10b981',
+      medium: '#f59e0b',
+      low: '#ef4444'
+    };
+    const confColor = confidenceColors[confidence] || '#6b7280';
 
     return `
-      <div style="color: #fff; font-family: system-ui, sans-serif;">
-        <div style="display: flex; align-items: center; margin-bottom: 12px;">
-          <span style="width: 8px; height: 8px; background: ${confidenceColor}; border-radius: 50%; margin-right: 8px; display: inline-block;"></span>
-          <strong style="font-size: 1em; color: #5a5;">MeTLDR Summary</strong>
-          <span style="margin-left: auto; font-size: 0.85em; color: #888;">${confidence}</span>
+      <div style="
+        background: ${theme.bg};
+        border: 1px solid ${theme.border};
+        border-left: 3px solid ${theme.accentText};
+        border-radius: 12px;
+        padding: 16px 20px;
+        margin: 16px 0;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+        box-shadow: 0 4px 20px ${theme.glow}, 0 0 40px ${theme.glow};
+        backdrop-filter: blur(12px);
+        position: relative;
+        overflow: hidden;
+      ">
+        ${isGenerating ? `
+          <div class="metldr-generating-pulse" style="
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent 0%, ${theme.glow} 50%, transparent 100%);
+            animation: shimmer 2s infinite;
+            pointer-events: none;
+          "></div>
+        ` : ''}
+        
+        <div style="display: flex; align-items: center; margin-bottom: 14px; gap: 10px;" class="metldr-summary-item">
+          <div style="
+            width: 10px;
+            height: 10px;
+            background: ${confColor};
+            border-radius: 50%;
+            box-shadow: 0 0 12px ${confColor};
+            animation: pulse 2s ease-in-out infinite;
+          "></div>
+          <strong style="
+            font-size: 14px;
+            font-weight: 700;
+            color: ${theme.accentText};
+            letter-spacing: -0.01em;
+            font-family: 'JetBrains Mono', 'Courier New', monospace;
+          ">metldr</strong>
+          <span style="
+            margin-left: auto;
+            font-size: 11px;
+            color: ${theme.textMuted};
+            padding: 3px 10px;
+            background: ${theme.badgeBg};
+            border-radius: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+          ">${confidence}</span>
         </div>
         
         ${bullets.length > 0 ? `
-          <div style="margin-bottom: 12px;">
-            <ul style="margin: 0; padding-left: 20px; color: #ccc; line-height: 1.6;">
-              ${bullets.map(bullet => `<li>${this.escapeHtml(bullet)}</li>`).join('')}
+          <div style="margin-bottom: 14px;" class="metldr-summary-item">
+            <ul style="
+              margin: 0;
+              padding-left: 0;
+              list-style: none;
+              color: ${theme.text};
+              line-height: 1.7;
+              font-size: 13px;
+            ">
+              ${bullets.map(bullet => `
+                <li style="
+                  padding-left: 22px;
+                  position: relative;
+                  margin-bottom: 8px;
+                ">
+                  <span style="
+                    position: absolute;
+                    left: 0;
+                    top: 8px;
+                    width: 6px;
+                    height: 6px;
+                    background: ${theme.accentText};
+                    border-radius: 50%;
+                    box-shadow: 0 0 6px ${theme.accentText};
+                  "></span>
+                  ${this.escapeHtml(bullet)}
+                </li>
+              `).join('')}
             </ul>
           </div>
         ` : ''}
 
         ${actions.length > 0 ? `
-          <div style="margin-bottom: 12px; padding: 8px; background: rgba(90, 125, 89, 0.1); border-radius: 4px;">
-            <strong style="font-size: 0.85em; color: #888;">Action Items:</strong>
-            <ul style="margin: 8px 0 0 0; padding-left: 20px; color: #ccc; line-height: 1.4;">
-              ${actions.map(action => `<li>${this.escapeHtml(action)}</li>`).join('')}
+          <div style="
+            margin-bottom: 12px;
+            padding: 12px 14px;
+            background: ${theme.accentBg};
+            border-radius: 10px;
+            border: 1px solid ${theme.border};
+          " class="metldr-summary-item">
+            <strong style="
+              font-size: 11px;
+              color: ${theme.textMuted};
+              text-transform: uppercase;
+              letter-spacing: 0.08em;
+              font-weight: 700;
+              display: block;
+              margin-bottom: 10px;
+            ">⚡ action items</strong>
+            <ul style="
+              margin: 0;
+              padding-left: 0;
+              list-style: none;
+              color: ${theme.text};
+              line-height: 1.6;
+              font-size: 12px;
+            ">
+              ${actions.map(action => `
+                <li style="
+                  padding-left: 20px;
+                  position: relative;
+                  margin-bottom: 6px;
+                  font-weight: 500;
+                ">
+                  <span style="
+                    position: absolute;
+                    left: 0;
+                    top: 4px;
+                    color: ${theme.accentText};
+                    font-weight: 700;
+                  ">→</span>
+                  ${this.escapeHtml(action)}
+                </li>
+              `).join('')}
             </ul>
           </div>
         ` : ''}
 
         ${dates.length > 0 ? `
-          <div style="font-size: 0.85em; color: #aaa;">
-            📅 ${dates.join(', ')}
+          <div style="
+            font-size: 12px;
+            color: ${theme.textMuted};
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-weight: 500;
+          " class="metldr-summary-item">
+            <span style="font-size: 14px;">📅</span>
+            <span>${dates.join(', ')}</span>
           </div>
         ` : ''}
+
+        <style>
+          @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.6; transform: scale(1.1); }
+          }
+          
+          @keyframes shimmer {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+          }
+          
+          @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@600;700&display=swap');
+        </style>
       </div>
-      
-      <style>
-        @keyframes fadeIn {
-          from { opacity: 0; transform: translateY(-10px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-      </style>
     `;
   }
 
