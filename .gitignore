@@ -246,5 +246,6 @@ $RECYCLE.BIN/
 *.lnk
 
 AGENTS.md
+PROJECT.md
 
 # End of https://www.toptal.com/developers/gitignore/api/node,vue,macos,windows,linux,visualstudiocode
