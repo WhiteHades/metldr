@@ -116,82 +116,82 @@ defineExpose({
   <div class="space-y-3">
     <div class="grid grid-cols-3 gap-2">
       <div 
-        class="stat-card px-3 py-2 rounded-xl text-center transition-all duration-150"
-        title="Number of emails summarized today"
+        class="stat-card px-3 py-2 rounded-lg text-center transition-all duration-200"
+        title="number of emails summarized today"
         :style="{ 
-          background: `${theme.primary}15`,
-          boxShadow: `0 1px 8px ${theme.glow}15, inset 0 0.5px 0 ${theme.border}30`,
-          borderWidth: '0.5px', 
-          borderColor: `${theme.primary}40`
+          background: `${theme.primary}10`,
+          borderWidth: '1px', 
+          borderColor: `${theme.primary}30`,
+          boxShadow: `0 1px 2px ${theme.shadow || 'rgba(0,0,0,0.05)'}`
         }"
       >
-        <div class="text-lg font-bold transition-colors duration-200" :style="{ color: theme.primary }">
+        <div class="text-xl font-bold transition-colors duration-200" :style="{ color: theme.primary }">
           {{ stats.todayCount }}
         </div>
-        <div class="text-[9px] font-semibold transition-colors duration-200" :style="{ color: theme.textMuted }">
-          Today
+        <div class="text-[10px] font-medium mt-0.5 transition-colors duration-200" :style="{ color: theme.textMuted }">
+          today
         </div>
       </div>
       <div 
-        class="stat-card px-3 py-2 rounded-xl text-center transition-all duration-150"
-        title="Average processing time per summary"
+        class="stat-card px-3 py-2 rounded-lg text-center transition-all duration-200"
+        title="average processing time per summary"
         :style="{ 
-          background: `${theme.secondary}15`,
-          boxShadow: `0 1px 8px ${theme.glow}15, inset 0 0.5px 0 ${theme.border}30`,
-          borderWidth: '0.5px', 
-          borderColor: `${theme.secondary}40`
+          background: `${theme.secondary}10`,
+          borderWidth: '1px', 
+          borderColor: `${theme.secondary}30`,
+          boxShadow: `0 1px 2px ${theme.shadow || 'rgba(0,0,0,0.05)'}`
         }"
       >
-        <div class="text-lg font-bold transition-colors duration-200" :style="{ color: theme.secondary }">
+        <div class="text-xl font-bold transition-colors duration-200" :style="{ color: theme.secondary }">
           {{ (stats.avgTime / 1000).toFixed(1) }}s
         </div>
-        <div class="text-[9px] font-semibold transition-colors duration-200" :style="{ color: theme.textMuted }">
-          Speed
+        <div class="text-[10px] font-medium mt-0.5 transition-colors duration-200" :style="{ color: theme.textMuted }">
+          speed
         </div>
       </div>
       <div 
-        class="stat-card px-3 py-2 rounded-xl text-center transition-all duration-150"
-        title="Percentage of summaries loaded from cache (faster retrieval)"
+        class="stat-card px-3 py-2 rounded-lg text-center transition-all duration-200"
+        title="percentage of summaries loaded from cache"
         :style="{ 
-          background: `${theme.accent}15`,
-          boxShadow: `0 1px 8px ${theme.glow}15, inset 0 0.5px 0 ${theme.border}30`,
-          borderWidth: '0.5px', 
-          borderColor: `${theme.accent}40`
+          background: `${theme.accent}10`,
+          borderWidth: '1px', 
+          borderColor: `${theme.accent}30`,
+          boxShadow: `0 1px 2px ${theme.shadow || 'rgba(0,0,0,0.05)'}`
         }"
       >
-        <div class="text-lg font-bold transition-colors duration-200" :style="{ color: theme.accent }">
+        <div class="text-xl font-bold transition-colors duration-200" :style="{ color: theme.accent }">
           {{ stats.cacheHitRate.toFixed(0) }}%
         </div>
-        <div class="text-[9px] font-semibold transition-colors duration-200" :style="{ color: theme.textMuted }">
-          Cache
+        <div class="text-[10px] font-medium mt-0.5 transition-colors duration-200" :style="{ color: theme.textMuted }">
+          cache
         </div>
       </div>
     </div>
 
     <div>
       <h3 
-        class="text-[10px] font-semibold uppercase tracking-wide mb-2 pb-1 transition-all duration-200"
-        :style="{ color: theme.textMuted, borderBottomWidth: '0.5px', borderColor: `${theme.border}40` }"
+        class="text-[10px] font-semibold uppercase tracking-wider mb-2 transition-all duration-200"
+        :style="{ color: theme.textMuted }"
       >
-        Recent
+        recent summaries
       </h3>
       
-      <div v-if="loading" class="flex items-center justify-center py-8">
+      <div v-if="loading" class="flex items-center justify-center py-10">
         <div 
-          class="w-5 h-5 border-2 border-t-transparent rounded-full animate-spin transition-all duration-200"
-          :style="{ borderColor: `${theme.primary}40`, borderTopColor: 'transparent', boxShadow: `0 0 10px ${theme.glow}` }"
+          class="w-6 h-6 border-2 border-t-transparent rounded-full animate-spin transition-all duration-200"
+          :style="{ borderColor: theme.border, borderTopColor: theme.primary }"
         ></div>
       </div>
 
       <div 
         v-else-if="history.length === 0" 
-        class="text-center py-8 px-4 rounded-lg backdrop-blur-sm transition-all duration-200"
-        :style="{ backgroundColor: `${theme.bgSecondary}40`, borderWidth: '1px', borderColor: theme.border }"
+        class="text-center py-6 px-4 rounded-lg transition-all duration-200"
+        :style="{ backgroundColor: theme.bgSecondary, borderWidth: '1px', borderColor: theme.border }"
       >
-        <p class="text-xs mb-1 transition-colors duration-200" :style="{ color: theme.text }">
+        <p class="text-sm mb-1 font-medium transition-colors duration-200" :style="{ color: theme.text }">
           no summaries yet
         </p>
-        <p class="text-[10px] transition-colors duration-200" :style="{ color: theme.textMuted }">
+        <p class="text-xs leading-relaxed transition-colors duration-200" :style="{ color: theme.textMuted }">
           visit gmail to generate your first summary
         </p>
       </div>
@@ -200,31 +200,31 @@ defineExpose({
         <div 
           v-for="item in history" 
           :key="item.emailId"
-          class="history-item group flex items-center gap-2 px-3 py-2 rounded-xl cursor-pointer transition-all duration-150  "
+          class="history-item group flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-all duration-200"
           :style="{ 
             background: theme.bgSecondary,
-            boxShadow: `0 1px 6px ${theme.glow}10, inset 0 0.5px 0 ${theme.border}20`,
-            borderWidth: '0.5px', 
-            borderColor: `${theme.border}40`
+            borderWidth: '1px', 
+            borderColor: theme.border,
+            boxShadow: `0 1px 2px ${theme.shadow || 'rgba(0,0,0,0.05)'}`
           }"
           @click="openThread(item.emailId)"
         >
           <div class="flex-1 min-w-0">
-            <p class="text-[11px] line-clamp-2 mb-1 font-medium transition-colors duration-200" :style="{ color: theme.text }">
+            <p class="text-sm line-clamp-2 mb-1 font-medium transition-colors duration-200" :style="{ color: theme.text }">
               {{ item.summary?.summary || 'no summary available' }}
             </p>
-            <div class="flex items-center gap-2 text-[9px]">
-              <span class="font-semibold transition-colors duration-200" :style="{ color: theme.textMuted }">
+            <div class="flex items-center gap-2 text-[10px]">
+              <span class="font-medium transition-colors duration-200" :style="{ color: theme.textMuted }">
                 {{ formatTimestamp(item.timestamp) }}
               </span>
               <span 
                 v-if="item.summary?.cached" 
-                class="px-1.5 py-0.5 rounded text-[9px] transition-all duration-200"
+                class="px-1.5 py-0.5 rounded text-[10px] transition-all duration-200"
                 :style="{ 
                   backgroundColor: `${theme.accent}15`, 
                   color: theme.accent,
                   borderWidth: '1px',
-                  borderColor: `${theme.accent}40`
+                  borderColor: `${theme.accent}30`
                 }"
               >
                 cached
@@ -232,7 +232,7 @@ defineExpose({
             </div>
           </div>
           <span 
-            class="arrow-icon text-sm group-hover:translate-x-1 transition-all duration-150"
+            class="arrow-icon text-sm transition-all duration-200"
             :style="{ color: theme.primary }"
           >
             →
@@ -244,27 +244,22 @@ defineExpose({
 </template>
 
 <style scoped>
-/* Sharp text rendering with noticeable hover effects */
 .history-item,
 .stat-card {
-  transform: translate3d(0, 0, 0);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  backface-visibility: hidden;
-  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1),
-              box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1),
-              filter 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .history-item:hover {
-  transform: translate3d(3px, 0, 0);
-  filter: brightness(1.15) saturate(1.2);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+  transform: translateX(2px);
+}
+
+.history-item:hover .arrow-icon {
+  transform: translateX(4px);
 }
 
 .stat-card:hover {
-  transform: translate3d(0, -3px, 0);
-  filter: brightness(1.2) saturate(1.3);
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2) !important;
+  transform: translateY(-2px);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.12) !important;
 }
 </style>
