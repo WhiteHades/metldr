@@ -1,14 +1,16 @@
-// metldr gmail integration
+import { gsap } from 'gsap';
 
-console.log('MeTLDR: Content script loaded');
-console.log('MeTLDR: Current URL:', window.location.href);
-console.log('MeTLDR: Hostname:', window.location.hostname);
+console.log('metldr: content script loaded');
+console.log('metldr: current url:', window.location.href);
+console.log('metldr: hostname:', window.location.hostname);
 
 const isGmail = window.location.hostname.includes('mail.google.com');
-console.log('MeTLDR: Is Gmail?', isGmail);
+console.log('metldr: is gmail?', isGmail);
 
-// track processed emails globally
 const processedEmails = new Set();
+
+const injectionTimestamps = new Map();
+const INJECTION_COOLDOWN = 3000;
 
 if (!document.getElementById('metldr-animations')) {
   const style = document.createElement('style');
@@ -33,7 +35,6 @@ loadCurrentTheme();
 if (isGmail) {
   console.log('MeTLDR: Gmail detected');
   
-  // wait for gmail to be ready
   waitForGmail().then(() => {
     console.log('MeTLDR: Gmail ready, initializing...');
     initInjector();
@@ -62,42 +63,68 @@ async function waitForGmail() {
   });
 }
 
-// inject summary UI into gmail
 function initInjector() {
   console.log('MeTLDR: initInjector called');
   let lastProcessedUrl = '';
 
-  // function to process emails
   const processEmails = () => {
     const currentUrl = window.location.href;
-    console.log('MeTLDR: Mutation detected, URL:', currentUrl);
+    console.log('metldr: mutation detected, url:', currentUrl);
     
-    // check if url changed (user opened new email)
     if (currentUrl === lastProcessedUrl) {
-      console.log('MeTLDR: Same URL, skipping');
+      const existingSummary = document.querySelector('.metldr-summary');
+      const existingLoading = document.querySelector('.metldr-loading');
+      
+      if (existingSummary || existingLoading || isProcessing) {
+        return;
+      }
+      
+      const threadId = getCurrentThreadId();
+      if (threadId) {
+        const lastInjection = injectionTimestamps.get(threadId);
+        const now = Date.now();
+        if (lastInjection && (now - lastInjection) < INJECTION_COOLDOWN) {
+          console.log(`metldr: cooldown active (${Math.round((now - lastInjection) / 1000)}s ago), skipping re-injection`);
+          return;
+        }
+      }
+      
+      console.log('metldr: same url but summary missing, re-processing...');
+      setTimeout(() => processCurrentEmail(), 1500);
       return;
     }
     
     lastProcessedUrl = currentUrl;
     const threadId = getCurrentThreadId();
-    console.log('MeTLDR: Current thread ID:', threadId);
+    console.log('metldr: current thread id:', threadId);
     
-    if (threadId && !processedEmails.has(threadId)) {
-      processedEmails.add(threadId);
-      console.log('MeTLDR: New thread detected, processing in 1.5s...');
-      setTimeout(() => processCurrentEmail(), 1500);
-    } else if (processedEmails.has(threadId)) {
-      console.log('MeTLDR: Thread already processed');
+    if (threadId) {
+      const existingSummary = document.querySelector('.metldr-summary');
+      if (!existingSummary) {
+        console.log('metldr: new thread or summary missing, processing in 1.5s...');
+        setTimeout(() => processCurrentEmail(), 1500);
+      } else {
+        console.log('metldr: summary already exists, skipping');
+      }
     }
   };
 
-  // observe gmail's DOM for email thread changes
-  const observer = new MutationObserver(() => {
+  const observer = new MutationObserver((mutations) => {
+    const isOurMutation = mutations.some(m => 
+      m.target.classList?.contains('metldr-summary') ||
+      m.target.classList?.contains('metldr-loading') ||
+      m.target.closest?.('.metldr-summary') ||
+      m.target.closest?.('.metldr-loading')
+    );
+    
+    if (isOurMutation) {
+      return;
+    }
+    
     clearTimeout(initInjector.debounceTimer);
-    initInjector.debounceTimer = setTimeout(processEmails, 300);
+    initInjector.debounceTimer = setTimeout(processEmails, 500);
   });
 
-  // observe the main gmail container
   const mainContainer = document.querySelector('div[role="main"]') || document.body;
   console.log('MeTLDR: Main container found?', !!mainContainer);
   
@@ -105,13 +132,11 @@ function initInjector() {
     observer.observe(mainContainer, {
       childList: true,
       subtree: true,
-      attributes: true,
-      attributeFilter: ['class']
+      attributes: false
     });
     console.log('MeTLDR: Observer started');
   }
 
-  // scan on initial load
   console.log('MeTLDR: Will scan for emails in 2s...');
   setTimeout(() => {
     console.log('MeTLDR: Scanning for initial email...');
@@ -119,40 +144,54 @@ function initInjector() {
     processCurrentEmail();
   }, 2000);
 
-  // store observer for cleanup
   initInjector.observer = observer;
   console.log('MeTLDR: initInjector complete');
 
-  // hook url changes (gmail spa navigation)
   hookUrlChanges(() => {
     clearTimeout(initInjector.debounceTimer);
     initInjector.debounceTimer = setTimeout(processEmails, 200);
   });
 }
 
-// get current open email thread ID
 function getCurrentThreadId() {
   const url = window.location.href;
-  console.log('MeTLDR: Checking URL for thread ID:', url);
+  console.log('metldr: checking url for thread id:', url);
   
-  // try different gmail url patterns
-  let match = url.match(/#inbox\/([a-zA-Z0-9_-]+)/); // #inbox/THREAD_ID
+  let match = url.match(/#inbox\/([a-zA-Z0-9_-]+)/);
   if (match) {
-    console.log('MeTLDR: Found thread ID:', match[1]);
-    return match[1];
+    const threadId = match[1];
+    
+    if (/^p\d+$/.test(threadId)) {
+      console.log('metldr: ignoring pagination marker:', threadId);
+      return null;
+    }
+    
+    if (threadId.length < 10) {
+      console.log('metldr: thread id too short, ignoring:', threadId);
+      return null;
+    }
+    
+    console.log('metldr: found thread id:', threadId);
+    return threadId;
   }
   
   match = url.match(/\/mail\/u\/\d+\/.*#inbox\/([a-zA-Z0-9_-]+)/);
   if (match) {
-    console.log('MeTLDR: Found thread ID (alt):', match[1]);
-    return match[1];
+    const threadId = match[1];
+    
+    if (/^p\d+$/.test(threadId) || threadId.length < 10) {
+      console.log('metldr: ignoring invalid thread id:', threadId);
+      return null;
+    }
+    
+    console.log('metldr: found thread id (alt):', threadId);
+    return threadId;
   }
   
-  console.log('MeTLDR: No thread ID found in URL');
+  console.log('metldr: no thread id found in url');
   return null;
 }
 
-// observe rmail SPA url changes
 function hookUrlChanges(onChange) {
   try {
     if (hookUrlChanges._installed) return;
@@ -172,7 +211,6 @@ function hookUrlChanges(onChange) {
     window.addEventListener('hashchange', fire);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) fire(); });
 
-    // fallback poller (handles edge cases)
     let last = location.href;
     setInterval(() => {
       if (location.href !== last) { last = location.href; fire(); }
@@ -184,104 +222,168 @@ function hookUrlChanges(onChange) {
   }
 }
 
-// process currently visible email
+let isProcessing = false;
+
 async function processCurrentEmail() {
-  console.log('MeTLDR: Processing current email...');
+  if (isProcessing) {
+    return;
+  }
   
-  // only process if we have a thread ID (i.e., inside a specific email)
   const threadId = getCurrentThreadId();
   if (!threadId) {
-    console.log('MeTLDR: No thread ID, skipping (inbox view)');
+    isProcessing = false;
     return;
   }
   
-  // check if already processed to avoid duplicates
   const existingSummary = document.querySelector('.metldr-summary');
-  if (existingSummary) {
-    console.log('MeTLDR: Summary already displayed for this email');
+  const existingLoading = document.querySelector('.metldr-loading');
+  if (existingSummary || existingLoading) {
+    console.log('metldr: summary or loading already displayed');
+    isProcessing = false;
     return;
   }
   
-  // check if this email thread was already processed (even if summary not visible yet)
-  if (processedEmails.has(threadId)) {
-    console.log('MeTLDR: This thread already being processed:', threadId);
-    // still proceed to show cached summary if available
-  }
-  
-  // find email container
   const emailContainer = document.querySelector('.nH.if') || 
                           document.querySelector('[data-thread-id]') ||
                           document.querySelector('.gs') ||
                           document.querySelector('div[role="main"]');
   
-  console.log('MeTLDR: Email container found?', !!emailContainer);
+  console.log('metldr: email container found?', !!emailContainer);
   
   if (!emailContainer) {
-    console.log('MeTLDR: No email container found');
+    console.log('metldr: no email container found');
+    isProcessing = false;
     return;
   }
   
-  console.log('MeTLDR: Processing current email thread...');
-  await processEmailThread(emailContainer);
+  console.log('metldr: processing current email thread...');
+  isProcessing = true;
+  
+  const timeoutId = setTimeout(() => {
+    console.log('metldr: processing timeout, force-resetting flag');
+    isProcessing = false;
+  }, 30000);
+  
+  try {
+    await processEmailThread(emailContainer);
+  } finally {
+    clearTimeout(timeoutId);
+    isProcessing = false;
+  }
 }
 
-// process a single email thread
 async function processEmailThread(threadElement) {
   try {
-    // extract email text
+    const metadata = extractEmailMetadata(threadElement);
+    
     const emailText = extractEmailText(threadElement);
-    console.log('MeTLDR: Extracted email text length:', emailText?.length);
     
     if (!emailText || emailText.length < 50) {
-      console.log('MeTLDR: Email text too short or empty');
+      console.log('metldr: email text too short or empty');
         return;
       }
-      
-    console.log('MeTLDR: Processing email...');
 
-    // show loading animation
-    const loadingDiv = showLoading(threadElement);
-
-    // get summary from background script using thread ID for caching
     const threadId = getCurrentThreadId();
-    const summary = await getSummaryFromBackground(emailText, threadId);
-    console.log('MeTLDR: Received summary:', summary);
-
-    // remove loading
+    
+    let loadingDiv = null;
+    const loadingTimer = setTimeout(() => {
+      loadingDiv = showLoading(threadElement);
+    }, 100);
+    
+    const summary = await getSummaryFromBackground(emailText, threadId, metadata);
+    
+    clearTimeout(loadingTimer);
     if (loadingDiv) loadingDiv.remove();
 
-    // inject summary
     if (summary) {
       injectSummaryUI(threadElement, summary);
     }
 
   } catch (error) {
-    console.error('MeTLDR: Failed to process:', error);
+    console.error('metldr: failed to process:', error);
   }
 }
 
-// extract email text from gmail DOM
+function extractEmailMetadata(threadElement) {
+  const metadata = {
+    date: null,
+    sender: null,
+    senderEmail: null,
+    subject: null,
+    to: null,
+    timestamp: null
+  };
+
+  try {
+    // extract date/time - gmail uses span with title attribute for full timestamp
+    const dateElement = document.querySelector('span.g3[title]') || 
+                       document.querySelector('.gH .gK span[title]') ||
+                       document.querySelector('[data-tooltip][role="gridcell"] span[title]');
+    
+    if (dateElement) {
+      metadata.date = dateElement.getAttribute('title') || dateElement.textContent?.trim();
+      // try to parse timestamp
+      if (metadata.date) {
+        const parsedDate = new Date(metadata.date);
+        if (!isNaN(parsedDate.getTime())) {
+          metadata.timestamp = parsedDate.toISOString();
+        }
+      }
+    }
+
+    // extract sender name and email
+    const senderElement = document.querySelector('span.gD[email]') || 
+                         document.querySelector('.gE.iv.gt span[email]') ||
+                         document.querySelector('[email][data-hovercard-id]');
+    
+    if (senderElement) {
+      metadata.senderEmail = senderElement.getAttribute('email');
+      metadata.sender = senderElement.getAttribute('name') || senderElement.textContent?.trim();
+    }
+
+    // extract subject from h2 or title
+    const subjectElement = document.querySelector('h2.hP') || 
+                          document.querySelector('.ha h2') ||
+                          document.querySelector('[data-thread-perm-id] h2');
+    
+    if (subjectElement) {
+      metadata.subject = subjectElement.textContent?.trim();
+    }
+
+    // extract "to" recipients
+    const toElement = document.querySelector('.gE.iv.gt .g2') ||
+                     document.querySelector('[data-hovercard-id]');
+    
+    if (toElement) {
+      metadata.to = toElement.textContent?.trim();
+    }
+
+    console.log('metldr: extracted email metadata:', metadata);
+  } catch (error) {
+    console.error('metldr: failed to extract metadata:', error);
+  }
+
+  return metadata;
+}
+
 function extractEmailText(threadElement) {
-  console.log('MeTLDR: Extracting email text...');
+  console.log('metldr: extracting email text...');
   
-  // get the email content area
   const selectors = [
-    '.ii.gt', // email body class
-    '.a3s.aiL', //  Gmail body
+    '.ii.gt',
+    '.a3s.aiL', //  gmail body
     '.ii', //  email content
-    '[dir="ltr"]', // emails
-    '.gmail_signature' // before signature
+    '[dir="ltr"]',
+    '.gmail_signature'
   ];
 
   let fullText = '';
   
-  // find ALL email messages in the thread, not just one
   for (const selector of selectors) {
     const elements = document.querySelectorAll(selector);
-    console.log(`MeTLDR: Found ${elements.length} elements with selector ${selector}`);
+    console.log(`metldr: found ${elements.length} elements with selector ${selector}`);
     
     if (elements.length > 0) {
-      // collect ALL text from ALL matching elements
       for (const element of elements) {
         const text = element.textContent?.trim();
         if (text && text.length > 20 && !text.match(/^[\s\n]*$/)) {
@@ -289,32 +391,29 @@ function extractEmailText(threadElement) {
         }
       }
       
-      // continue to next selector for more content
     }
   }
   
-  // return the accumulated text
   if (fullText.length > 50) {
-    console.log('MeTLDR: Extracted full email text, length:', fullText.length);
+    console.log('metldr: extracted full email text, length:', fullText.length);
     return fullText;
   }
 
-  // if nothing found, try getting ALL text from the visible area
   const allVisibleText = document.body.textContent;
   if (allVisibleText && allVisibleText.length > 500) {
-    console.log('MeTLDR: Using full page text, length:', allVisibleText.length);
+    console.log('metldr: using full page text, length:', allVisibleText.length);
     return allVisibleText;
   }
 
-  console.warn('MeTLDR: Could not extract email text properly');
+  console.warn('metldr: could not extract email text properly');
   return '';
 }
 
 // get summary via background script
-async function getSummaryFromBackground(emailText, emailId, forceRegenerate = false) {
+async function getSummaryFromBackground(emailText, emailId, metadata = null, forceRegenerate = false) {
   return new Promise((resolve) => {
     if (!chrome || !chrome.runtime || !chrome.runtime.sendMessage) {
-      console.error('MeTLDR: Chrome runtime not available - extension may need reload');
+      console.error('metldr: chrome runtime not available - extension may need reload');
       resolve(null);
       return;
     }
@@ -324,95 +423,126 @@ async function getSummaryFromBackground(emailText, emailId, forceRegenerate = fa
         type: 'SUMMARIZE_EMAIL',
         emailContent: emailText,
         emailId: emailId,
+        metadata: metadata,
         forceRegenerate: forceRegenerate
       }, (response) => {
         if (chrome.runtime.lastError) {
-          console.error('MeTLDR: Background error:', chrome.runtime.lastError);
+          console.error('metldr: background error:', chrome.runtime.lastError);
           resolve(null);
         } else {
           resolve(response?.summary || null);
         }
       });
     } catch (error) {
-      console.error('MeTLDR: Failed to send message:', error);
+      console.error('metldr: failed to send message:', error);
       resolve(null);
     }
   });
 }
 
-// show loading animation matching current theme
+function hexToRgb(hex) {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return result 
+    ? `${parseInt(result[1], 16)}, ${parseInt(result[2], 16)}, ${parseInt(result[3], 16)}`
+    : hex;
+}
+
 function showLoading(threadElement) {
-  const theme = THEME_COLORS[currentTheme] || THEME_COLORS.cyberpunk;
+  const theme = THEME_COLORS[currentTheme] || THEME_COLORS.default;
   
   const loading = document.createElement('div');
   loading.className = 'metldr-loading';
+  loading.style.cssText = `
+    position: relative;
+    margin: 12px 0;
+    padding: 10px 12px;
+    background: ${theme.bg};
+    border: 2px solid ${theme.border};
+    border-radius: 10px;
+    opacity: 0;
+    transform: scale(0.985);
+  `;
+  
   loading.innerHTML = `
     <div style="
-      padding: 10px 14px;
-      background: linear-gradient(135deg, ${theme.bg}, ${theme.bgSecondary});
-      border: 1px solid ${theme.border};
-      border-radius: 16px;
-      margin: 12px 0;
-      box-shadow: 0 4px 24px rgba(0,0,0,0.15), 0 2px 8px rgba(0,0,0,0.1), inset 0 1px 0 ${theme.border}40;
-      backdrop-filter: blur(20px) saturate(130%);
-      -webkit-backdrop-filter: blur(20px) saturate(130%);
-      animation: fadeInUp 0.3s ease-out;
-      -webkit-font-smoothing: antialiased;
+      display: flex;
+      align-items: center;
+      gap: 10px;
     ">
-      <div style="
-        display: flex;
-        align-items: center;
-        gap: 10px;
-      ">
-        <div style="
-          width: 16px;
-          height: 16px;
-          border: 2px solid ${theme.border};
-          border-top-color: ${theme.primary};
-          border-radius: 50%;
-          animation: spin 0.6s linear infinite;
-        "></div>
-        <span style="
-          color: ${theme.text};
-          font-size: 13px;
-          font-weight: 600;
-          -webkit-font-smoothing: antialiased;
-        ">Generating summary...</span>
-      </div>
+      <div class="metldr-spinner" style="
+        width: 14px;
+        height: 14px;
+        border: 2px solid ${theme.border};
+        border-top-color: ${theme.primary};
+        border-radius: 50%;
+        animation: spin 0.7s linear infinite;
+      "></div>
+      <span style="
+        color: ${theme.text};
+        font-size: 13px;
+        font-weight: 500;
+        -webkit-font-smoothing: antialiased;
+      ">generating summary...</span>
     </div>
     <style>
       @keyframes spin {
         to { transform: rotate(360deg); }
       }
-      @keyframes fadeInUp {
-        from {
-          opacity: 0;
-          transform: translateY(-10px);
-        }
-        to {
-          opacity: 1;
-          transform: translateY(0);
-        }
-      }
     </style>
   `;
 
-  // find the email header to insert AFTER it
   const emailHeader = document.querySelector('.gE.iv.gt') || 
                        document.querySelector('.gE.iv') ||
                        document.querySelector('[data-message-id]');
   
   if (emailHeader && emailHeader.parentNode) {
+    const emailContent = emailHeader.nextSibling;
+    if (emailContent) {
+      emailContent.style.transition = 'transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1)';
+    }
+    
     emailHeader.parentNode.insertBefore(loading, emailHeader.nextSibling);
+    
+    gsap.to(loading, {
+      opacity: 1,
+      scale: 1,
+      duration: 0.4,
+      ease: 'back.out(1.7)'
+    });
+    
+    const primaryRgb = hexToRgb(theme.primary);
+    
+    gsap.to(loading, {
+      boxShadow: `
+        0 0 8px rgba(${primaryRgb}, 0.6),
+        0 0 16px rgba(${primaryRgb}, 0.4),
+        0 0 24px rgba(${primaryRgb}, 0.2)
+      `,
+      duration: 1.5,
+      repeat: -1,
+      yoyo: true,
+      ease: 'sine.inOut'
+    });
   } else {
-    console.error('MeTLDR: Could not find email header for loading indicator');
+    console.error('metldr: could not find email header for loading indicator');
   }
 
   return loading;
 }
 
-// theme
 const THEME_COLORS = {
+  default: {
+    primary: '#60a5fa',
+    secondary: '#a78bfa',
+    accent: '#34d399',
+    bg: 'rgba(15, 23, 42, 0.98)',
+    bgSecondary: 'rgba(30, 41, 59, 0.98)',
+    text: '#e2e8f0',
+    textMuted: '#94a3b8',
+    border: 'rgba(148, 163, 184, 0.2)',
+    glow: 'rgba(96, 165, 250, 0.15)',
+    shadow: 'rgba(0, 0, 0, 0.3)',
+  },
   cyberpunk: {
     primary: '#00f0ff',
     secondary: '#ff0080',
@@ -423,6 +553,7 @@ const THEME_COLORS = {
     textMuted: '#71717a',
     border: 'rgba(0, 240, 255, 0.3)',
     glow: 'rgba(0, 240, 255, 0.4)',
+    shadow: 'rgba(0, 240, 255, 0.3)',
   },
   catppuccin: {
     primary: '#f5e0dc',
@@ -434,6 +565,7 @@ const THEME_COLORS = {
     textMuted: '#6c7086',
     border: 'rgba(245, 224, 220, 0.2)',
     glow: 'rgba(245, 224, 220, 0.3)',
+    shadow: 'rgba(245, 224, 220, 0.15)',
   },
   gruvbox: {
     primary: '#fe8019',
@@ -445,32 +577,29 @@ const THEME_COLORS = {
     textMuted: '#928374',
     border: 'rgba(254, 128, 25, 0.3)',
     glow: 'rgba(254, 128, 25, 0.4)',
+    shadow: 'rgba(254, 128, 25, 0.2)',
   },
 };
 
-// current theme state (from chrome.storage)
-let currentTheme = 'cyberpunk';
+let currentTheme = 'default';
 
-// load theme from chrome.storage
 async function loadCurrentTheme() {
   try {
     const result = await chrome.storage.local.get('theme');
-    currentTheme = result.theme || 'cyberpunk';
-    console.log('MeTLDR: Loaded theme from storage:', currentTheme);
+    currentTheme = result.theme || 'default';
+    console.log('metldr: loaded theme from storage:', currentTheme);
   } catch (error) {
-    console.error('MeTLDR: Failed to load theme:', error);
-    currentTheme = 'cyberpunk';
+    console.error('metldr: failed to load theme:', error);
+    currentTheme = 'default';
   }
 }
 
-// listen for theme changes from side panel
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.theme) {
     const newTheme = changes.theme.newValue;
     console.log('MeTLDR: Theme changed to:', newTheme);
     currentTheme = newTheme;
     
-    // update existing summary if visible
     const existingSummary = document.querySelector('.metldr-summary');
     if (existingSummary) {
       console.log('MeTLDR: Refreshing summary with new theme');
@@ -487,7 +616,6 @@ function injectSummaryUI(threadElement, summary) {
   const existingSummary = threadElement.querySelector('.metldr-summary') || 
                           document.querySelector('.metldr-summary');
   if (existingSummary) {
-    console.log('MeTLDR: Summary already exists, skipping injection');
     return;
   }
   
@@ -498,7 +626,7 @@ function injectSummaryUI(threadElement, summary) {
   const dates = summary.dates || [];
   const confidence = summary.confidence || 'medium';
   const currentThreadId = getCurrentThreadId();
-  const theme = THEME_COLORS[currentTheme] || THEME_COLORS.cyberpunk;
+  const theme = THEME_COLORS[currentTheme] || THEME_COLORS.default;
 
   const confidenceColors = {
     high: '#10b981',
@@ -507,85 +635,134 @@ function injectSummaryUI(threadElement, summary) {
   };
   const confColor = confidenceColors[confidence] || '#6b7280';
 
-  // create card
+  // create card with persistence attributes
   const summaryDiv = document.createElement('div');
   summaryDiv.className = 'metldr-summary';
-  summaryDiv.style.cssText = 'opacity: 0; transform: translateY(-10px) scale(0.98);';
+  summaryDiv.setAttribute('data-metldr-thread', currentThreadId); // mark with thread ID
+  summaryDiv.setAttribute('data-metldr-injected', 'true'); // mark as our element
+  summaryDiv.setAttribute('data-metldr-persistent', 'true'); // signal to not remove
+  summaryDiv.style.cssText = `
+    opacity: 0 !important;
+    transform: scale(0.985) !important;
+    will-change: opacity, transform !important;
+    transition: opacity 0.45s cubic-bezier(0.25, 0.46, 0.45, 0.94), 
+                transform 0.45s cubic-bezier(0.25, 0.46, 0.45, 0.94) !important;
+    position: relative !important;
+    z-index: 10 !important;
+  `;
   
+  const modelName = summary.model || 'unknown';
+
   summaryDiv.innerHTML = `
     <div style="
-      background: linear-gradient(135deg, ${theme.bg}, ${theme.bgSecondary});
-      border: 1px solid ${theme.border};
-      border-radius: 16px;
-      padding: 10px 14px;
-      margin: 12px 0;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-      box-shadow: 0 4px 24px rgba(0,0,0,0.15), 0 2px 8px rgba(0,0,0,0.1), inset 0 1px 0 ${theme.border}40;
-      backdrop-filter: blur(20px) saturate(130%);
-      -webkit-backdrop-filter: blur(20px) saturate(130%);
       position: relative;
-      overflow: hidden;
-      -webkit-font-smoothing: antialiased;
-      -moz-osx-font-smoothing: grayscale;
-      transform: translateZ(0);
-      will-change: transform;
+      margin: 20px 0 12px 0;
     ">
+      <!-- unified status badge on left border edge -->
       <div style="
+        position: absolute;
+        top: -10px;
+        left: 12px;
         display: flex;
         align-items: center;
-        justify-content: space-between;
-        margin-bottom: ${summaryText || actions.length > 0 ? '8px' : '0'};
         gap: 8px;
+        background: ${theme.bg};
+        padding: 4px 12px;
+        border: 1px solid ${theme.border};
+        border-radius: 6px;
+        box-shadow: 0 1px 3px ${theme.shadow};
+        z-index: 1;
+        -webkit-font-smoothing: antialiased;
       ">
-        <div style="display: flex; align-items: center; gap: 6px;">
-          <div style="
-            width: 7px;
-            height: 7px;
+        <!-- branding section -->
+        <div style="display: flex; align-items: center; gap: 4px;">
+          <div title="confidence: ${confidence} • how certain the ai is about this summary's accuracy" style="
+            width: 5px;
+            height: 5px;
             background: ${confColor};
             border-radius: 50%;
-            box-shadow: 0 0 8px ${confColor}, 0 0 12px ${confColor}80;
-            animation: statusPulse 2s ease-in-out infinite;
+            box-shadow: 0 0 6px ${confColor}80;
+            cursor: help;
           "></div>
           <strong style="
-            font-size: 13px;
+            font-size: 11px;
             font-weight: 600;
             color: ${theme.primary};
             letter-spacing: -0.01em;
-            -webkit-font-smoothing: antialiased;
-          ">MeTLDR</strong>
-          <span title="confidence level: how certain the AI is about this summary's accuracy" style="
-            font-size: 11px;
-            color: ${theme.text};
-            padding: 2px 7px;
-            background: ${theme.bgSecondary};
-            border-radius: 8px;
-            font-weight: 600;
-            letter-spacing: 0.02em;
-            -webkit-font-smoothing: antialiased;
-            cursor: help;
-          ">${confidence}</span>
+          ">metldr</strong>
         </div>
-        <button class="metldr-regenerate-btn" data-thread-id="${currentThreadId}" title="regenerate summary with fresh AI analysis" style="
-          padding: 4px 10px;
-          background: ${theme.bgSecondary};
-          border: 1px solid ${theme.border};
-          border-radius: 8px;
-          color: ${theme.primary};
-          font-size: 11px;
-          font-weight: 600;
-          cursor: pointer;
-          transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
-          -webkit-font-smoothing: antialiased;
-        ">↻</button>
+        
+        <!-- separator -->
+        <span style="color: ${theme.border}; font-size: 10px;">|</span>
+        
+        <!-- model -->
+        <span title="model used for this summary" style="
+          font-size: 10px;
+          color: ${theme.textMuted};
+          font-weight: 500;
+          font-family: 'Courier New', monospace;
+          cursor: help;
+        ">${escapeHtml(modelName)}</span>
+        
+        <!-- time -->
+        ${summary.time_ms ? `
+          <!-- separator -->
+          <span style="color: ${theme.border}; font-size: 10px;">|</span>
+          
+          <span title="time taken: ${formatTime(summary.time_ms)}${summary.cached ? ' • retrieved from cache' : ' • generated fresh'}" style="
+            font-size: 10px;
+            color: ${theme.textMuted};
+            font-weight: 500;
+            cursor: help;
+          ">${formatTime(summary.time_ms)}</span>
+        ` : ''}
       </div>
+      
+      <!-- regenerate button on right border edge -->
+      <button class="metldr-regenerate-btn" data-thread-id="${currentThreadId}" title="regenerate summary with fresh ai analysis" style="
+        position: absolute;
+        top: -12px;
+        right: 12px;
+        width: 24px;
+        height: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: ${theme.bg};
+        border: 1px solid ${theme.border};
+        border-radius: 50%;
+        color: ${theme.primary};
+        font-size: 13px;
+        cursor: pointer;
+        transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+        box-shadow: 0 1px 3px ${theme.shadow};
+        z-index: 1;
+        padding: 0;
+        -webkit-font-smoothing: antialiased;
+      ">↻</button>
+      
+      <!-- main card -->
+      <div style="
+        background: ${theme.bg};
+        border: 1px solid ${theme.border};
+        border-radius: 10px;
+        padding: 12px;
+        padding-top: 16px;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+        box-shadow: 0 2px 8px ${theme.shadow}, 0 1px 2px rgba(0,0,0,0.04);
+        position: relative;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        transition: box-shadow 0.3s ease;
+      ">
 
       ${summaryText ? `
         <div class="metldr-summary-item" style="
           background: ${theme.bgSecondary};
-          border-radius: 10px;
-          padding: 10px 12px;
+          border-radius: 8px;
+          padding: 10px;
           margin-bottom: ${actions.length > 0 || dates.length > 0 ? '6px' : '0'};
-          font-size: 14px;
+          font-size: 13px;
           line-height: 1.5;
           color: ${theme.text};
           font-weight: 400;
@@ -597,41 +774,40 @@ function injectSummaryUI(threadElement, summary) {
       ${actions.length > 0 ? `
         <div class="metldr-summary-item" style="
           margin-bottom: ${dates.length > 0 ? '6px' : '0'};
-          padding: 10px 12px;
+          padding: 10px;
           background: ${theme.bgSecondary};
-          border-radius: 10px;
+          border-radius: 8px;
         ">
           <div style="
-            font-size: 11px;
+            font-size: 10px;
             color: ${theme.secondary};
             text-transform: uppercase;
-            letter-spacing: 0.05em;
-            font-weight: 700;
-            margin-bottom: 6px;
-            opacity: 0.8;
-          ">Actions</div>
+            letter-spacing: 0.06em;
+            font-weight: 600;
+            margin-bottom: 8px;
+          ">action items</div>
           <ul style="
             margin: 0;
             padding-left: 0;
             list-style: none;
             color: ${theme.text};
-            line-height: 1.4;
+            line-height: 1.5;
             font-size: 13px;
           ">
             ${actions.map(action => `
               <li style="
                 padding-left: 14px;
                 position: relative;
-                margin-bottom: 4px;
+                margin-bottom: 5px;
                 font-weight: 400;
               ">
                 <span style="
                   position: absolute;
                   left: 0;
-                  top: 2px;
+                  top: 4px;
                   color: ${theme.secondary};
-                  font-size: 10px;
-                ">•</span>
+                  font-size: 7px;
+                ">▸</span>
                 ${escapeHtml(action)}
               </li>
             `).join('')}
@@ -641,42 +817,34 @@ function injectSummaryUI(threadElement, summary) {
         
       ${dates.length > 0 ? `
         <div class="metldr-summary-item" style="
-          font-size: 12px;
+          font-size: 11px;
           color: ${theme.accent};
           display: flex;
           flex-wrap: wrap;
           align-items: center;
-          gap: 4px;
-          font-weight: 600;
-          -webkit-font-smoothing: antialiased;
-        ">
-          ${dates.map(d => `<span style="background: ${theme.bgSecondary}; padding: 3px 8px; border-radius: 6px; font-size: 11px; -webkit-font-smoothing: antialiased;">${escapeHtml(d)}</span>`).join('')}
-        </div>
-      ` : ''}
-        
-      ${summary.time_ms ? `
-        <div style="
-          font-size: 11px;
-          color: ${theme.textMuted};
-          opacity: 0.85;
-          margin-top: 8px;
-          letter-spacing: 0.01em;
+          gap: 5px;
           font-weight: 500;
           -webkit-font-smoothing: antialiased;
         ">
-          <span style="opacity: 0.7; font-weight: 400;">Time taken:</span> ${formatTime(summary.time_ms)}${summary.cached ? ' • cached' : ''}
+          ${dates.map(d => `<span style="background: ${theme.bgSecondary}; padding: 3px 8px; border-radius: 5px; font-size: 11px; -webkit-font-smoothing: antialiased;">${escapeHtml(d)}</span>`).join('')}
         </div>
       ` : ''}
+      </div>
     </div>
     
     <style>
       .metldr-regenerate-btn:hover {
-        background: ${theme.primary}20 !important;
-        border-color: ${theme.primary}60 !important;
-        transform: scale(1.05);
+        background: ${theme.bgSecondary} !important;
+        border-color: ${theme.primary} !important;
+        color: ${theme.primary} !important;
+        transform: scale(1.15) rotate(90deg);
+        box-shadow: 0 3px 8px ${theme.shadow};
       }
       .metldr-regenerate-btn:active {
-        transform: scale(0.95);
+        background: ${theme.bg} !important;
+        transform: scale(0.9) rotate(90deg);
+        box-shadow: 0 1px 2px ${theme.shadow};
+        transition: all 0.1s cubic-bezier(0.4, 0, 1, 1);
       }
     </style>
   `;
@@ -687,40 +855,38 @@ function injectSummaryUI(threadElement, summary) {
                        document.querySelector('[data-message-id]');
   
   if (emailHeader && emailHeader.parentNode) {
-    emailHeader.parentNode.insertBefore(summaryDiv, emailHeader.nextSibling);
-    console.log('MeTLDR: Summary injected, animating...');
+    const emailContent = emailHeader.nextSibling;
+    if (emailContent) {
+      emailContent.style.transition = 'transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1)';
+    }
     
+    emailHeader.parentNode.insertBefore(summaryDiv, emailHeader.nextSibling);
+    
+    // record injection timestamp to prevent rapid re-injection
+    injectionTimestamps.set(currentThreadId, Date.now());
+    
+    // use synchronous animation (no rAF delay) with !important to force immediate render
+    summaryDiv.style.setProperty('opacity', '0', 'important');
+    summaryDiv.style.setProperty('transform', 'scale(0.985)', 'important');
+    
+    // force reflow
+    summaryDiv.offsetHeight;
+    
+    // trigger animation
+    summaryDiv.style.setProperty('opacity', '1', 'important');
+    summaryDiv.style.setProperty('transform', 'scale(1)', 'important');
+    
+    // cleanup will-change after animation
     setTimeout(() => {
-      summaryDiv.style.transition = 'all 0.6s cubic-bezier(0.16, 1, 0.3, 1)';
-      summaryDiv.style.opacity = '1';
-      summaryDiv.style.transform = 'translateY(0) scale(1)';
-      
-      // stagger items
-      const items = summaryDiv.querySelectorAll('.metldr-summary-item');
-      items.forEach((item, i) => {
-        item.style.opacity = '0';
-        item.style.transform = 'translateY(10px)';
-        setTimeout(() => {
-          item.style.transition = 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)';
-          item.style.opacity = '1';
-          item.style.transform = 'translateY(0)';
-        }, 300 + (i * 80));
-      });
-    }, 50);
+      summaryDiv.style.setProperty('will-change', 'auto', 'important');
+    }, 500);
     
     const regenerateBtn = summaryDiv.querySelector('.metldr-regenerate-btn');
     if (regenerateBtn) {
       regenerateBtn.addEventListener('click', async () => {
         const threadId = regenerateBtn.getAttribute('data-thread-id');
-        console.log('MeTLDR: Regenerate button clicked for:', threadId);
+        console.log('metldr: regenerate button clicked for:', threadId);
         await regenerateSummary(threadId);
-      });
-      
-      regenerateBtn.addEventListener('mouseenter', () => {
-        regenerateBtn.style.transform = 'scale(1.05)';
-      });
-      regenerateBtn.addEventListener('mouseleave', () => {
-        regenerateBtn.style.transform = 'scale(1)';
       });
     }
   } else {
@@ -780,29 +946,49 @@ function formatTime(ms) {
   }
 }
 
+// debounce flag to prevent duplicate regenerations
+let isRegenerating = false;
+
 // regenerate summary (called by button click)
 async function regenerateSummary(threadId) {
-  console.log('MeTLDR: Regenerating summary for:', threadId);
+  if (isRegenerating) {
+    console.log('metldr: regeneration already in progress, skipping');
+    return;
+  }
   
-  // remove existing summary
-  const existing = document.querySelector('.metldr-summary');
-  if (existing) existing.remove();
+  isRegenerating = true;
+  console.log('metldr: regenerating summary for:', threadId);
   
-  // process email again with forceRegenerate flag
-  const emailText = extractEmailText(document);
-  if (emailText && emailText.length > 50) {
-    const emailContainer = document.querySelector('.nH.if') || 
-                          document.querySelector('[data-thread-id]') ||
-                          document.querySelector('.gs');
+  try {
+    // remove existing summary fast fade-out + scale-down
+    const existing = document.querySelector('.metldr-summary');
+    if (existing) {
+      existing.style.transition = 'opacity 0.2s cubic-bezier(0.4, 0, 1, 1), transform 0.2s cubic-bezier(0.4, 0, 1, 1)';
+      existing.style.opacity = '0';
+      existing.style.transform = 'scale(0.95)';
+      await new Promise(resolve => setTimeout(resolve, 200));
+      existing.remove();
+    }
     
-    if (emailContainer) {
-      const loadingDiv = showLoading(emailContainer);
-      const summary = await getSummaryFromBackground(emailText, threadId, true);
-      if (loadingDiv) loadingDiv.remove();
+    // process email again with forceRegenerate flag
+    const metadata = extractEmailMetadata(document);
+    const emailText = extractEmailText(document);
+    if (emailText && emailText.length > 50) {
+      const emailContainer = document.querySelector('.nH.if') || 
+                            document.querySelector('[data-thread-id]') ||
+                            document.querySelector('.gs');
       
-      if (summary) {
-        injectSummaryUI(emailContainer, summary);
+      if (emailContainer) {
+        const loadingDiv = showLoading(emailContainer);
+        const summary = await getSummaryFromBackground(emailText, threadId, metadata, true);
+        if (loadingDiv) loadingDiv.remove();
+        
+        if (summary) {
+          injectSummaryUI(emailContainer, summary);
+        }
       }
     }
+  } finally {
+    isRegenerating = false;
   }
 }
