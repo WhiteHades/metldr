@@ -5,7 +5,7 @@ export class ModelRouter {
   constructor(ollamaClient) {
     this.client = ollamaClient;
     this.availableModels = [];
-    this.defaultModel = 'llama3.2:3b';
+    this.defaultModel = 'llama3.2:1b';
   }
 
   // detect available models from Ollama
@@ -53,14 +53,10 @@ export class ModelRouter {
     return this.availableModels;
   }
 
-  // format model name 
+  // keep original model name without formatting
   formatModelName(modelName) {
-    if (!modelName) return 'No model selected';
-    return modelName
-      .split(':')[0]
-      .split(/[._-]/)
-      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-      .join(' ');
+    if (!modelName) return 'no model selected';
+    return modelName;
   }
 }
 
