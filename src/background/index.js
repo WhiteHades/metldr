@@ -9,9 +9,10 @@ chrome.sidePanel
 // handle email summarization requests from content script
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'SUMMARIZE_EMAIL') {
-    handleEmailSummary(message.emailContent, message.emailId, sendResponse, message.forceRegenerate);
+    handleEmailSummary(message.emailContent, message.emailId, message.metadata, sendResponse, message.forceRegenerate);
     return true; // keep channel open for async
   }
+  
   return false; // not handled
 });
 
@@ -62,20 +63,52 @@ async function cacheSummary(emailId, summary) {
     const transaction = db.transaction(['summaries'], 'readwrite');
     const store = transaction.objectStore('summaries');
     await store.put({ emailId, summary, timestamp: Date.now() });
-    console.log('MeTLDR: Cached summary for:', emailId);
+    console.log('metldr: cached summary for:', emailId);
   } catch (error) {
-    console.error('MeTLDR: Cache write error:', error);
+    console.error('metldr: cache write error:', error);
   }
 }
 
-async function handleEmailSummary(emailContent, emailId, sendResponse, forceRegenerate = false) {
-  const startTime = Date.now(); // Track timing
+async function handleEmailSummary(emailContent, emailId, metadata, sendResponse, forceRegenerate = false) {
+  const startTime = Date.now(); // track timing
   
   try {
-    console.log('MeTLDR background: Processing email summary for:', emailId);
-    console.log('MeTLDR: Email content length:', emailContent.length);
+    console.log('metldr background: processing email summary for:', emailId);
+    console.log('metldr: email content length:', emailContent.length);
+    console.log('metldr: email metadata:', metadata);
     
-    // Check if Ollama is running
+    // check cache first for instant return (unless regenerating)
+    if (!forceRegenerate && emailId) {
+      const cached = await getCachedSummary(emailId);
+      if (cached) {
+        const timeTaken = Date.now() - startTime;
+        console.log('MeTLDR: Returning cached summary for:', emailId, `(${timeTaken}ms)`);
+        sendResponse({ 
+          summary: { 
+            ...cached, 
+            time_ms: timeTaken,
+            cached: true 
+          } 
+        });
+        return;
+      }
+    }
+    
+    // load selected model from chrome.storage
+    let selectedModel = 'gemma3:1b'; // default fallback
+    try {
+      const result = await chrome.storage.local.get('selectedModel');
+      if (result.selectedModel) {
+        selectedModel = result.selectedModel;
+        console.log('metldr: using selected model:', selectedModel);
+      } else {
+        console.log('metldr: no saved model, using default:', selectedModel);
+      }
+    } catch (error) {
+      console.error('metldr: failed to load model selection:', error);
+    }
+    
+    // check if Ollama is running (only for new summaries)
     try {
       const healthCheck = await fetch('http://127.0.0.1:11434/api/tags', {
         signal: AbortSignal.timeout(2000)
@@ -93,23 +126,6 @@ async function handleEmailSummary(emailContent, emailId, sendResponse, forceRege
         }
       });
       return;
-    }
-    
-    // check cache first (unless regenerating)
-    if (!forceRegenerate && emailId) {
-      const cached = await getCachedSummary(emailId);
-      if (cached) {
-        const timeTaken = Date.now() - startTime;
-        console.log('MeTLDR: Returning cached summary for:', emailId);
-        sendResponse({ 
-          summary: { 
-            ...cached, 
-            time_ms: timeTaken,
-            cached: true 
-          } 
-        });
-        return;
-      }
     }
     
     // two-pass approach: extract facts first, then summarize from facts
@@ -131,17 +147,18 @@ async function handleEmailSummary(emailContent, emailId, sendResponse, forceRege
       return;
     }
     
-    console.log('MeTLDR: Pass 2 - Generating summary from facts + context...');
-    // Pass both facts and email body (trim if extremely long)
+    console.log('metldr: pass 2 - generating summary from facts + context...');
+    // pass both facts and email body (trim if extremely long)
     const emailSnippet = emailContent.length > 6000 
       ? emailContent.substring(0, 4000) + '\n...[content truncated]...\n' + emailContent.substring(emailContent.length - 2000)
       : emailContent;
-    const summary = await generateSummaryFromFacts(extractedFacts, emailSnippet);
+    const summary = await generateSummaryFromFacts(extractedFacts, emailSnippet, metadata, selectedModel);
     
-    // Add timing info
+    // add timing info and model name
     const timeTaken = Date.now() - startTime;
     summary.time_ms = timeTaken;
     summary.cached = false;
+    summary.model = selectedModel;
     
     // cache the summary with emailId in IndexedDB
     if (emailId) {
@@ -337,7 +354,7 @@ async function extractFactsMapReduce(emailContent, schema) {
 }
 
 // Pass 2: Generate summary from extracted facts + email context
-async function generateSummaryFromFacts(facts, emailSnippet = '') {
+async function generateSummaryFromFacts(facts, emailSnippet = '', metadata = null, selectedModel = 'llama3.2:1b') {
   // Clean schema for human-readable summaries
   const summarySchema = {
     "type": "object",
@@ -373,34 +390,47 @@ async function generateSummaryFromFacts(facts, emailSnippet = '') {
     }
   };
   
-  // Build concise facts string
+  // build concise facts string
   const factsText = buildFactsSummary(facts);
 
-  const systemPrompt = `Summarize emails concisely. Be direct. Skip meta phrases. Write for the recipient.`;
+  // build metadata context if available
+  let metadataContext = '';
+  if (metadata) {
+    metadataContext = 'EMAIL METADATA:\n';
+    if (metadata.sender) metadataContext += `from: ${metadata.sender}`;
+    if (metadata.senderEmail) metadataContext += ` <${metadata.senderEmail}>`;
+    if (metadata.sender || metadata.senderEmail) metadataContext += '\n';
+    if (metadata.date) metadataContext += `sent: ${metadata.date}\n`;
+    if (metadata.subject) metadataContext += `subject: ${metadata.subject}\n`;
+    if (metadata.to) metadataContext += `to: ${metadata.to}\n`;
+    metadataContext += '\n';
+  }
 
-  const userPrompt = `Read this email excerpt and the extracted facts, then create a brief summary:
+  const systemPrompt = `summarize emails concisely. be direct. skip meta phrases. write for the recipient. use metadata (date, sender) for temporal context when the email mentions vague timings like "tomorrow", "next week", "yesterday".`;
 
-EMAIL EXCERPT:
+  const userPrompt = `read this email excerpt and the extracted facts, then create a brief summary:
+
+${metadataContext}EMAIL EXCERPT:
 ${emailSnippet}
 
 EXTRACTED FACTS:
 ${factsText}
 
-Requirements:
+requirements:
 - 1-2 sentences maximum
-- Understand the email's PURPOSE from the excerpt (webinar invite? booking? payment?)
-- Lead with the main action or event
-- Include relevant key details from facts (amounts, dates, IDs) ONLY if they match the purpose
-- Skip phrases like "this email", "you received", "the sender"
-- Use → for routes/paths where relevant
-- Be direct and scannable`;
+- understand the email's purpose from the excerpt (webinar invite? booking? payment?)
+- lead with the main action or event
+- include relevant key details from facts (amounts, dates, IDs) only if they match the purpose
+- skip phrases like "this email", "you received", "the sender"
+- use → for routes/paths where relevant
+- be direct and scannable`;
 
-  // Try models with fallback (30s timeout each)
-  const models = ['gemma3:4b', 'llama3.2:1b', 'qwen2.5:3b'];
+  // use selected model with fallback list if it fails
+  const models = [selectedModel, 'llama3.2:1b', 'gemma3:4b', 'qwen2.5:3b'].filter((v, i, a) => a.indexOf(v) === i); // remove duplicates
   
   for (const model of models) {
     try {
-      console.log(`MeTLDR: Trying model ${model}...`);
+      console.log(`metldr: trying model ${model}...`);
       
       // Add timeout to prevent hanging
       const controller = new AbortController();
