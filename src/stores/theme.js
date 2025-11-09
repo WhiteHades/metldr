@@ -3,20 +3,34 @@ import { ref, computed } from 'vue';
 
 export const useThemeStore = defineStore('theme', () => {
   const themes = {
+    default: {
+      name: 'default',
+      primary: '#60a5fa',      // lighter blue for dark bg
+      secondary: '#a78bfa',    // lighter purple
+      accent: '#34d399',       // lighter green
+      bg: '#0f172a',           // dark slate
+      bgSecondary: '#1e293b',  // slightly lighter slate
+      text: '#e2e8f0',         // light gray text
+      textMuted: '#94a3b8',    // muted gray
+      border: 'rgba(148, 163, 184, 0.2)',
+      glow: 'rgba(96, 165, 250, 0.15)',
+      shadow: 'rgba(0, 0, 0, 0.3)',
+    },
     cyberpunk: {
-      name: 'Cyberpunk 2077',
+      name: 'cyberpunk 2077',
       primary: '#00f0ff',      
       secondary: '#ff0080',
-      accent: '#fcee09', 
+      accent: '#fcee09',
       bg: '#000000',
       bgSecondary: '#0a0a0a',
       text: '#e4e4e7',
       textMuted: '#71717a',
       border: 'rgba(0, 240, 255, 0.3)',
       glow: 'rgba(0, 240, 255, 0.4)',
+      shadow: 'rgba(0, 240, 255, 0.3)',
     },
     catppuccin: {
-      name: 'Catppuccin Mocha',
+      name: 'catppuccin mocha',
       primary: '#f5e0dc', 
       secondary: '#cba6f7',
       accent: '#fab387',
@@ -26,9 +40,10 @@ export const useThemeStore = defineStore('theme', () => {
       textMuted: '#6c7086',
       border: 'rgba(245, 224, 220, 0.2)',
       glow: 'rgba(245, 224, 220, 0.3)',
+      shadow: 'rgba(245, 224, 220, 0.15)',
     },
     gruvbox: {
-      name: 'Gruvbox Dark',
+      name: 'gruvbox dark',
       primary: '#fe8019',
       secondary: '#8ec07c',
       accent: '#fabd2f', 
@@ -38,17 +53,18 @@ export const useThemeStore = defineStore('theme', () => {
       textMuted: '#928374',
       border: 'rgba(254, 128, 25, 0.3)',
       glow: 'rgba(254, 128, 25, 0.4)',
+      shadow: 'rgba(254, 128, 25, 0.2)',
     },
   };
 
-  const currentTheme = ref('cyberpunk');
+  const currentTheme = ref('default');
 
   const colors = computed(() => themes[currentTheme.value]);
 
   const setTheme = (themeName) => {
     if (themes[themeName]) {
       currentTheme.value = themeName;
-      // Save to chrome.storage for persistence
+      // save to chrome.storage for persistence
       chrome.storage.local.set({ theme: themeName });
     }
   };
@@ -60,7 +76,7 @@ export const useThemeStore = defineStore('theme', () => {
         currentTheme.value = result.theme;
       }
     } catch (error) {
-      console.error('Failed to load theme:', error);
+      console.error('failed to load theme:', error);
     }
   };
 
