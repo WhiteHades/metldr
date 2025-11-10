@@ -1,13 +1,13 @@
 {
   "manifest_version": 3,
-  "version": "0.1.0",
+  "version": "0.3.0",
   "name": "MeTLDR",
-  "description": "Local and private AI assistant powered by Ollama",
+  "description": "Local and private AI assistant powered by Ollama with offline dictionary",
   "content_security_policy": {
     "extension_pages": "script-src 'self'; style-src 'self' 'unsafe-inline';"
   },
   "action": {
-    "default_title": "MeTLDR - Click to open"
+    "default_title": "metldr - click to open"
   },
   "side_panel": {
     "default_path": "index.html"

@@ -5,12 +5,16 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "npm run build:main && npm run build:content",
+    "build:main": "vite build",
+    "build:content": "BUILD_TARGET=content vite build",
     "preview": "vite preview"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.17",
+    "daisyui": "^5.4.7",
     "gsap": "^3.13.0",
+    "lucide-vue-next": "^0.553.0",
     "pinia": "^3.0.4",
     "tailwindcss": "^4.1.17",
     "vue": "^3.5.22"
