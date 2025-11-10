@@ -1,16 +1,19 @@
 import { gsap } from 'gsap';
-
-console.log('metldr: content script loaded');
-console.log('metldr: current url:', window.location.href);
-console.log('metldr: hostname:', window.location.hostname);
+import { ContentDetector } from '../lib/ContentDetector.js';
 
 const isGmail = window.location.hostname.includes('mail.google.com');
-console.log('metldr: is gmail?', isGmail);
 
 const processedEmails = new Set();
 
 const injectionTimestamps = new Map();
 const INJECTION_COOLDOWN = 3000;
+
+// dwell-time pre-summarisation state
+let dwellTimer = 0;
+let dwellInterval = null;
+let summarisationQueued = false;
+let currentPageUrl = window.location.href;
+const DWELL_THRESHOLD = 0; // instant for testing (change to 30 for production)
 
 if (!document.getElementById('metldr-animations')) {
   const style = document.createElement('style');
@@ -32,15 +35,15 @@ if (!document.getElementById('metldr-animations')) {
 
 loadCurrentTheme();
 
+// start dwell-time monitoring for pre-summarisation
+if (!isGmail) {
+  startDwellMonitoring();
+}
+
 if (isGmail) {
-  console.log('MeTLDR: Gmail detected');
-  
   waitForGmail().then(() => {
-    console.log('MeTLDR: Gmail ready, initializing...');
     initInjector();
   });
-} else {
-  console.log('MeTLDR: Not Gmail, skipping');
 }
 
 async function waitForGmail() {
@@ -64,12 +67,10 @@ async function waitForGmail() {
 }
 
 function initInjector() {
-  console.log('MeTLDR: initInjector called');
   let lastProcessedUrl = '';
 
   const processEmails = () => {
     const currentUrl = window.location.href;
-    console.log('metldr: mutation detected, url:', currentUrl);
     
     if (currentUrl === lastProcessedUrl) {
       const existingSummary = document.querySelector('.metldr-summary');
@@ -84,27 +85,21 @@ function initInjector() {
         const lastInjection = injectionTimestamps.get(threadId);
         const now = Date.now();
         if (lastInjection && (now - lastInjection) < INJECTION_COOLDOWN) {
-          console.log(`metldr: cooldown active (${Math.round((now - lastInjection) / 1000)}s ago), skipping re-injection`);
           return;
         }
       }
       
-      console.log('metldr: same url but summary missing, re-processing...');
       setTimeout(() => processCurrentEmail(), 1500);
       return;
     }
     
     lastProcessedUrl = currentUrl;
     const threadId = getCurrentThreadId();
-    console.log('metldr: current thread id:', threadId);
     
     if (threadId) {
       const existingSummary = document.querySelector('.metldr-summary');
       if (!existingSummary) {
-        console.log('metldr: new thread or summary missing, processing in 1.5s...');
         setTimeout(() => processCurrentEmail(), 1500);
-      } else {
-        console.log('metldr: summary already exists, skipping');
       }
     }
   };
@@ -126,7 +121,6 @@ function initInjector() {
   });
 
   const mainContainer = document.querySelector('div[role="main"]') || document.body;
-  console.log('MeTLDR: Main container found?', !!mainContainer);
   
   if (mainContainer) {
     observer.observe(mainContainer, {
@@ -134,18 +128,14 @@ function initInjector() {
       subtree: true,
       attributes: false
     });
-    console.log('MeTLDR: Observer started');
   }
 
-  console.log('MeTLDR: Will scan for emails in 2s...');
   setTimeout(() => {
-    console.log('MeTLDR: Scanning for initial email...');
     lastProcessedUrl = window.location.href;
     processCurrentEmail();
   }, 2000);
 
   initInjector.observer = observer;
-  console.log('MeTLDR: initInjector complete');
 
   hookUrlChanges(() => {
     clearTimeout(initInjector.debounceTimer);
@@ -155,23 +145,19 @@ function initInjector() {
 
 function getCurrentThreadId() {
   const url = window.location.href;
-  console.log('metldr: checking url for thread id:', url);
   
   let match = url.match(/#inbox\/([a-zA-Z0-9_-]+)/);
   if (match) {
     const threadId = match[1];
     
     if (/^p\d+$/.test(threadId)) {
-      console.log('metldr: ignoring pagination marker:', threadId);
       return null;
     }
     
     if (threadId.length < 10) {
-      console.log('metldr: thread id too short, ignoring:', threadId);
       return null;
     }
     
-    console.log('metldr: found thread id:', threadId);
     return threadId;
   }
   
@@ -448,17 +434,18 @@ function hexToRgb(hex) {
 }
 
 function showLoading(threadElement) {
-  const theme = THEME_COLORS[currentTheme] || THEME_COLORS.default;
+  const theme = currentTheme; // Use the already-loaded theme object directly
   
   const loading = document.createElement('div');
   loading.className = 'metldr-loading';
   loading.style.cssText = `
     position: relative;
-    margin: 12px 0;
-    padding: 10px 12px;
-    background: ${theme.bg};
-    border: 2px solid ${theme.border};
-    border-radius: 10px;
+    margin: 16px 0;
+    padding: 12px 16px;
+    background: ${theme.bgSecondary};
+    border: 1.5px solid ${theme.border};
+    border-radius: 12px;
+    box-shadow: 0 4px 12px ${theme.shadow};
     opacity: 0;
     transform: scale(0.985);
   `;
@@ -467,12 +454,12 @@ function showLoading(threadElement) {
     <div style="
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 12px;
     ">
       <div class="metldr-spinner" style="
-        width: 14px;
-        height: 14px;
-        border: 2px solid ${theme.border};
+        width: 16px;
+        height: 16px;
+        border: 2.5px solid ${theme.border};
         border-top-color: ${theme.primary};
         border-radius: 50%;
         animation: spin 0.7s linear infinite;
@@ -480,7 +467,8 @@ function showLoading(threadElement) {
       <span style="
         color: ${theme.text};
         font-size: 13px;
-        font-weight: 500;
+        font-weight: 600;
+        letter-spacing: 0.01em;
         -webkit-font-smoothing: antialiased;
       ">generating summary...</span>
     </div>
@@ -531,85 +519,101 @@ function showLoading(threadElement) {
 }
 
 const THEME_COLORS = {
-  default: {
-    primary: '#60a5fa',
-    secondary: '#a78bfa',
-    accent: '#34d399',
-    bg: 'rgba(15, 23, 42, 0.98)',
-    bgSecondary: 'rgba(30, 41, 59, 0.98)',
-    text: '#e2e8f0',
-    textMuted: '#94a3b8',
-    border: 'rgba(148, 163, 184, 0.2)',
-    glow: 'rgba(96, 165, 250, 0.15)',
-    shadow: 'rgba(0, 0, 0, 0.3)',
+  midnight: {
+    primary: 'oklch(0.75 0.18 230)',
+    secondary: 'oklch(0.70 0.16 285)',
+    accent: 'oklch(0.76 0.15 165)',
+    bg: 'oklch(0.10 0.01 265)',
+    bgSecondary: 'oklch(0.14 0.01 265 / 0.98)',
+    text: 'oklch(0.90 0.02 265)',
+    textMuted: 'oklch(0.60 0.02 265)',
+    border: 'oklch(0.30 0.02 265 / 0.3)',
+    borderSubtle: 'oklch(0.30 0.02 265 / 0.15)',
+    shadow: 'oklch(0 0 0 / 0.4)',
+  },
+  daylight: {
+    primary: 'oklch(0.55 0.20 230)',
+    secondary: 'oklch(0.50 0.18 285)',
+    accent: 'oklch(0.56 0.17 165)',
+    bg: 'oklch(0.98 0.01 265)',
+    bgSecondary: 'oklch(0.94 0.01 265)',
+    text: 'oklch(0.20 0.02 265)',
+    textMuted: 'oklch(0.50 0.02 265)',
+    border: 'oklch(0.30 0.02 265 / 0.3)',
+    borderSubtle: 'oklch(0.30 0.02 265 / 0.15)',
+    shadow: 'oklch(0 0 0 / 0.15)',
   },
   cyberpunk: {
-    primary: '#00f0ff',
-    secondary: '#ff0080',
-    accent: '#fcee09',
-    bg: 'rgba(0, 0, 0, 0.95)',
-    bgSecondary: 'rgba(10, 10, 10, 0.95)',
-    text: '#e4e4e7',
-    textMuted: '#71717a',
-    border: 'rgba(0, 240, 255, 0.3)',
-    glow: 'rgba(0, 240, 255, 0.4)',
-    shadow: 'rgba(0, 240, 255, 0.3)',
+    primary: 'oklch(0.80 0.25 200)',
+    secondary: 'oklch(0.65 0.28 340)',
+    accent: 'oklch(0.88 0.20 100)',
+    bg: 'oklch(0.05 0.01 265)',
+    bgSecondary: 'oklch(0.09 0.01 265 / 0.98)',
+    text: 'oklch(0.92 0.02 265)',
+    textMuted: 'oklch(0.55 0.02 265)',
+    border: 'oklch(0.80 0.25 200 / 0.35)',
+    borderSubtle: 'oklch(0.80 0.25 200 / 0.18)',
+    shadow: 'oklch(0.80 0.25 200 / 0.35)',
   },
   catppuccin: {
-    primary: '#f5e0dc',
-    secondary: '#cba6f7',
-    accent: '#fab387',
-    bg: 'rgba(30, 30, 46, 0.95)',
-    bgSecondary: 'rgba(24, 24, 37, 0.95)',
-    text: '#cdd6f4',
-    textMuted: '#6c7086',
-    border: 'rgba(245, 224, 220, 0.2)',
-    glow: 'rgba(245, 224, 220, 0.3)',
-    shadow: 'rgba(245, 224, 220, 0.15)',
+    primary: 'oklch(0.87 0.04 30)',
+    secondary: 'oklch(0.72 0.13 290)',
+    accent: 'oklch(0.77 0.12 35)',
+    bg: 'oklch(0.19 0.02 265)',
+    bgSecondary: 'oklch(0.23 0.02 265 / 0.98)',
+    text: 'oklch(0.87 0.03 250)',
+    textMuted: 'oklch(0.54 0.03 250)',
+    border: 'oklch(0.87 0.04 30 / 0.25)',
+    borderSubtle: 'oklch(0.87 0.04 30 / 0.12)',
+    shadow: 'oklch(0.87 0.04 30 / 0.18)',
   },
   gruvbox: {
-    primary: '#fe8019',
-    secondary: '#8ec07c',
-    accent: '#fabd2f',
-    bg: 'rgba(40, 40, 40, 0.95)',
-    bgSecondary: 'rgba(29, 32, 33, 0.95)',
-    text: '#ebdbb2',
-    textMuted: '#928374',
-    border: 'rgba(254, 128, 25, 0.3)',
-    glow: 'rgba(254, 128, 25, 0.4)',
-    shadow: 'rgba(254, 128, 25, 0.2)',
+    primary: 'oklch(0.66 0.15 45)',
+    secondary: 'oklch(0.68 0.12 150)',
+    accent: 'oklch(0.75 0.14 80)',
+    bg: 'oklch(0.22 0.01 70)',
+    bgSecondary: 'oklch(0.26 0.01 70 / 0.98)',
+    text: 'oklch(0.86 0.04 70)',
+    textMuted: 'oklch(0.58 0.02 70)',
+    border: 'oklch(0.66 0.15 45 / 0.35)',
+    borderSubtle: 'oklch(0.66 0.15 45 / 0.18)',
+    shadow: 'oklch(0.66 0.15 45 / 0.25)',
   },
 };
 
-let currentTheme = 'default';
+// store both theme name (string) and theme object separately
+let currentThemeName = 'midnight';
+let currentTheme = THEME_COLORS.midnight;
 
 async function loadCurrentTheme() {
   try {
     const result = await chrome.storage.local.get('theme');
-    currentTheme = result.theme || 'default';
-    console.log('metldr: loaded theme from storage:', currentTheme);
+    const themeName = result.theme || 'midnight';
+    currentThemeName = themeName;
+    currentTheme = THEME_COLORS[themeName] || THEME_COLORS.midnight;
+    console.log('metldr: loaded theme from storage:', themeName, currentTheme);
+
+    // Update any existing summaries with the loaded theme
+    updateSummaryTheme();
   } catch (error) {
     console.error('metldr: failed to load theme:', error);
-    currentTheme = 'default';
+    currentThemeName = 'midnight';
+    currentTheme = THEME_COLORS.midnight;
+    updateSummaryTheme();
   }
 }
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.theme) {
-    const newTheme = changes.theme.newValue;
-    console.log('MeTLDR: Theme changed to:', newTheme);
-    currentTheme = newTheme;
+
+    const themeName = changes.theme.newValue;
+    currentThemeName = themeName;
+    currentTheme = THEME_COLORS[themeName] || THEME_COLORS.midnight;
+    console.log('metldr: theme changed to:', themeName, currentTheme);
     
-    const existingSummary = document.querySelector('.metldr-summary');
-    if (existingSummary) {
-      console.log('MeTLDR: Refreshing summary with new theme');
-      const threadId = getCurrentThreadId();
-      if (threadId) {
-        existingSummary.remove();
-        processCurrentEmail();
-      }
+    updatePopupTheme();
+    updateSummaryTheme();
     }
-  }
 });
 
 function injectSummaryUI(threadElement, summary) {
@@ -619,14 +623,14 @@ function injectSummaryUI(threadElement, summary) {
     return;
   }
   
-  console.log('MeTLDR: Injecting summary UI with theme:', currentTheme);
+  console.log('MeTLDR: Injecting summary UI with theme:', currentThemeName, currentTheme);
 
   const summaryText = summary.summary || '';
   const actions = summary.action_items || [];
   const dates = summary.dates || [];
   const confidence = summary.confidence || 'medium';
   const currentThreadId = getCurrentThreadId();
-  const theme = THEME_COLORS[currentTheme] || THEME_COLORS.default;
+  const theme = currentTheme; // Use the already-loaded theme object directly
 
   const confidenceColors = {
     high: '#10b981',
@@ -656,61 +660,63 @@ function injectSummaryUI(threadElement, summary) {
   summaryDiv.innerHTML = `
     <div style="
       position: relative;
-      margin: 20px 0 12px 0;
+      margin: 24px 0 16px 0;
     ">
-      <!-- unified status badge on left border edge -->
+      <!-- unified status badge -->
       <div style="
         position: absolute;
-        top: -10px;
-        left: 12px;
+        top: -12px;
+        left: 16px;
         display: flex;
         align-items: center;
         gap: 8px;
-        background: ${theme.bg};
-        padding: 4px 12px;
-        border: 1px solid ${theme.border};
-        border-radius: 6px;
-        box-shadow: 0 1px 3px ${theme.shadow};
+        background: ${theme.bgSecondary};
+        backdrop-filter: blur(24px) saturate(180%);
+        -webkit-backdrop-filter: blur(24px) saturate(180%);
+        padding: 6px 14px;
+        border: 0.5px solid ${theme.borderSubtle};
+        border-radius: 12px;
+        box-shadow: 0 4px 12px ${theme.shadow}, inset 0 1px 0 ${theme.borderSubtle};
         z-index: 1;
         -webkit-font-smoothing: antialiased;
       ">
         <!-- branding section -->
-        <div style="display: flex; align-items: center; gap: 4px;">
+        <div style="display: flex; align-items: center; gap: 5px;">
           <div title="confidence: ${confidence} • how certain the ai is about this summary's accuracy" style="
-            width: 5px;
-            height: 5px;
+            width: 6px;
+            height: 6px;
             background: ${confColor};
             border-radius: 50%;
-            box-shadow: 0 0 6px ${confColor}80;
+            box-shadow: 0 0 8px ${confColor};
             cursor: help;
           "></div>
           <strong style="
-            font-size: 11px;
+            font-size: 12px;
             font-weight: 600;
             color: ${theme.primary};
-            letter-spacing: -0.01em;
+            letter-spacing: 0.01em;
           ">metldr</strong>
         </div>
         
         <!-- separator -->
-        <span style="color: ${theme.border}; font-size: 10px;">|</span>
+        <span style="color: ${theme.borderSubtle}; font-size: 11px; opacity: 0.5;">•</span>
         
         <!-- model -->
         <span title="model used for this summary" style="
-          font-size: 10px;
+          font-size: 11px;
           color: ${theme.textMuted};
           font-weight: 500;
-          font-family: 'Courier New', monospace;
+          font-family: 'SF Mono', 'Courier New', monospace;
           cursor: help;
         ">${escapeHtml(modelName)}</span>
         
         <!-- time -->
         ${summary.time_ms ? `
           <!-- separator -->
-          <span style="color: ${theme.border}; font-size: 10px;">|</span>
+          <span style="color: ${theme.borderSubtle}; font-size: 11px; opacity: 0.5;">•</span>
           
           <span title="time taken: ${formatTime(summary.time_ms)}${summary.cached ? ' • retrieved from cache' : ' • generated fresh'}" style="
-            font-size: 10px;
+            font-size: 11px;
             color: ${theme.textMuted};
             font-weight: 500;
             cursor: help;
@@ -718,42 +724,47 @@ function injectSummaryUI(threadElement, summary) {
         ` : ''}
       </div>
       
-      <!-- regenerate button on right border edge -->
+      <!-- regenerate button -->
       <button class="metldr-regenerate-btn" data-thread-id="${currentThreadId}" title="regenerate summary with fresh ai analysis" style="
         position: absolute;
-        top: -12px;
-        right: 12px;
-        width: 24px;
-        height: 24px;
+        top: -14px;
+        right: 16px;
+        width: 28px;
+        height: 28px;
         display: flex;
         align-items: center;
         justify-content: center;
-        background: ${theme.bg};
-        border: 1px solid ${theme.border};
+        background: ${theme.bgSecondary};
+        backdrop-filter: blur(24px) saturate(180%);
+        -webkit-backdrop-filter: blur(24px) saturate(180%);
+        border: 0.5px solid ${theme.borderSubtle};
         border-radius: 50%;
         color: ${theme.primary};
-        font-size: 13px;
+        font-size: 15px;
+        font-weight: 600;
         cursor: pointer;
-        transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
-        box-shadow: 0 1px 3px ${theme.shadow};
+        transition: all 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+        box-shadow: 0 4px 12px ${theme.shadow}, inset 0 1px 0 ${theme.borderSubtle};
         z-index: 1;
         padding: 0;
         -webkit-font-smoothing: antialiased;
       ">↻</button>
       
-      <!-- main card -->
+      <!-- main card with liquid glass -->
       <div style="
         background: ${theme.bg};
-        border: 1px solid ${theme.border};
-        border-radius: 10px;
-        padding: 12px;
-        padding-top: 16px;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-        box-shadow: 0 2px 8px ${theme.shadow}, 0 1px 2px rgba(0,0,0,0.04);
+        backdrop-filter: blur(32px) saturate(200%);
+        -webkit-backdrop-filter: blur(32px) saturate(200%);
+        border: 0.5px solid ${theme.border};
+        border-radius: 16px;
+        padding: 16px;
+        padding-top: 20px;
+        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', system-ui, sans-serif;
+        box-shadow: 0 8px 32px ${theme.shadow}, inset 0 1px 0 ${theme.borderSubtle};
         position: relative;
         -webkit-font-smoothing: antialiased;
         -moz-osx-font-smoothing: grayscale;
-        transition: box-shadow 0.3s ease;
+        transition: all 0.3s cubic-bezier(0.22, 1, 0.36, 1);
       ">
 
       ${summaryText ? `
@@ -991,4 +1002,791 @@ async function regenerateSummary(threadId) {
   } finally {
     isRegenerating = false;
   }
+}
+
+// word selection handling
+let inlinePopupContainer = null;
+
+// update popup theme in real-time when theme changes
+function updatePopupTheme() {
+  if (!inlinePopupContainer) return;
+  
+  const popup = inlinePopupContainer.querySelector('.metldr-popup-body');
+  if (!popup) return;
+  
+  // update popup background and border with !important
+  popup.style.setProperty('background', currentTheme.bgSecondary, 'important');
+  popup.style.setProperty('background-color', currentTheme.bgSecondary, 'important');
+  popup.style.setProperty('border-color', currentTheme.border, 'important');
+  popup.style.setProperty('box-shadow', `0 8px 24px ${currentTheme.shadow}, 0 4px 12px ${currentTheme.shadow}, inset 0 1px 0 ${currentTheme.borderSubtle}`, 'important');
+  
+  // update all text elements with !important
+  const allSpans = popup.querySelectorAll('span');
+  allSpans.forEach((span, index) => {
+    if (index === 0) {
+      // word (primary color)
+      span.style.setProperty('color', currentTheme.primary, 'important');
+    } else if (span.textContent.includes('AI')) {
+      // ai badge (accent color)
+      span.style.setProperty('color', currentTheme.accent, 'important');
+    } else if (span.parentElement && (span.parentElement.tagName === 'HEADER' || span.style.fontSize === '10px')) {
+      // part of speech (muted)
+      span.style.setProperty('color', currentTheme.textMuted, 'important');
+    }
+  });
+  
+  // update POS tags specifically
+  const posTags = popup.querySelectorAll('div[style*="font-size: 9px"][style*="text-transform: uppercase"]');
+  posTags.forEach(tag => {
+    tag.style.setProperty('color', currentTheme.secondary, 'important');
+  });
+  
+  const content = popup.querySelector('.metldr-popup-content');
+  if (content) {
+    content.style.setProperty('color', currentTheme.text, 'important');
+    const defDivs = content.querySelectorAll('div');
+    defDivs.forEach(div => {
+      div.style.setProperty('color', currentTheme.text, 'important');
+    });
+  }
+  
+  console.log('[POPUP] theme updated in real-time:', currentTheme);
+}
+
+function updateSummaryTheme() {
+  console.log('updateSummaryTheme called with currentTheme:', currentTheme);
+
+  const theme = currentTheme;
+  console.log('Using theme object:', theme);
+
+  const loadingElement = document.querySelector('.metldr-loading');
+  if (loadingElement) {
+    console.log('Updating loading element');
+    loadingElement.style.setProperty('background', theme.bgSecondary, 'important');
+    loadingElement.style.setProperty('background-color', theme.bgSecondary, 'important');
+    loadingElement.style.setProperty('border-color', theme.border, 'important');
+    loadingElement.style.setProperty('box-shadow', `0 4px 12px ${theme.shadow}`, 'important');
+
+    const spinner = loadingElement.querySelector('.metldr-spinner');
+    if (spinner) {
+      console.log('Updating spinner');
+      spinner.style.setProperty('border-color', theme.border, 'important');
+      spinner.style.setProperty('border-top-color', theme.primary, 'important');
+    }
+
+    const loadingText = loadingElement.querySelector('span');
+    if (loadingText) {
+      console.log('Updating loading text');
+      loadingText.style.setProperty('color', theme.text, 'important');
+    }
+  } else {
+    console.log('No loading element found');
+  }
+
+  const existingSummary = document.querySelector('.metldr-summary');
+  if (existingSummary) {
+    console.log('Found existing summary, updating...');
+
+    // update the status badge background and styling
+    const statusBadge = existingSummary.querySelector('div[style*="position: absolute"]');
+    if (statusBadge) {
+      console.log('Updating status badge');
+      statusBadge.style.setProperty('background', theme.bgSecondary, 'important');
+      statusBadge.style.setProperty('background-color', theme.bgSecondary, 'important');
+      statusBadge.style.setProperty('border-color', theme.borderSubtle, 'important');
+      statusBadge.style.setProperty('box-shadow', `0 4px 12px ${theme.shadow}, inset 0 1px 0 ${theme.borderSubtle}`, 'important');
+
+      // update text colors in status badge
+      const brandingText = statusBadge.querySelector('strong');
+      if (brandingText) {
+        console.log('Updating branding text');
+        brandingText.style.setProperty('color', theme.primary, 'important');
+      }
+
+      const modelText = statusBadge.querySelector('span[title*="model used"]');
+      if (modelText) {
+        console.log('Updating model text');
+        modelText.style.setProperty('color', theme.textMuted, 'important');
+      }
+
+      const timeText = statusBadge.querySelector('span[title*="time taken"]');
+      if (timeText) {
+        console.log('Updating time text');
+        timeText.style.setProperty('color', theme.textMuted, 'important');
+      }
+
+      const separators = statusBadge.querySelectorAll('span[style*="opacity: 0.5"]');
+      console.log(`Updating ${separators.length} separators`);
+      separators.forEach(sep => sep.style.setProperty('color', theme.borderSubtle, 'important'));
+    } else {
+      console.log('Status badge not found');
+    }
+
+    // update regenerate button
+    const regenerateBtn = existingSummary.querySelector('.metldr-regenerate-btn');
+    if (regenerateBtn) {
+      console.log('Updating regenerate button');
+      regenerateBtn.style.setProperty('background', theme.bgSecondary, 'important');
+      regenerateBtn.style.setProperty('background-color', theme.bgSecondary, 'important');
+      regenerateBtn.style.setProperty('border-color', theme.borderSubtle, 'important');
+      regenerateBtn.style.setProperty('color', theme.primary, 'important');
+      regenerateBtn.style.setProperty('box-shadow', `0 4px 12px ${theme.shadow}, inset 0 1px 0 ${theme.borderSubtle}`, 'important');
+    } else {
+      console.log('Regenerate button not found');
+    }
+
+    // update main card - use more specific selector for the outer card with backdrop-filter
+    const mainCard = existingSummary.querySelector('div[style*="backdrop-filter: blur(32px)"]');
+    if (mainCard) {
+      console.log('updating main card');
+      mainCard.style.setProperty('background', theme.bg, 'important');
+      mainCard.style.setProperty('background-color', theme.bg, 'important');
+      mainCard.style.setProperty('border-color', theme.border, 'important');
+      mainCard.style.setProperty('box-shadow', `0 8px 32px ${theme.shadow}, inset 0 1px 0 ${theme.borderSubtle}`, 'important');
+
+      // update summary items
+      const summaryItems = existingSummary.querySelectorAll('.metldr-summary-item');
+      console.log(`Found ${summaryItems.length} summary items to update`);
+      summaryItems.forEach((item, index) => {
+        console.log(`Updating summary item ${index + 1}`);
+        // Set both background and background-color to ensure it overrides
+        item.style.setProperty('background', theme.bgSecondary, 'important');
+        item.style.setProperty('background-color', theme.bgSecondary, 'important');
+        item.style.setProperty('color', theme.text, 'important');
+        console.log(`   After: background=${item.style.background}, backgroundColor=${item.style.backgroundColor}`);
+
+        // update action items header
+        const actionHeader = item.querySelector('div[style*="text-transform: uppercase"]');
+        if (actionHeader) {
+          console.log(`Updating action header in item ${index + 1}`);
+          actionHeader.style.setProperty('color', theme.secondary, 'important');
+        }
+
+        // update bullet points
+        const bullets = item.querySelectorAll('span[style*="position: absolute"][style*="left: 0"]');
+        console.log(`Updating ${bullets.length} bullets in item ${index + 1}`);
+        bullets.forEach(bullet => {
+          bullet.style.setProperty('color', theme.secondary, 'important');
+        });
+
+        // update list items
+        const listItems = item.querySelectorAll('li');
+        console.log(`Updating ${listItems.length} list items in item ${index + 1}`);
+        listItems.forEach(li => li.style.setProperty('color', theme.text, 'important'));
+
+        // Update date tags
+        const dateTags = item.querySelectorAll('span[style*="background:"]');
+        console.log(`Updating ${dateTags.length} date tags in item ${index + 1}`);
+        dateTags.forEach(tag => {
+          tag.style.setProperty('background', theme.bgSecondary, 'important');
+          tag.style.setProperty('background-color', theme.bgSecondary, 'important');
+          tag.style.setProperty('color', theme.accent, 'important');
+        });
+      });
+    } else {
+      console.log('Main card not found');
+    }
+  } else {
+    console.log('No existing summary found');
+  }
+
+  console.log('updateSummaryTheme completed');
+}document.addEventListener('mouseup', handleTextSelection);
+
+function handleTextSelection(e) {
+  // don't interfere with gmail email processing
+  if (isGmail) return;
+  
+  // ignore mouseup inside existing popup (allow interaction within popup)
+  if (inlinePopupContainer && inlinePopupContainer.contains(e.target)) {
+    return;
+  }
+  
+  const selection = window.getSelection();
+  const selectedText = selection.toString().trim();
+  
+  // remove existing popup (with animation if present)
+  if (inlinePopupContainer) {
+    cleanupPopup();
+  }
+  
+  if (!selectedText) return;
+  
+  const wordCount = selectedText.split(/\s+/).length;
+  
+  // single word: show inline popup for definition/translation
+  if (wordCount === 1) {
+    // get selection rect for accurate positioning
+    const selection = window.getSelection();
+    if (selection.rangeCount > 0) {
+      const range = selection.getRangeAt(0);
+      const rect = range.getBoundingClientRect();
+      showInlinePopup(selectedText, rect);
+    }
+  }
+  // multi-word: context menu handles this (already implemented)
+}
+
+// store selection range for persistent positioning
+let popupAnchorRange = null;
+let scrollListener = null;
+let resizeListener = null;
+let clickListener = null;
+
+// update popup position based on current word location
+function updatePopupPosition() {
+  if (!inlinePopupContainer || !popupAnchorRange) return;
+  
+  // get current position of the anchored word
+  const rect = popupAnchorRange.getBoundingClientRect();
+  const popupRect = inlinePopupContainer.getBoundingClientRect();
+  
+  const scrollX = window.pageXOffset || document.documentElement.scrollLeft;
+  const scrollY = window.pageYOffset || document.documentElement.scrollTop;
+  
+  // calculate center of word in document coordinates
+  const wordCenterX = rect.left + (rect.width / 2) + scrollX;
+  const wordBottomY = rect.bottom + scrollY;
+  
+  // position popup centered below word
+  let finalX = wordCenterX - (popupRect.width / 2);
+  let finalY = wordBottomY + 12;
+  
+  // viewport boundary checks
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  
+  // convert to viewport coordinates for bounds checking
+  const viewportX = finalX - scrollX;
+  const viewportY = finalY - scrollY;
+  
+  // clamp horizontal position within viewport
+  if (viewportX < 10) {
+    finalX = scrollX + 10;
+  } else if (viewportX + popupRect.width > viewportWidth - 10) {
+    finalX = scrollX + viewportWidth - popupRect.width - 10;
+  }
+  
+  // flip above word if no space below
+  if (viewportY + popupRect.height > viewportHeight - 10) {
+    finalY = wordBottomY - rect.height - popupRect.height - 8;
+  }
+  
+  // ensure not off top of viewport
+  if ((finalY - scrollY) < 10) {
+    finalY = scrollY + 10;
+  }
+  
+  // apply position
+  inlinePopupContainer.style.top = finalY + 'px';
+  inlinePopupContainer.style.left = finalX + 'px';
+}
+
+// cleanup popup and all event listeners
+function cleanupPopup() {
+  if (!inlinePopupContainer) return;
+  
+  // smooth fade-out animation before removal
+  gsap.to(inlinePopupContainer, {
+    opacity: 0,
+    scale: 0.94,
+    y: -4,
+    duration: 0.12,
+    ease: 'power2.in',
+    onComplete: () => {
+      if (inlinePopupContainer) {
+        inlinePopupContainer.remove();
+        inlinePopupContainer = null;
+        popupAnchorRange = null;
+      }
+    }
+  });
+  
+  // remove event listeners immediately (don't wait for animation)
+  if (scrollListener) {
+    window.removeEventListener('scroll', scrollListener, true);
+    scrollListener = null;
+  }
+  
+  if (resizeListener) {
+    window.removeEventListener('resize', resizeListener);
+    resizeListener = null;
+  }
+  
+  if (clickListener) {
+    document.removeEventListener('click', clickListener);
+    clickListener = null;
+  }
+}
+
+async function showInlinePopup(word, selectionRect) {
+  const settings = await chrome.storage.local.get(['wordPopupEnabled']);
+  if (settings.wordPopupEnabled === false) return;
+  
+  // reload current theme to ensure reactivity
+  await loadCurrentTheme();
+  
+  const isEnglish = /^[a-zA-Z]+$/.test(word);
+  const lookupType = isEnglish ? 'definition' : 'translation';
+  
+  // store the selection range for continuous repositioning
+  const selection = window.getSelection();
+  if (selection.rangeCount > 0) {
+    popupAnchorRange = selection.getRangeAt(0).cloneRange();
+  }
+  
+  // create popup with absolute positioning
+  inlinePopupContainer = document.createElement('div');
+  inlinePopupContainer.className = 'metldr-inline-word-popup';
+  
+  // initial position (will be updated by updatePopupPosition)
+  inlinePopupContainer.style.cssText = `
+    position: absolute;
+    top: 0px;
+    left: 0px;
+    z-index: 999999;
+    transform-origin: top left;
+    visibility: hidden;
+  `;
+  
+  const popup = document.createElement('div');
+  popup.className = 'metldr-popup-body';
+  popup.style.cssText = `
+    --metldr-primary: ${currentTheme.primary};
+    background: ${currentTheme.bgSecondary};
+    border: 1.5px solid ${currentTheme.border};
+    border-radius: 12px;
+    padding: 12px 16px;
+    min-width: 240px;
+    max-width: 360px;
+    box-shadow: 0 8px 24px ${currentTheme.shadow}, 0 4px 12px ${currentTheme.shadow}, inset 0 1px 0 ${currentTheme.borderSubtle};
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', system-ui, sans-serif;
+    backdrop-filter: blur(16px) saturate(150%);
+    -webkit-backdrop-filter: blur(16px) saturate(150%);
+  `;
+  
+  // header: word + part of speech + source (single line)
+  const header = document.createElement('div');
+  header.style.cssText = `
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+  `;
+  
+  const wordSpan = document.createElement('span');
+  wordSpan.style.cssText = `
+    font-size: 15px;
+    font-weight: 700;
+    color: ${currentTheme.primary};
+    letter-spacing: 0.01em;
+    line-height: 1.4;
+  `;
+  wordSpan.textContent = word;
+  header.appendChild(wordSpan);
+  
+  // content area (definition)
+  const content = document.createElement('div');
+  content.className = 'metldr-popup-content';
+  content.style.cssText = `
+    font-size: 13px;
+    color: ${currentTheme.text};
+    line-height: 1.6;
+    min-height: 20px;
+    font-weight: 400;
+    -webkit-font-smoothing: antialiased;
+  `;
+  
+  // loading state
+  const loader = document.createElement('div');
+  loader.style.cssText = 'display: flex; align-items: center; gap: 6px;';
+  
+  const spinner = document.createElement('div');
+  spinner.style.cssText = `
+    width: 12px;
+    height: 12px;
+    border: 2.5px solid ${currentTheme.border};
+    border-top-color: ${currentTheme.primary};
+    border-radius: 50%;
+    animation: metldr-spin 0.6s linear infinite;
+  `;
+  
+  const loadText = document.createElement('span');
+  loadText.textContent = 'looking up...';
+  loadText.style.cssText = `
+    color: ${currentTheme.textMuted};
+    font-size: 11px;
+    font-weight: 500;
+  `;
+  
+  loader.appendChild(spinner);
+  loader.appendChild(loadText);
+  
+  // add loading to header
+  const tempMeta = document.createElement('span');
+  tempMeta.style.cssText = `
+    font-size: 10px;
+    color: ${currentTheme.textMuted};
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+  `;
+  tempMeta.textContent = '...';
+  header.appendChild(tempMeta);
+  
+  content.appendChild(loader);
+  
+  popup.appendChild(header);
+  popup.appendChild(content);
+  inlinePopupContainer.appendChild(popup);
+  document.body.appendChild(inlinePopupContainer);
+  
+  // position popup initially
+  updatePopupPosition();
+  
+  // show popup with animation
+  inlinePopupContainer.style.visibility = 'visible';
+  
+  // smooth pop animation with GSAP
+  gsap.fromTo(inlinePopupContainer, 
+    { 
+      opacity: 0, 
+      scale: 0.92, 
+      y: -6 
+    }, 
+    { 
+      opacity: 1, 
+      scale: 1, 
+      y: 0, 
+      duration: 0.16, 
+      ease: 'back.out(1.7)' 
+    }
+  );
+  
+  // setup event listeners for persistent positioning
+  scrollListener = () => updatePopupPosition();
+  resizeListener = () => updatePopupPosition();
+  clickListener = (e) => {
+    // don't close if clicking inside popup
+    if (inlinePopupContainer && !inlinePopupContainer.contains(e.target)) {
+      cleanupPopup();
+    }
+  };
+  
+  // reposition on scroll/resize, close on outside click
+  window.addEventListener('scroll', scrollListener, true);
+  window.addEventListener('resize', resizeListener);
+  
+  // add click listener after small delay to avoid immediate closure
+  setTimeout(() => {
+    document.addEventListener('click', clickListener);
+  }, 100);
+  
+  // fetch result
+  try {
+    console.log('[POPUP] sending word lookup request:', word);
+    const response = await chrome.runtime.sendMessage({
+      type: 'WORD_LOOKUP',
+      word,
+      lookupType
+    });
+    
+    console.log('[POPUP] received response:', response);
+    
+    // clear loading state
+    header.innerHTML = '';
+    content.innerHTML = '';
+    
+    // rebuild header with word
+    const wordSpan = document.createElement('span');
+    wordSpan.style.cssText = `
+      font-size: 14px;
+      font-weight: 600;
+      color: ${currentTheme.primary || '#00f0ff'};
+      letter-spacing: 0.2px;
+    `;
+    wordSpan.textContent = word;
+    header.appendChild(wordSpan);
+    
+    if (!response || response.error) {
+      const errorText = document.createElement('span');
+      errorText.textContent = response?.error || 'lookup failed';
+      errorText.style.cssText = `
+        color: ${currentTheme.secondary || '#ff0080'};
+        font-size: 11px;
+      `;
+      content.appendChild(errorText);
+    } else if (response.result) {
+      if (lookupType === 'definition') {
+        // add source indicator for ollama
+        if (response.result.source === 'ollama') {
+          const sourceHint = document.createElement('span');
+          sourceHint.style.cssText = `
+            font-size: 9px;
+            color: ${currentTheme.yellow || '#fbbf24'};
+            margin-left: 8px;
+            opacity: 0.8;
+            letter-spacing: 0.3px;
+          `;
+          sourceHint.textContent = 'AI';
+          header.appendChild(sourceHint);
+        }
+        
+        // render all definitions
+        const definitions = response.result.definitions || [];
+        
+        if (definitions.length === 0) {
+          const errorText = document.createElement('span');
+          errorText.textContent = 'no definition found';
+          errorText.style.cssText = `
+            color: ${currentTheme.textMuted || '#888'};
+            font-size: 11px;
+          `;
+          content.appendChild(errorText);
+        } else {
+          // create scrollable container for definitions
+          const defsContainer = document.createElement('div');
+          defsContainer.className = 'metldr-definitions-scroll';
+          defsContainer.style.cssText = `
+            max-height: 280px;
+            overflow-y: auto;
+            margin: 0;
+            padding-right: 4px;
+          `;
+          
+          // prevent internal scroll from triggering popup repositioning
+          defsContainer.addEventListener('scroll', (e) => {
+            e.stopPropagation();
+          }, true);
+          
+          definitions.forEach((def, index) => {
+            const defBlock = document.createElement('div');
+            defBlock.style.cssText = `
+              margin-bottom: ${index < definitions.length - 1 ? '12px' : '0'};
+              padding-bottom: ${index < definitions.length - 1 ? '12px' : '0'};
+              border-bottom: ${index < definitions.length - 1 ? `1px solid ${currentTheme.border || 'rgba(255,255,255,0.1)'}` : 'none'};
+            `;
+            
+            // part of speech tag
+            const posTag = document.createElement('div');
+            posTag.style.cssText = `
+              font-size: 9px;
+              color: ${currentTheme.secondary || '#ff0080'};
+              text-transform: uppercase;
+              letter-spacing: 0.5px;
+              font-weight: 600;
+              margin-bottom: 4px;
+            `;
+            posTag.textContent = def.partOfSpeech || 'unknown';
+            defBlock.appendChild(posTag);
+            
+            // definition text
+            const defText = document.createElement('div');
+            defText.style.cssText = `
+              font-size: 13px;
+              line-height: 1.55;
+              color: ${currentTheme.text || '#e0e0e0'};
+              margin: 0;
+            `;
+            defText.textContent = def.definition;
+            defBlock.appendChild(defText);
+            
+            // example (if available)
+            if (def.example) {
+              const exampleText = document.createElement('div');
+              exampleText.style.cssText = `
+                font-size: 11px;
+                line-height: 1.5;
+                color: ${currentTheme.textMuted || '#888'};
+                margin-top: 4px;
+                font-style: italic;
+              `;
+              exampleText.textContent = `"${def.example}"`;
+              defBlock.appendChild(exampleText);
+            }
+            
+            defsContainer.appendChild(defBlock);
+          });
+          
+          content.appendChild(defsContainer);
+        }
+      } else {
+        const langInfo = document.createElement('p');
+        langInfo.textContent = `${response.result.sourceLang || 'unknown'} → ${response.result.targetLang || 'english'}`;
+        langInfo.style.cssText = `
+          margin: 0 0 6px 0;
+          font-size: 9px;
+          color: ${currentTheme.textMuted || '#888'};
+          text-transform: uppercase;
+        `;
+        
+        const trans = document.createElement('p');
+        trans.textContent = response.result.translation || 'translation unavailable';
+        trans.style.cssText = `
+          margin: 0;
+          font-weight: 600;
+          color: ${currentTheme.primary || '#00f0ff'};
+        `;
+        
+        content.appendChild(langInfo);
+        content.appendChild(trans);
+      }
+    }
+    
+    // reposition after content loaded (popup size changed)
+    updatePopupPosition();
+  } catch (error) {
+    console.error('metldr: word lookup failed:', error);
+    content.innerHTML = '';
+    const errorText = document.createElement('span');
+    errorText.textContent = 'lookup failed';
+    errorText.style.cssText = `color: ${currentTheme.secondary || '#ff0080'}; font-size: 10px;`;
+    content.appendChild(errorText);
+    
+    // reposition after error content loaded
+    updatePopupPosition();
+  }
+}
+
+// add animations and scrollbar styling
+if (!document.getElementById('metldr-word-popup-animations')) {
+  const style = document.createElement('style');
+  style.id = 'metldr-word-popup-animations';
+  style.textContent = `
+    @keyframes metldr-popup-enter {
+      from {
+        opacity: 0;
+        transform: scale(0.85) translateY(-6px);
+      }
+      to {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+      }
+    }
+    
+    @keyframes metldr-fade-in {
+      from {
+        opacity: 0;
+        transform: translateY(-8px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+    
+    @keyframes metldr-spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+    
+    /* minimal themed scrollbar */
+    .metldr-definitions-scroll::-webkit-scrollbar {
+      width: 4px;
+    }
+    
+    .metldr-definitions-scroll::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    
+    .metldr-definitions-scroll::-webkit-scrollbar-thumb {
+      background: var(--metldr-primary, #00f0ff);
+      border-radius: 2px;
+      opacity: 0.5;
+    }
+    
+    .metldr-definitions-scroll::-webkit-scrollbar-thumb:hover {
+      opacity: 0.8;
+    }
+    
+    /* firefox scrollbar */
+    .metldr-definitions-scroll {
+      scrollbar-width: thin;
+      scrollbar-color: var(--metldr-primary) transparent;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+// dwell-time monitoring for pre-summarisation
+function startDwellMonitoring() {
+  console.log('metldr: starting dwell-time monitoring');
+  
+  // reset timer on page change
+  const urlObserver = setInterval(() => {
+    if (window.location.href !== currentPageUrl) {
+      console.log('metldr: url changed, resetting dwell timer');
+      dwellTimer = 0;
+      summarisationQueued = false;
+      currentPageUrl = window.location.href;
+    }
+  }, 1000);
+
+  // increment dwell timer when page is focused
+  dwellInterval = setInterval(() => {
+    if (!document.hidden && document.hasFocus()) {
+      dwellTimer++;
+      
+      // trigger pre summarisation at threshold
+      if (dwellTimer === DWELL_THRESHOLD && !summarisationQueued) {
+        console.log('metldr: dwell threshold reached, queueing pre-summarisation');
+        queuePreSummarisation();
+      }
+    }
+  }, 1000);
+
+  // reset timer on user navigation
+  window.addEventListener('beforeunload', () => {
+    dwellTimer = 0;
+    summarisationQueued = false;
+  });
+
+  // pause timer when tab hidden
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      console.log('metldr: tab hidden, pausing dwell timer');
+    } else {
+      console.log('metldr: tab visible, resuming dwell timer');
+    }
+  });
+}
+
+async function queuePreSummarisation() {
+  summarisationQueued = true;
+  
+  // detect if page is worth summarising
+  const detector = new ContentDetector();
+  const pageInfo = detector.detectPageType();
+  
+  console.log('metldr: page type detected:', pageInfo.type, 'confidence:', pageInfo.confidence);
+  
+  if (!detector.isReadable()) {
+    console.log('metldr: page not readable, skipping pre-summarisation');
+    return;
+  }
+
+  // extract content
+  const extracted = detector.extractContent();
+  
+  if (!extracted.content || extracted.content.length < 200) {
+    console.log('metldr: insufficient content, skipping');
+    return;
+  }
+
+  console.log('metldr: sending content for pre-summarisation');
+  
+  // send to background for low priority summarisation
+  chrome.runtime.sendMessage({
+    type: 'PRE_SUMMARISE',
+    priority: 'low',
+    url: window.location.href,
+    pageType: pageInfo.type,
+    metadata: pageInfo.metadata,
+    content: extracted.content.slice(0, 5000), // limit to 5k chars
+    sections: extracted.sections
+  }).catch(err => {
+    console.error('metldr: failed to queue pre-summarisation:', err);
+  });
 }

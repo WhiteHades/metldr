@@ -1,31 +1,78 @@
-// Background service worker - Ollama-powered email summarization
-// Uses two-pass approach: 1) Extract facts (JS + LLM), 2) Generate summary from facts
-// All LLM calls use Ollama with structured JSON output (temperature=0 for consistency)
+// background service worker
 
 chrome.sidePanel
   .setPanelBehavior({ openPanelOnActionClick: true })
-  .catch((error) => console.error('Side panel error:', error));
+  .catch((error) => console.error('side panel error:', error));
 
-// handle email summarization requests from content script
+// ollama wrapper for word lookups
+async function callOllama(model, prompt) {
+  try {
+    const response = await fetch('http://127.0.0.1:11434/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: prompt }],
+        stream: false,
+        options: { temperature: 0 }
+      })
+    });
+
+    if (!response.ok) {
+      return { success: false, error: `ollama returned ${response.status}` };
+    }
+
+    const data = await response.json();
+    const content = data?.message?.content || data?.response;
+    
+    return { success: true, response: content };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+// message handler for all requests
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'SUMMARIZE_EMAIL') {
     handleEmailSummary(message.emailContent, message.emailId, message.metadata, sendResponse, message.forceRegenerate);
-    return true; // keep channel open for async
+    return true;
   }
   
-  return false; // not handled
+  if (message.type === 'PRE_SUMMARISE') {
+    handlePreSummarise(message, sender, sendResponse);
+    return true;
+  }
+  
+  if (message.type === 'WORD_LOOKUP') {
+    handleWordLookup(message, sendResponse);
+    return true;
+  }
+  
+  if (message.action === 'downloadComplete') {
+    // clear download flag when dictionary download finishes
+    if (message.language) {
+      downloadingLanguages.delete(message.language);
+    }
+    return false;
+  }
+  
+  return false;
 });
 
-// IndexedDB cache for email summaries
+// indexeddb cache for email summaries
 let db = null;
 
 async function initDB() {
   if (db) return db;
   
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open('metldr_summaries', 1);
+    const request = indexedDB.open('metldr_summaries', 2);
     
-    request.onerror = () => reject(request.error);
+    request.onerror = () => {
+      console.error('metldr: failed to open indexeddb:', request.error);
+      reject(request.error);
+    };
+    
     request.onsuccess = () => {
       db = request.result;
       resolve(db);
@@ -33,6 +80,8 @@ async function initDB() {
     
     request.onupgradeneeded = (event) => {
       const database = event.target.result;
+      
+      // create or recreate the summaries store
       if (!database.objectStoreNames.contains('summaries')) {
         database.createObjectStore('summaries', { keyPath: 'emailId' });
       }
@@ -43,6 +92,10 @@ async function initDB() {
 async function getCachedSummary(emailId) {
   try {
     await initDB();
+    // check if object store exists before trying to access it
+    if (!db.objectStoreNames.contains('summaries')) {
+      return null;
+    }
     const transaction = db.transaction(['summaries'], 'readonly');
     const store = transaction.objectStore('summaries');
     const request = store.get(emailId);
@@ -52,7 +105,7 @@ async function getCachedSummary(emailId) {
       request.onerror = () => resolve(null);
     });
   } catch (error) {
-    console.error('MeTLDR: Cache read error:', error);
+    console.error('metldr: cache read error:', error);
     return null;
   }
 }
@@ -60,10 +113,13 @@ async function getCachedSummary(emailId) {
 async function cacheSummary(emailId, summary) {
   try {
     await initDB();
+    // check if object store exists before trying to access it
+    if (!db.objectStoreNames.contains('summaries')) {
+      return;
+    }
     const transaction = db.transaction(['summaries'], 'readwrite');
     const store = transaction.objectStore('summaries');
     await store.put({ emailId, summary, timestamp: Date.now() });
-    console.log('metldr: cached summary for:', emailId);
   } catch (error) {
     console.error('metldr: cache write error:', error);
   }
@@ -73,16 +129,11 @@ async function handleEmailSummary(emailContent, emailId, metadata, sendResponse,
   const startTime = Date.now(); // track timing
   
   try {
-    console.log('metldr background: processing email summary for:', emailId);
-    console.log('metldr: email content length:', emailContent.length);
-    console.log('metldr: email metadata:', metadata);
-    
     // check cache first for instant return (unless regenerating)
     if (!forceRegenerate && emailId) {
       const cached = await getCachedSummary(emailId);
       if (cached) {
         const timeTaken = Date.now() - startTime;
-        console.log('MeTLDR: Returning cached summary for:', emailId, `(${timeTaken}ms)`);
         sendResponse({ 
           summary: { 
             ...cached, 
@@ -95,32 +146,29 @@ async function handleEmailSummary(emailContent, emailId, metadata, sendResponse,
     }
     
     // load selected model from chrome.storage
-    let selectedModel = 'gemma3:1b'; // default fallback
+    let selectedModel = 'gemma3:1b'; // default
     try {
       const result = await chrome.storage.local.get('selectedModel');
       if (result.selectedModel) {
         selectedModel = result.selectedModel;
-        console.log('metldr: using selected model:', selectedModel);
-      } else {
-        console.log('metldr: no saved model, using default:', selectedModel);
       }
     } catch (error) {
       console.error('metldr: failed to load model selection:', error);
     }
     
-    // check if Ollama is running (only for new summaries)
+    // check if ollama is running (only for new summaries)
     try {
       const healthCheck = await fetch('http://127.0.0.1:11434/api/tags', {
         signal: AbortSignal.timeout(2000)
       });
       if (!healthCheck.ok) {
-        throw new Error('Ollama not responding');
+        throw new Error('ollama not responding');
       }
     } catch (error) {
-      console.error('MeTLDR: Ollama not available:', error.message);
+      console.error('metldr: ollama not available:', error.message);
       sendResponse({
         summary: {
-          summary: 'Ollama is not running. Please start Ollama and try again.',
+          summary: 'ollama is not running. please start ollama and try again.',
           action_items: [],
           dates: []
         }
@@ -128,17 +176,13 @@ async function handleEmailSummary(emailContent, emailId, metadata, sendResponse,
       return;
     }
     
-    // two-pass approach: extract facts first, then summarize from facts
-    // this reduces hallucination and handles long emails better
-    console.log('MeTLDR: Pass 1 - Extracting facts from full email (JS fast path)...');
+    // extract facts first, then summarise from facts
     const extractedFacts = jsExtractFacts(emailContent);
-    console.log('MeTLDR: Extracted facts:', extractedFacts);
     
     if (!extractedFacts || Object.keys(extractedFacts).length === 0) {
-      console.warn('MeTLDR: No facts extracted, using fallback');
       sendResponse({ 
         summary: {
-          summary: 'Could not extract facts from email. Email may be too long or format is unsupported.',
+          summary: 'could not extract facts from email. email may be too long or format is unsupported.',
           action_items: [],
           dates: [],
           confidence: 'low'
@@ -147,8 +191,7 @@ async function handleEmailSummary(emailContent, emailId, metadata, sendResponse,
       return;
     }
     
-    console.log('metldr: pass 2 - generating summary from facts + context...');
-    // pass both facts and email body (trim if extremely long)
+    // pass both facts and email body (trim if long)
     const emailSnippet = emailContent.length > 6000 
       ? emailContent.substring(0, 4000) + '\n...[content truncated]...\n' + emailContent.substring(emailContent.length - 2000)
       : emailContent;
@@ -160,7 +203,7 @@ async function handleEmailSummary(emailContent, emailId, metadata, sendResponse,
     summary.cached = false;
     summary.model = selectedModel;
     
-    // cache the summary with emailId in IndexedDB
+    // cache the summary with emailId in indexeddb
     if (emailId) {
       await cacheSummary(emailId, summary);
     }
@@ -168,10 +211,10 @@ async function handleEmailSummary(emailContent, emailId, metadata, sendResponse,
     sendResponse({ summary });
     
   } catch (error) {
-    console.error('MeTLDR background error:', error);
+    console.error('metldr background error:', error);
     sendResponse({ 
       summary: {
-        summary: `Error generating summary: ${error.message}`,
+        summary: `error generating summary: ${error.message}`,
         action_items: [],
         dates: [],
         confidence: 'low'
@@ -180,7 +223,7 @@ async function handleEmailSummary(emailContent, emailId, metadata, sendResponse,
   }
 }
 
-// Pass 1: Extract facts from full email (smart chunking for long emails)
+// 1: extract facts from full email
 async function extractFactsFromEmail(emailContent) {
   const factsSchema = {
     "type": "object",
@@ -251,16 +294,14 @@ async function extractFactsFromEmail(emailContent) {
     }
   };
   
-  // for very long emails (> 30000 chars), use map-reduce
+  // for long emails, use map reduce
   if (emailContent.length > 30000) {
-    console.log('MeTLDR: Email very long, using map-reduce extraction');
     return await extractFactsMapReduce(emailContent, factsSchema);
   }
   
   // for long emails (> 12000), split into chunks but keep important sections together
   if (emailContent.length > 12000) {
-    console.log('MeTLDR: Email long, extracting from key sections');
-    // prioritize: first 8000 chars + last 4000 chars (often has important details)
+    // prioritise first 8000 chars + last 4000 chars
     const keyContent = emailContent.substring(0, 8000) + '\n\n[END OF EMAIL]\n\n' + emailContent.substring(emailContent.length - 4000);
     return await extractFactsSinglePass(keyContent, factsSchema);
   }
@@ -270,12 +311,12 @@ async function extractFactsFromEmail(emailContent) {
 }
 
 async function extractFactsSinglePass(emailContent, schema) {
-  const prompt = `Extract factual information from this email:
+  const prompt = `extract factual information from this email:
 
 ${emailContent}
 
-Extract: amounts with currency, reference/tracking IDs, dates/times, contact info, action items, and locations mentioned.
-Only extract information explicitly stated - do not infer or guess.`;
+extract: amounts with currency, reference/tracking ids, dates/times, contact info, action items, and locations mentioned.
+only extract information explicitly stated - do not infer or guess.`;
 
   try {
     const response = await fetch('http://127.0.0.1:11434/api/chat', {
@@ -284,7 +325,7 @@ Only extract information explicitly stated - do not infer or guess.`;
       body: JSON.stringify({
         model: 'llama3.2:3b',
         messages: [
-          { role: 'system', content: 'Extract only factual data from emails. Return valid JSON.' },
+          { role: 'system', content: 'extract only factual data from emails. return valid json.' },
           { role: 'user', content: prompt }
         ],
         stream: false,
@@ -294,7 +335,7 @@ Only extract information explicitly stated - do not infer or guess.`;
     });
 
     if (!response.ok) {
-      throw new Error(`Ollama error: ${response.status}`);
+      throw new Error(`ollama error: ${response.status}`);
     }
 
     const data = await response.json();
@@ -302,7 +343,7 @@ Only extract information explicitly stated - do not infer or guess.`;
     
     return content ? JSON.parse(content) : null;
   } catch (error) {
-    console.error('MeTLDR: Fact extraction failed:', error);
+    console.error('metldr: fact extraction failed:', error);
     return null;
   }
 }
@@ -316,8 +357,6 @@ async function extractFactsMapReduce(emailContent, schema) {
   for (let i = 0; i < emailContent.length; i += chunkSize - overlap) {
     chunks.push(emailContent.substring(i, i + chunkSize));
   }
-  
-  console.log(`MeTLDR: Split into ${chunks.length} chunks for map-reduce`);
   
   const allFacts = {
     amounts: [],
@@ -353,37 +392,37 @@ async function extractFactsMapReduce(emailContent, schema) {
   return allFacts;
 }
 
-// Pass 2: Generate summary from extracted facts + email context
+// pass 2: generate summary from extracted facts + email context
 async function generateSummaryFromFacts(facts, emailSnippet = '', metadata = null, selectedModel = 'llama3.2:1b') {
-  // Clean schema for human-readable summaries
+  // clean schema for human-readable summaries
   const summarySchema = {
     "type": "object",
     "required": ["summary", "action_items"],
     "properties": {
       "summary": {
         "type": "string",
-        "description": "Direct 1-2 sentence summary. Lead with main action/event. Include key details (amounts, dates, IDs). No meta phrases."
+        "description": "direct 1-2 sentence summary. lead with main action/event. include key details (amounts, dates, ids). no meta phrases."
       },
       "action_items": {
         "type": "array",
         "items": { "type": "string" },
-        "description": "Concise actions for recipient (e.g., 'Check in 3 hours early', 'Download app'). Max 3-4 items, prioritize most important."
+        "description": "concise actions for recipient (e.g., 'check in 3 hours early', 'download app'). max 3-4 items, prioritise most important."
       },
       "key_details": {
         "type": "object",
-        "description": "Important information extracted from email",
+        "description": "important information extracted from email",
         "properties": {
           "booking_reference": {
             "type": "string",
-            "description": "Main booking/order/reference ID if present"
+            "description": "main booking/order/reference id if present"
           },
           "amount": {
             "type": "string",
-            "description": "Total amount with currency if present"
+            "description": "total amount with currency if present"
           },
           "main_date": {
             "type": "string",
-            "description": "Most important date (departure, deadline, event date)"
+            "description": "most important date (departure, deadline, event date)"
           }
         }
       }
@@ -396,7 +435,7 @@ async function generateSummaryFromFacts(facts, emailSnippet = '', metadata = nul
   // build metadata context if available
   let metadataContext = '';
   if (metadata) {
-    metadataContext = 'EMAIL METADATA:\n';
+    metadataContext = 'email metadata:\n';
     if (metadata.sender) metadataContext += `from: ${metadata.sender}`;
     if (metadata.senderEmail) metadataContext += ` <${metadata.senderEmail}>`;
     if (metadata.sender || metadata.senderEmail) metadataContext += '\n';
@@ -406,21 +445,21 @@ async function generateSummaryFromFacts(facts, emailSnippet = '', metadata = nul
     metadataContext += '\n';
   }
 
-  const systemPrompt = `summarize emails concisely. be direct. skip meta phrases. write for the recipient. use metadata (date, sender) for temporal context when the email mentions vague timings like "tomorrow", "next week", "yesterday".`;
+  const systemPrompt = `summarise emails concisely. be direct. skip meta phrases. write for the recipient. use metadata (date, sender) for temporal context when the email mentions vague timings like "tomorrow", "next week", "yesterday".`;
 
   const userPrompt = `read this email excerpt and the extracted facts, then create a brief summary:
 
-${metadataContext}EMAIL EXCERPT:
+${metadataContext}email excerpt:
 ${emailSnippet}
 
-EXTRACTED FACTS:
+extracted facts:
 ${factsText}
 
 requirements:
 - 1-2 sentences maximum
 - understand the email's purpose from the excerpt (webinar invite? booking? payment?)
 - lead with the main action or event
-- include relevant key details from facts (amounts, dates, IDs) only if they match the purpose
+- include relevant key details from facts (amounts, dates, ids) only if they match the purpose
 - skip phrases like "this email", "you received", "the sender"
 - use → for routes/paths where relevant
 - be direct and scannable`;
@@ -430,9 +469,7 @@ requirements:
   
   for (const model of models) {
     try {
-      console.log(`metldr: trying model ${model}...`);
-      
-      // Add timeout to prevent hanging
+      // add timeout to prevent hanging
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
       
@@ -448,7 +485,7 @@ requirements:
           stream: false,
           format: summarySchema,
           options: { 
-            temperature: 0.3,  // Slight randomness for more natural language
+            temperature: 0.3,  // slight randomness for more natural language
             top_p: 0.9
           }
         }),
@@ -458,33 +495,29 @@ requirements:
       clearTimeout(timeoutId);
 
       if (!response.ok) {
-        console.warn(`MeTLDR: Model ${model} returned ${response.status}`);
         continue;
       }
 
       const data = await response.json();
       const content = data?.message?.content || data?.response;
       if (!content) {
-        console.warn(`MeTLDR: Model ${model} returned empty content`);
         continue;
       }
 
       const parsed = JSON.parse(content);
-      console.log(`MeTLDR: Successfully generated summary with ${model}`);
-      console.log('MeTLDR: Summary:', parsed.summary);
       
-      // Convert to UI format with intelligent fallbacks
+      // convert to ui format with intelligent fallbacks
       const mainDate = parsed.key_details?.main_date || (facts.dates?.[0]?.when);
       const bookingRef = parsed.key_details?.booking_reference || (facts.ids?.[0]?.value);
       const amount = parsed.key_details?.amount || (facts.amounts?.[0] ? `${facts.amounts[0].value} ${facts.amounts[0].currency || ''}` : null);
       
-      // Clean and deduplicate action items (max 3)
+      // clean and deduplicate action items (max 3)
       const actionItems = (parsed.action_items || [])
         .filter(item => item && item.length > 3)
         .slice(0, 3);
       
       return {
-        summary: parsed.summary || 'No summary generated',
+        summary: parsed.summary || 'no summary generated',
         action_items: actionItems,
         dates: mainDate ? [mainDate] : [],
         key_facts: {
@@ -494,16 +527,13 @@ requirements:
       };
     } catch (err) {
       if (err.name === 'AbortError') {
-        console.warn(`MeTLDR: Model ${model} timed out after 30s`);
-      } else {
-        console.warn(`MeTLDR: Model ${model} failed:`, err.message);
+        continue;
       }
       continue;
     }
   }
   
-  // Fallback to fact-based summary
-  console.warn('MeTLDR: All models failed, using fallback');
+  // fallback to fact-based summary
   return createSummaryFromFacts(facts);
 }
 
@@ -511,56 +541,56 @@ function buildFactsSummary(facts) {
   const lines = [];
   
   if (facts.amounts && facts.amounts.length > 0) {
-    lines.push('AMOUNTS:');
+    lines.push('amounts:');
     facts.amounts.forEach(a => {
       lines.push(`- ${a.label}: ${a.value} ${a.currency || ''}`);
     });
   }
   
   if (facts.ids && facts.ids.length > 0) {
-    lines.push('\nIDs/REFERENCES:');
+    lines.push('\nids/references:');
     facts.ids.forEach(id => {
       lines.push(`- ${id.label}: ${id.value}`);
     });
   }
   
   if (facts.dates && facts.dates.length > 0) {
-    lines.push('\nDATES/TIMES:');
+    lines.push('\ndates/times:');
     facts.dates.forEach(d => {
       lines.push(`- ${d.label}: ${d.when}`);
     });
   }
   
   if (facts.people && facts.people.length > 0) {
-    lines.push('\nPEOPLE:');
+    lines.push('\npeople:');
     facts.people.forEach(p => lines.push(`- ${p}`));
   }
   
   if (facts.locations && facts.locations.length > 0) {
-    lines.push('\nLOCATIONS:');
+    lines.push('\nlocations:');
     facts.locations.forEach(l => lines.push(`- ${l}`));
   }
   
   if (facts.action_items && facts.action_items.length > 0) {
-    lines.push('\nACTION ITEMS:');
+    lines.push('\naction items:');
     facts.action_items.forEach(a => lines.push(`- ${a}`));
   }
   
   if (facts.contacts && facts.contacts.length > 0) {
-    lines.push('\nCONTACTS:');
+    lines.push('\ncontacts:');
     facts.contacts.forEach(c => {
       lines.push(`- ${c.type}: ${c.value}`);
     });
   }
   
   if (facts.links && facts.links.length > 0) {
-    lines.push('\nLINKS:');
+    lines.push('\nlinks:');
     facts.links.forEach(l => {
       if (l.url) lines.push(`- ${l.label}: ${l.url}`);
     });
   }
   
-  return lines.join('\n') || 'No facts extracted';
+  return lines.join('\n') || 'no facts extracted';
 }
 
 function createSummaryFromFacts(facts) {
@@ -569,17 +599,17 @@ function createSummaryFromFacts(facts) {
   
   if (facts.ids && facts.ids.length > 0) {
     const ids = facts.ids.map(id => `${id.label}: ${id.value}`).join(', ');
-    bullets.push(`Reference: ${ids}`);
+    bullets.push(`reference: ${ids}`);
   }
   
   if (facts.amounts && facts.amounts.length > 0) {
     const amounts = facts.amounts.map(a => `${a.value} ${a.currency || ''}`).join(', ');
-    bullets.push(`Amount: ${amounts}`);
+    bullets.push(`amount: ${amounts}`);
   }
   
   if (facts.dates && facts.dates.length > 0) {
     const dates = facts.dates.map(d => `${d.label}: ${d.when}`).join(', ');
-    bullets.push(`Dates: ${dates}`);
+    bullets.push(`dates: ${dates}`);
   }
 
   // shipping/pickup heuristics (non-domain specific)
@@ -587,21 +617,21 @@ function createSummaryFromFacts(facts) {
   const packageId = (facts.ids || []).find(i => /package|parcel|tracking/i.test(i.label));
   if (pickupLoc || packageId) {
     if (packageId && pickupLoc) {
-      bullets.unshift(`Package ${packageId.value} to ${pickupLoc}`);
+      bullets.unshift(`package ${packageId.value} to ${pickupLoc}`);
     } else if (packageId) {
-      bullets.unshift(`Package ${packageId.value}`);
+      bullets.unshift(`package ${packageId.value}`);
     }
   }
 
   // add deterministic guidance for locker pickups when hints exist
   const hasLocker = /z[- ]?box|locker|pickup point/i.test((facts.locations || []).join(' ') + ' ' + (facts.action_items || []).join(' '));
   if (hasLocker) {
-    bullets.push('Wait for notification; pick up at locker with code/app');
-    bullets.push('Enable Bluetooth and location; use same phone number in app');
+    bullets.push('wait for notification; pick up at locker with code/app');
+    bullets.push('enable bluetooth and location; use same phone number in app');
   }
   
   if (bullets.length === 0) {
-    bullets.push('Email processed but no specific facts extracted');
+    bullets.push('email processed but no specific facts extracted');
   }
   
   return {
@@ -618,7 +648,7 @@ function createSummaryFromFacts(facts) {
   };
 }
 
-// fast JS extractor: amounts, ids, dates, simple contacts/links
+// amounts, ids, dates, simple contacts/links
 function jsExtractFacts(text) {
   const facts = {
     amounts: [],
@@ -682,7 +712,7 @@ function jsExtractFacts(text) {
       if (!ids.has(key)) { facts.ids.push({ label, value }); ids.add(key); }
     }
 
-    // dates (ISO-like or human readable common formats)
+    // dates (iso-like or human readable common formats)
     const isoDate = /\b\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}(?::\d{2})?)?\b/g;
     const humanDate = /(Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*,?\s+\d{1,2}\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}(?:\s+\d{1,2}:\d{2}(?:\s*[AP]M)?\s*[A-Z]{2,3})?/gi;
     const dateSet = new Set();
@@ -721,17 +751,17 @@ function jsExtractFacts(text) {
       if (!seenContact.has(v)) { facts.contacts.push({ type: 'phone', value: v }); seenContact.add(v); }
     }
 
-    // action items (imperatives/common CTA verbs)
+    // action items (imperatives/common cta verbs)
     const actionLines = text.split(/\n+/).filter(l => /\b(pay|confirm|check[- ]?in|download|track|manage|reset|verify|complete|submit|reply)\b/i.test(l));
     facts.action_items = Array.from(new Set(actionLines.map(l => l.trim()).filter(l => l.length > 0 && l.length < 160))).slice(0, 6);
 
-    // pickup location extraction: lines starting with Z-BOX or similar locker keywords and the next line
+    // pickup location extraction: lines starting with z-box or similar locker keywords and the next line
     const lines = text.split(/\n+/);
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
       if (/^(z[- ]?box|locker|pick[- ]?up point)/i.test(line)) {
         const next = (lines[i + 1] || '').trim();
-        const loc = [line.replace(/^z[- ]?box\s*/i, 'Z-BOX'), next].filter(Boolean).join(', ');
+        const loc = [line.replace(/^z[- ]?box\s*/i, 'z-box'), next].filter(Boolean).join(', ');
         if (loc.length > 8 && !facts.locations.includes(loc)) {
           facts.locations.push(loc);
         }
@@ -739,8 +769,426 @@ function jsExtractFacts(text) {
     }
 
   } catch (e) {
-    console.error('MeTLDR: jsExtractFacts failed:', e);
+    console.error('metldr: jsextractfacts failed:', e);
   }
 
   return facts;
+}
+// pre-summarisation handler (low priority background processing)
+async function handlePreSummarise(message, sender, sendResponse) {
+  try {
+    const cacheKey = `page:${message.url}`;
+    const cached = await getPageSummaryCache(cacheKey);
+    
+    if (cached && !message.forceRegenerate) {
+      sendToSidePanel({ type: 'PAGE_SUMMARY', summary: cached });
+      sendResponse({ success: true, cached: true });
+      return;
+    }
+    
+    const model = await getBestModel('page_summary');
+    
+    const prompt = `summarise this ${message.pageType} in exactly 3 clear bullet points. return only valid json:
+{"bullets": ["point1", "point2", "point3"], "confidence": 85, "readTime": "5 min"}
+
+content:
+${message.content}`;
+    
+    const result = await callOllama(model, prompt);
+    
+    if (!result.success) {
+      throw new Error(result.error);
+    }
+    
+    const summary = JSON.parse(result.response);
+    summary.pageType = message.pageType;
+    summary.metadata = message.metadata;
+    summary.sections = message.sections || [];
+    summary.timestamp = Date.now();
+    
+    await cachePageSummary(cacheKey, summary, 3600);
+    
+    sendToSidePanel({ type: 'PAGE_SUMMARY', summary });
+    
+    sendResponse({ success: true, cached: false });
+  } catch (error) {
+    console.error('metldr: pre-summarisation failed:', error);
+    sendResponse({ success: false, error: error.message });
+  }
+}
+
+// extract json from llm response (handles markdown, extra text)
+function extractJSON(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    // try to find json object in response
+    const jsonMatch = text.match(/\{[^{}]*\}/);
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[0]);
+    }
+    throw new Error('no valid json found in response');
+  }
+}
+
+// track ongoing downloads to prevent duplicates
+const downloadingLanguages = new Set();
+
+// cache db connection for faster lookups
+let cachedDictDb = null;
+let cachedLanguages = null;
+let cacheTimestamp = 0;
+const CACHE_TTL = 30000; // 30 seconds
+
+async function getCachedSettings() {
+  const now = Date.now();
+  if (cachedLanguages && (now - cacheTimestamp) < CACHE_TTL) {
+    return cachedLanguages;
+  }
+  
+  const settings = await chrome.storage.local.get(['selectedLanguages']);
+  let languages = settings.selectedLanguages || ['en'];
+  
+  // ensure languages is an array
+  if (!Array.isArray(languages)) {
+    if (typeof languages === 'object') {
+      languages = Object.values(languages);
+    } else {
+      languages = [languages];
+    }
+  }
+  
+  cachedLanguages = languages;
+  cacheTimestamp = now;
+  return languages;
+}
+
+async function getCachedDb() {
+  if (cachedDictDb) return cachedDictDb;
+  
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open('metldr-dictionary', 1);
+    request.onsuccess = () => {
+      cachedDictDb = request.result;
+      resolve(cachedDictDb);
+    };
+    request.onerror = () => reject(request.error);
+  });
+}
+
+// word lookup handler with three-tier fallback: api → local → ollama
+async function handleWordLookup(message, sendResponse) {
+  const startTime = performance.now();
+  
+  try {
+    // get settings
+    const settings = await chrome.storage.local.get(['selectedLanguages', 'dictionarySource', 'selectedModel']);
+    let languages = settings.selectedLanguages || ['en'];
+    const dictionarySource = settings.dictionarySource || 'api';
+    const userModel = settings.selectedModel || null;
+    
+    // ensure languages is an array
+    if (!Array.isArray(languages)) {
+      if (typeof languages === 'object') {
+        languages = Object.values(languages);
+      } else {
+        languages = [languages];
+      }
+    }
+    
+    const word = message.word.toLowerCase().trim();
+    
+    // step 1: try local db only if user chose 'local' and not downloading
+    if (dictionarySource === 'local') {
+      let shouldTryLocal = true;
+      for (const langCode of languages) {
+        if (downloadingLanguages.has(langCode)) {
+          shouldTryLocal = false;
+          break;
+        }
+      }
+      
+      if (shouldTryLocal) {
+        try {
+          const dictDb = await getCachedDb();
+        
+          for (const langCode of languages) {
+            try {
+              const tx = dictDb.transaction([langCode], 'readonly');
+              const store = tx.objectStore(langCode);
+              const result = await new Promise((resolve, reject) => {
+                const request = store.get(word);
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+              });
+              
+              if (result) {
+                const elapsed = performance.now() - startTime;
+                sendResponse({ 
+                  success: true, 
+                  result: {
+                    definitions: [{
+                      definition: result.definition,
+                      partOfSpeech: result.pos,
+                      example: null
+                    }],
+                    language: langCode,
+                    source: 'local'
+                  }
+                });
+                return;
+              }
+            } catch (err) {
+              continue;
+            }
+          }
+        } catch (dbError) {
+          console.error('[word_lookup] local db error, falling back to api:', dbError);
+        }
+      }
+    }
+    
+    // step 2: fallback to free dictionary api
+    let apiFound = false;
+    for (const langCode of languages) {
+      try {
+        const url = `https://api.dictionaryapi.dev/api/v2/entries/${langCode}/${word}`;
+        
+        const response = await fetch(url);
+        
+        if (response.ok) {
+          const data = await response.json();
+          
+          if (data && data[0] && data[0].meanings) {
+            // collect all definitions from all meanings
+            const allDefinitions = [];
+            const preferredPos = ['noun', 'verb', 'adjective', 'adverb'];
+            
+            // prioritise common parts of speech
+            const sortedMeanings = [...data[0].meanings].sort((a, b) => {
+              const aIndex = preferredPos.indexOf(a.partOfSpeech);
+              const bIndex = preferredPos.indexOf(b.partOfSpeech);
+              if (aIndex === -1 && bIndex === -1) return 0;
+              if (aIndex === -1) return 1;
+              if (bIndex === -1) return -1;
+              return aIndex - bIndex;
+            });
+            
+            // extract all clean definitions
+            for (const meaning of sortedMeanings) {
+              if (meaning.definitions && meaning.definitions.length > 0) {
+                for (const def of meaning.definitions) {
+                  const defText = (def.definition || '').toLowerCase();
+                  
+                  // filter out vulgar/archaic/obsolete
+                  if (defText.includes('vulgar') || 
+                      defText.includes('archaic') || 
+                      defText.includes('obsolete') || 
+                      defText.length < 10) {
+                    continue;
+                  }
+                  
+                  allDefinitions.push({
+                    definition: def.definition,
+                    partOfSpeech: meaning.partOfSpeech || 'unknown',
+                    example: def.example || null
+                  });
+                }
+              }
+            }
+            
+            if (allDefinitions.length === 0) {
+              // fallback: use first definition even if filtered
+              const firstMeaning = data[0].meanings[0];
+              allDefinitions.push({
+                definition: firstMeaning.definitions[0].definition,
+                partOfSpeech: firstMeaning.partOfSpeech || 'unknown',
+                example: firstMeaning.definitions[0].example || null
+              });
+            }
+            
+            sendResponse({ 
+              success: true, 
+              result: {
+                definitions: allDefinitions,
+                language: langCode,
+                source: 'api'
+              }
+            });
+            
+            apiFound = true;
+            
+            // trigger background download (if not already downloading)
+            if (!downloadingLanguages.has(langCode)) {
+              downloadingLanguages.add(langCode);
+              
+              // notify side panel to start download
+              chrome.runtime.sendMessage({
+                action: 'startBackgroundDownload',
+                language: langCode
+              }).catch(() => {});
+              
+              // cleanup flag after 5 minutes (timeout)
+              setTimeout(() => {
+                downloadingLanguages.delete(langCode);
+              }, 300000);
+            }
+            
+            return;
+          }
+        }
+      } catch (err) {
+        continue;
+      }
+    }
+    
+    // step 3: if api failed, try local dictionary (regardless of user preference)
+    if (!apiFound && dictionarySource === 'api') {
+      try {
+        const dictDb = await getCachedDb();
+      
+        for (const langCode of languages) {
+          try {
+            const tx = dictDb.transaction([langCode], 'readonly');
+            const store = tx.objectStore(langCode);
+            const result = await new Promise((resolve, reject) => {
+              const request = store.get(word);
+              request.onsuccess = () => resolve(request.result);
+              request.onerror = () => reject(request.error);
+            });
+            
+            if (result) {
+              const elapsed = performance.now() - startTime;
+              sendResponse({ 
+                success: true, 
+                result: {
+                  definitions: [{
+                    definition: result.definition,
+                    partOfSpeech: result.pos,
+                    example: null
+                  }],
+                  language: langCode,
+                  source: 'local'
+                }
+              });
+              return;
+            }
+          } catch (err) {
+            continue;
+          }
+        }
+      } catch (dbError) {
+        console.error('[word_lookup] local fallback failed:', dbError);
+      }
+    }
+    
+    // step 4: final fallback to ollama llm
+    try {
+      // import ollama client dynamically
+      const { OllamaClient } = await import(chrome.runtime.getURL('lib/OllamaClient.js'));
+      const ollamaClient = new OllamaClient();
+      
+      // check if ollama is available
+      const { connected, models } = await ollamaClient.checkConnection();
+      if (!connected || models.length === 0) {
+        throw new Error('ollama not available');
+      }
+      
+      // prefer smallest model for quick definitions
+      const smallModels = ['llama3.2:1b', 'qwen2.5:1.5b', 'llama3.2:3b'];
+      let model = userModel || models[0];
+      
+      // find smallest available model if no user preference
+      if (!userModel) {
+        for (const small of smallModels) {
+          const found = models.find(m => m.includes(small));
+          if (found) {
+            model = found;
+            break;
+          }
+        }
+      }
+      
+      // generate one-line definition
+      const prompt = `define the word "${word}" in one concise sentence (15-20 words max). include part of speech in parentheses.`;
+      const definition = await ollamaClient.generate(prompt, {
+        model,
+        temperature: 0.3,
+        system: 'you are a concise dictionary. respond with only the definition, nothing else.'
+      });
+      
+      const elapsed = performance.now() - startTime;
+      
+      sendResponse({ 
+        success: true, 
+        result: {
+          definitions: [{
+            definition: definition.trim(),
+            partOfSpeech: 'generated',
+            example: null
+          }],
+          language: 'en',
+          source: 'ollama'
+        }
+      });
+      return;
+    } catch (ollamaErr) {
+      console.error('[word_lookup] ollama fallback failed:', ollamaErr);
+    }
+    
+    // absolute failure - no definition anywhere
+    sendResponse({ 
+      success: false, 
+      error: 'word not found in any dictionary source or llm unavailable' 
+    });
+  } catch (error) {
+    console.error('metldr: word lookup failed:', error);
+    sendResponse({ 
+      success: false, 
+      error: 'lookup failed: ' + error.message 
+    });
+  }
+}
+
+function sendToSidePanel(message) {
+  chrome.runtime.sendMessage(message).catch(err => {});
+}
+
+const pageSummaryCache = new Map();
+
+async function getPageSummaryCache(key) {
+  return pageSummaryCache.get(key);
+}
+
+async function cachePageSummary(key, summary, ttlSeconds) {
+  pageSummaryCache.set(key, summary);
+  setTimeout(() => {
+    pageSummaryCache.delete(key);
+  }, ttlSeconds * 1000);
+}
+
+async function getBestModel(taskType) {
+  const models = await getAvailableModels();
+  
+  if (taskType === 'word_lookup') {
+    return models.find(m => m.includes('llama3.2:1b')) || models[0];
+  }
+  
+  if (taskType === 'page_summary') {
+    return models.find(m => m.includes('llama3.2:3b')) || models.find(m => m.includes('llama3.2:1b')) || models[0];
+  }
+  
+  return models[0];
+}
+
+async function getAvailableModels() {
+  try {
+    const response = await fetch('http://127.0.0.1:11434/api/tags');
+    if (!response.ok) return [];
+    
+    const data = await response.json();
+    return data.models?.map(m => m.name) || [];
+  } catch (e) {
+    return [];
+  }
 }
