@@ -1,61 +1,71 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 
+const getVideoUrl = (filename) => {
+  const url = chrome.runtime.getURL(filename);
+  console.log(`metldr: video URL for ${filename}:`, url);
+  return url;
+};
+
 export const useThemeStore = defineStore('theme', () => {
   const themes = {
-    midnight: {
-      name: 'midnight',
-      primary: 'oklch(0.75 0.18 230)',
-      secondary: 'oklch(0.70 0.16 285)',
-      accent: 'oklch(0.76 0.15 165)',
-      warning: 'oklch(0.78 0.16 85)',
-      error: 'oklch(0.65 0.22 28)',
-      success: 'oklch(0.72 0.15 145)',
-      bg: 'oklch(0.10 0.01 265)',
-      bgSecondary: 'oklch(0.14 0.01 265)',
-      bgTertiary: 'oklch(0.18 0.01 265)',
-      text: 'oklch(0.90 0.02 265)',
-      textMuted: 'oklch(0.60 0.02 265)',
-      border: 'oklch(0.30 0.02 265 / 0.2)',
-      borderSubtle: 'oklch(0.30 0.02 265 / 0.1)',
-      shadow: 'oklch(0 0 0 / 0.3)',
+    default: {
+      name: 'default',
+      video: getVideoUrl('default.mp4'),
+      primary: 'oklch(0.55 0.12 240)',
+      secondary: 'oklch(0.50 0.10 280)',
+      accent: 'oklch(0.53 0.11 190)',
+      warning: 'oklch(0.65 0.11 85)',
+      error: 'oklch(0.55 0.16 20)',
+      success: 'oklch(0.62 0.11 140)',
+      bg: 'oklch(0.14 0.01 265)',
+      bgSecondary: 'oklch(0.18 0.01 265)',
+      bgTertiary: 'oklch(0.22 0.01 265)',
+      text: 'oklch(0.75 0.01 265)',
+      textMuted: 'oklch(0.50 0.01 265)',
+      border: 'oklch(0.28 0.01 265)',
+      borderSubtle: 'oklch(0.22 0.01 265)',
+      shadow: 'oklch(0 0 0 / 0.15)',
     },
-    daylight: {
-      name: 'daylight',
-      primary: 'oklch(0.55 0.20 230)',
-      secondary: 'oklch(0.50 0.18 285)',
-      accent: 'oklch(0.56 0.17 165)',
-      warning: 'oklch(0.68 0.18 85)',
-      error: 'oklch(0.55 0.24 28)',
-      success: 'oklch(0.62 0.17 145)',
-      bg: 'oklch(0.98 0.01 265)',
-      bgSecondary: 'oklch(0.94 0.01 265)',
-      bgTertiary: 'oklch(0.90 0.01 265)',
-      text: 'oklch(0.20 0.02 265)',
-      textMuted: 'oklch(0.50 0.02 265)',
-      border: 'oklch(0.30 0.02 265 / 0.2)',
-      borderSubtle: 'oklch(0.30 0.02 265 / 0.1)',
-      shadow: 'oklch(0 0 0 / 0.1)',
+    light: {
+      name: 'light',
+      video: getVideoUrl('light.mp4'),
+      primary: 'oklch(0.38 0.20 240)',
+      secondary: 'oklch(0.42 0.16 280)',
+      accent: 'oklch(0.45 0.17 190)',
+      warning: 'oklch(0.55 0.16 85)',
+      error: 'oklch(0.48 0.22 20)',
+      success: 'oklch(0.50 0.16 140)',
+      bg: 'oklch(1.00 0.00 0)',
+      bgSecondary: 'oklch(0.975 0.00 265)',
+      bgTertiary: 'oklch(0.95 0.00 265)',
+      text: 'oklch(0.18 0.02 265)',
+      textMuted: 'oklch(0.58 0.01 265)',
+      border: 'oklch(0.80 0.01 265)',
+      borderSubtle: 'oklch(0.88 0.01 265)',
+      shadow: 'oklch(0 0 0 / 0.08)',
     },
     cyberpunk: {
-      name: 'neon city',
-      primary: 'oklch(0.80 0.25 200)',
-      secondary: 'oklch(0.65 0.28 340)',
-      accent: 'oklch(0.88 0.20 100)',
-      warning: 'oklch(0.85 0.22 90)',
-      error: 'oklch(0.60 0.25 25)',
-      success: 'oklch(0.70 0.20 150)',
-      bg: 'oklch(0.05 0.01 265)',
-      bgSecondary: 'oklch(0.09 0.01 265)',
-      bgTertiary: 'oklch(0.13 0.01 265)',
-      text: 'oklch(0.92 0.02 265)',
-      textMuted: 'oklch(0.55 0.02 265)',
-      border: 'oklch(0.80 0.25 200 / 0.3)',
-      borderSubtle: 'oklch(0.80 0.25 200 / 0.15)',
-      shadow: 'oklch(0.80 0.25 200 / 0.3)',
+      name: 'cyberpunk',
+      video: getVideoUrl('cyberpunk_2077.mp4'),
+      primary: 'oklch(0.75 0.22 200)',
+      secondary: 'oklch(0.60 0.24 340)',
+      accent: 'oklch(0.84 0.16 100)',
+      warning: 'oklch(0.80 0.18 90)',
+      error: 'oklch(0.55 0.20 25)',
+      success: 'oklch(0.66 0.16 150)',
+      bg: 'oklch(0.15 0.01 265)',
+      bgSecondary: 'oklch(0.19 0.01 265)',
+      bgTertiary: 'oklch(0.23 0.01 265)',
+      text: 'oklch(0.88 0.02 265)',
+      textMuted: 'oklch(0.50 0.02 265)',
+      border: 'oklch(0.75 0.22 200 / 0.2)',
+      borderSubtle: 'oklch(0.75 0.22 200 / 0.1)',
+      shadow: 'oklch(0.75 0.22 200 / 0.10)',
     },
     catppuccin: {
-      name: 'catppuccin mocha',
+      name: 'catppuccin',
+      video: getVideoUrl('catppuccin.mp4'),
       primary: 'oklch(0.87 0.04 30)',
       secondary: 'oklch(0.72 0.13 290)',
       accent: 'oklch(0.77 0.12 35)',
@@ -72,7 +82,8 @@ export const useThemeStore = defineStore('theme', () => {
       shadow: 'oklch(0.87 0.04 30 / 0.15)',
     },
     gruvbox: {
-      name: 'gruvbox dark',
+      name: 'gruvbox',
+      video: getVideoUrl('gruvbox.mp4'),
       primary: 'oklch(0.66 0.15 45)',
       secondary: 'oklch(0.68 0.12 150)',
       accent: 'oklch(0.75 0.14 80)',
@@ -90,8 +101,7 @@ export const useThemeStore = defineStore('theme', () => {
     },
   };
 
-  const currentTheme = ref('midnight');
-
+  const currentTheme = ref('default');
   const colors = computed(() => themes[currentTheme.value]);
 
   const setTheme = (themeName) => {
@@ -117,8 +127,6 @@ export const useThemeStore = defineStore('theme', () => {
     root.style.setProperty('--color-neutral-content', theme.textMuted);
     root.style.setProperty('--color-border', theme.border);
     root.style.setProperty('--tw-shadow-color', theme.shadow);
-    
-    // set text color for various elements
     root.style.setProperty('--p', theme.primary);
     root.style.setProperty('--pc', theme.text);
     root.style.setProperty('--s', theme.secondary);
@@ -141,12 +149,11 @@ export const useThemeStore = defineStore('theme', () => {
         currentTheme.value = result.theme;
         applyThemeToDOM(themes[result.theme]);
       } else {
-        // apply default theme on first load
-        applyThemeToDOM(themes.midnight);
+        applyThemeToDOM(themes.default);
       }
     } catch (error) {
       console.error('failed to load theme:', error);
-      applyThemeToDOM(themes.midnight);
+      applyThemeToDOM(themes.default);
     }
   };
 
