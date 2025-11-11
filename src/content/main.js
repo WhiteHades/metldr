@@ -519,7 +519,7 @@ function showLoading(threadElement) {
 }
 
 const THEME_COLORS = {
-  midnight: {
+  default: {
     primary: 'oklch(0.75 0.18 230)',
     secondary: 'oklch(0.70 0.16 285)',
     accent: 'oklch(0.76 0.15 165)',
@@ -531,7 +531,7 @@ const THEME_COLORS = {
     borderSubtle: 'oklch(0.30 0.02 265 / 0.15)',
     shadow: 'oklch(0 0 0 / 0.4)',
   },
-  daylight: {
+  light: {
     primary: 'oklch(0.55 0.20 230)',
     secondary: 'oklch(0.50 0.18 285)',
     accent: 'oklch(0.56 0.17 165)',
@@ -582,23 +582,23 @@ const THEME_COLORS = {
 };
 
 // store both theme name (string) and theme object separately
-let currentThemeName = 'midnight';
-let currentTheme = THEME_COLORS.midnight;
+let currentThemeName = 'default';
+let currentTheme = THEME_COLORS.default;
 
 async function loadCurrentTheme() {
   try {
     const result = await chrome.storage.local.get('theme');
-    const themeName = result.theme || 'midnight';
+    const themeName = result.theme || 'default';
     currentThemeName = themeName;
-    currentTheme = THEME_COLORS[themeName] || THEME_COLORS.midnight;
+    currentTheme = THEME_COLORS[themeName] || THEME_COLORS.default;
     console.log('metldr: loaded theme from storage:', themeName, currentTheme);
 
     // Update any existing summaries with the loaded theme
     updateSummaryTheme();
   } catch (error) {
     console.error('metldr: failed to load theme:', error);
-    currentThemeName = 'midnight';
-    currentTheme = THEME_COLORS.midnight;
+    currentThemeName = 'defaul';
+    currentTheme = THEME_COLORS.default;
     updateSummaryTheme();
   }
 }
@@ -608,7 +608,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
     const themeName = changes.theme.newValue;
     currentThemeName = themeName;
-    currentTheme = THEME_COLORS[themeName] || THEME_COLORS.midnight;
+    currentTheme = THEME_COLORS[themeName] || THEME_COLORS.default;
     console.log('metldr: theme changed to:', themeName, currentTheme);
     
     updatePopupTheme();
@@ -1347,6 +1347,7 @@ async function showInlinePopup(word, selectionRect) {
     z-index: 999999;
     transform-origin: top left;
     visibility: hidden;
+    will-change: opacity, transform;
   `;
   
   const popup = document.createElement('div');
@@ -1361,8 +1362,7 @@ async function showInlinePopup(word, selectionRect) {
     max-width: 360px;
     box-shadow: 0 8px 24px ${currentTheme.shadow}, 0 4px 12px ${currentTheme.shadow}, inset 0 1px 0 ${currentTheme.borderSubtle};
     font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', system-ui, sans-serif;
-    backdrop-filter: blur(16px) saturate(150%);
-    -webkit-backdrop-filter: blur(16px) saturate(150%);
+    will-change: opacity, transform;
   `;
   
   // header: word + part of speech + source (single line)

@@ -2,7 +2,7 @@
 @plugin "daisyui";
 
 @plugin "daisyui/theme" {
-  name: "midnight-dark";
+  name: "default";
   default: true;
   color-scheme: dark;
   
@@ -38,7 +38,7 @@
 }
 
 @plugin "daisyui/theme" {
-  name: "daylight-light";
+  name: "light";
   color-scheme: light;
   
   --color-primary: oklch(0.55 0.20 230);
@@ -327,7 +327,7 @@ button, a, [role="button"] {
   border: 1px solid var(--glass-border);
 }
 
-[data-theme="daylight-light"] .glass {
+[data-theme="light"] .glass {
   background-color: var(--glass-bg-light);
 }
 
