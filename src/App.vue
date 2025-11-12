@@ -21,18 +21,9 @@ const availableModels = ref([]);
 const selectedModel = ref('');
 const historyRef = ref(null);
 const showModelDropdown = ref(false);
-const showWordLookupDropdown = ref(false);
-const showDictionaryDropdown = ref(false);
 
-// dropdown position refs for fixed positioning
 const modelDropdownPos = ref({ top: 0, left: 0, width: 0 });
-const wordLookupDropdownPos = ref({ top: 0, left: 0, width: 0 });
-const dictionaryDropdownPos = ref({ top: 0, left: 0, width: 0 });
 
-// theme video refs
-const themeVideoRefs = ref({});
-
-// summary/chat state
 const pageSummary = ref(null);
 const summaryLoading = ref(false);
 const summaryError = ref(null);
@@ -43,8 +34,6 @@ const chatLoading = ref(false);
 
 // word lookup settings
 const wordPopupEnabled = ref(true);
-const wordLookupPreference = ref('auto');
-const dictionarySource = ref('api');
 
 // dictionary settings
 const downloadedLanguages = ref([]);
@@ -58,7 +47,6 @@ const client = new OllamaClient();
 const cache = new CacheManager();
 const router = new ModelRouter(client);
 
-// custom dropdown logic
 const updateDropdownPosition = (buttonElement, posRef) => {
   if (!buttonElement) return;
   const rect = buttonElement.getBoundingClientRect();
@@ -88,99 +76,6 @@ const selectModel = async (model) => {
   }
 };
 
-// word lookup dropdown handlers
-const toggleWordLookupDropdown = () => {
-  if (!showWordLookupDropdown.value) {
-    const btn = document.querySelector('.word-lookup-btn');
-    updateDropdownPosition(btn, wordLookupDropdownPos);
-  }
-  showWordLookupDropdown.value = !showWordLookupDropdown.value;
-};
-
-const selectWordLookupMode = async (mode) => {
-  wordLookupPreference.value = mode;
-  showWordLookupDropdown.value = false;
-  await saveWordLookupPreference();
-};
-
-// dictionary source dropdown handlers
-const toggleDictionaryDropdown = () => {
-  if (!showDictionaryDropdown.value) {
-    const btn = document.querySelector('.dictionary-source-btn');
-    updateDropdownPosition(btn, dictionaryDropdownPos);
-  }
-  showDictionaryDropdown.value = !showDictionaryDropdown.value;
-};
-
-const selectDictionarySource = async (source) => {
-  dictionarySource.value = source;
-  showDictionaryDropdown.value = false;
-  await saveDictionarySource();
-};
-
-// theme video handlers
-const handleVideoHover = (event, themeKey) => {
-  const video = event.currentTarget?.querySelector('video') || event.target;
-  if (video) {
-    console.log(`metldr: hovering theme card ${themeKey}, attempting play`);
-    video.play().then(() => {
-      console.log(`metldr: video ${themeKey} playing on hover`);
-    }).catch((err) => {
-      console.error(`metldr: failed to play video ${themeKey} on hover:`, err);
-    });
-  }
-};
-
-const handleVideoLeave = (event, themeKey) => {
-  const video = event.currentTarget?.querySelector('video') || event.target;
-  if (video && themeStore.currentTheme !== themeKey) {
-    console.log(`metldr: leaving theme card ${themeKey}, pausing`);
-    video.pause();
-    video.currentTime = 0;
-  }
-};
-
-const setVideoRef = (el, themeKey) => {
-  if (el) {
-    themeVideoRefs.value[themeKey] = el;
-    console.log(`metldr: video ref set for ${themeKey}, src=${el.src}`);
-    
-    // listen for load events
-    el.addEventListener('loadstart', () => console.log(`metldr: loadstart for ${themeKey}`));
-    el.addEventListener('loadedmetadata', () => console.log(`metldr: loadedmetadata for ${themeKey}, duration=${el.duration}`));
-    el.addEventListener('canplay', () => console.log(`metldr: canplay for ${themeKey}`));
-    el.addEventListener('error', (e) => console.error(`metldr: video error for ${themeKey}:`, e.target.error));
-    
-    // auto-play the active theme video after a brief delay to allow loading
-    if (themeStore.currentTheme === themeKey) {
-      setTimeout(() => {
-        el.play().then(() => {
-          console.log(`metldr: auto-started video for active theme ${themeKey}`);
-        }).catch((err) => {
-          console.error(`metldr: failed to auto-play video ${themeKey}:`, err);
-        });
-      }, 100);
-    }
-  }
-};
-
-// watch for theme changes to manage video playback
-watch(() => themeStore.currentTheme, (newTheme, oldTheme) => {
-  // pause old theme video
-  if (oldTheme && themeVideoRefs.value[oldTheme]) {
-    const oldVideo = themeVideoRefs.value[oldTheme];
-    oldVideo.pause();
-    oldVideo.currentTime = 0;
-  }
-  
-  // play new theme video
-  if (newTheme && themeVideoRefs.value[newTheme]) {
-    nextTick(() => {
-      const newVideo = themeVideoRefs.value[newTheme];
-      newVideo.play().catch(() => {});
-    });
-  }
-});
 
 async function checkOllama() {
   try {
@@ -289,34 +184,18 @@ async function toggleWordPopup() {
     await chrome.storage.local.set({ wordPopupEnabled: wordPopupEnabled.value });
     console.log('metldr: word popup toggled to:', wordPopupEnabled.value);
     
-    // notify all tabs about the change
     const tabs = await chrome.tabs.query({});
     tabs.forEach(tab => {
       chrome.tabs.sendMessage(tab.id, {
         type: 'WORD_POPUP_TOGGLED',
         enabled: wordPopupEnabled.value
-      }).catch(() => {}); // ignore errors for tabs without content script
+      }).catch(() => {});
     });
   } catch (error) {
     console.error('metldr: failed to save word popup setting:', error);
   }
 }
 
-async function saveWordLookupPreference() {
-  try {
-    await chrome.storage.local.set({ wordLookupPreference: wordLookupPreference.value });
-  } catch (error) {
-    console.error('metldr: failed to save word lookup preference:', error);
-  }
-}
-
-async function saveDictionarySource() {
-  try {
-    await chrome.storage.local.set({ dictionarySource: dictionarySource.value });
-  } catch (error) {
-    console.error('metldr: failed to save dictionary source:', error);
-  }
-}
 
 async function clearCache() {
   if (!confirm('clear all cached summaries?')) return;
@@ -426,32 +305,31 @@ onMounted(async () => {
   await themeStore.loadSavedTheme();
   
   try {
-    const settings = await chrome.storage.local.get(['wordPopupEnabled', 'wordLookupPreference', 'dictionarySource']);
+    const settings = await chrome.storage.local.get(['wordPopupEnabled']);
     if (settings.wordPopupEnabled !== undefined) {
       wordPopupEnabled.value = settings.wordPopupEnabled;
-    }
-    if (settings.wordLookupPreference) {
-      wordLookupPreference.value = settings.wordLookupPreference;
-    }
-    if (settings.dictionarySource) {
-      dictionarySource.value = settings.dictionarySource;
     }
   } catch (error) {
     console.error('metldr: failed to load word popup settings:', error);
   }
   
   await loadDictionarySettings();
+  
+  try {
+    await chrome.storage.local.set({ 
+      selectedLanguages: selectedLanguages.value && selectedLanguages.value.length > 0 
+        ? selectedLanguages.value 
+        : ['en']
+    });
+  } catch (error) {
+    console.error('metldr: failed to save selectedLanguages:', error);
+  }
+  
   await checkOllama();
 
   document.addEventListener('click', (e) => {
     if (showModelDropdown.value && !e.target.closest('.model-selector-btn') && !e.target.closest('.model-dropdown')) {
       showModelDropdown.value = false;
-    }
-    if (showWordLookupDropdown.value && !e.target.closest('.word-lookup-btn') && !e.target.closest('.word-lookup-dropdown')) {
-      showWordLookupDropdown.value = false;
-    }
-    if (showDictionaryDropdown.value && !e.target.closest('.dictionary-source-btn') && !e.target.closest('.dictionary-source-dropdown')) {
-      showDictionaryDropdown.value = false;
     }
   });
 
@@ -762,180 +640,6 @@ onMounted(async () => {
                   />
                 </label>
               </div>
-              
-              <div v-if="wordPopupEnabled" class="space-y-2 mt-2 pt-2 border-t border-base-300 overflow-visible">
-                <div class="form-control overflow-visible">
-                  <label class="label py-1 px-0">
-                    <span class="label-text text-xs opacity-60">behavior</span>
-                  </label>
-                  
-                  <div class="relative overflow-visible">
-                    <button 
-                      @click="toggleWordLookupDropdown"
-                      class="word-lookup-btn btn btn-sm btn-block justify-between"
-                      :class="{ 'btn-primary': showWordLookupDropdown }"
-                    >
-                      <span class="font-mono text-xs capitalize">{{ wordLookupPreference }}</span>
-                      <ChevronDown 
-                        :size="14" 
-                        :stroke-width="2.5"
-                        class="transition-transform"
-                        :class="{ 'rotate-180': showWordLookupDropdown }"
-                      />
-                    </button>
-
-                    <!-- dropdown menu (teleported to root) -->
-                    <Teleport to="#dropdown-portal">
-                      <Transition
-                        enter-active-class="transition-all duration-200 ease-out"
-                        enter-from-class="opacity-0 scale-95 -translate-y-2"
-                        enter-to-class="opacity-100 scale-100 translate-y-0"
-                        leave-active-class="transition-all duration-150 ease-in"
-                        leave-from-class="opacity-100 scale-100 translate-y-0"
-                        leave-to-class="opacity-0 scale-95 -translate-y-2"
-                      >
-                        <ul 
-                          v-if="showWordLookupDropdown" 
-                          class="word-lookup-dropdown menu fixed p-1.5 rounded-lg shadow-depth-3 pointer-events-auto"
-                          :style="{ 
-                            top: wordLookupDropdownPos.top + 'px', 
-                            left: wordLookupDropdownPos.left + 'px', 
-                            width: wordLookupDropdownPos.width + 'px',
-                            background: `linear-gradient(135deg, oklch(from var(--b2) l c h / 0.5), oklch(from var(--secondary) l c h / 0.08))`,
-                            backdropFilter: 'blur(24px)',
-                            borderColor: `oklch(from var(--secondary) l c h / 0.25)`,
-                            boxShadow: `0 8px 32px oklch(from var(--secondary) l c h / 0.15), inset 0 1px 0 oklch(from var(--bc) l c h / 0.1)`
-                          }"
-                        >
-                          <li>
-                            <a 
-                              @click="selectWordLookupMode('auto')"
-                              :class="{ 'active': wordLookupPreference === 'auto' }"
-                              class="font-mono text-xs py-1.5"
-                              :style="{ 
-                                color: wordLookupPreference === 'auto' ? 'oklch(from var(--bc) l c h)' : 'oklch(from var(--text) l c h)',
-                                backgroundColor: wordLookupPreference === 'auto' ? 'oklch(from var(--secondary) l c h / 0.2)' : 'transparent',
-                                borderRadius: '6px'
-                              }"
-                            >
-                              auto
-                              <Check v-if="wordLookupPreference === 'auto'" :size="14" :stroke-width="2.5" />
-                            </a>
-                          </li>
-                          <li>
-                            <a 
-                              @click="selectWordLookupMode('definition')"
-                              :class="{ 'active': wordLookupPreference === 'definition' }"
-                              class="font-mono text-xs py-1.5"
-                              :style="{ 
-                                color: wordLookupPreference === 'definition' ? 'oklch(from var(--bc) l c h)' : 'oklch(from var(--text) l c h)',
-                                backgroundColor: wordLookupPreference === 'definition' ? 'oklch(from var(--secondary) l c h / 0.2)' : 'transparent',
-                                borderRadius: '6px'
-                              }"
-                            >
-                              define
-                              <Check v-if="wordLookupPreference === 'definition'" :size="14" :stroke-width="2.5" />
-                            </a>
-                          </li>
-                          <li>
-                            <a 
-                              @click="selectWordLookupMode('translation')"
-                              :class="{ 'active': wordLookupPreference === 'translation' }"
-                              class="font-mono text-xs py-1.5"
-                              :style="{ 
-                                color: wordLookupPreference === 'translation' ? 'oklch(from var(--bc) l c h)' : 'oklch(from var(--text) l c h)',
-                                backgroundColor: wordLookupPreference === 'translation' ? 'oklch(from var(--secondary) l c h / 0.2)' : 'transparent',
-                                borderRadius: '6px'
-                              }"
-                            >
-                            translate
-                            <Check v-if="wordLookupPreference === 'translation'" :size="14" :stroke-width="2.5" />
-                          </a>
-                        </li>
-                      </ul>
-                    </Transition>
-                    </Teleport>
-                  </div>
-                </div>
-                
-                <div class="form-control overflow-visible">
-                  <label class="label py-1 px-0">
-                    <span class="label-text text-xs opacity-60">source</span>
-                  </label>
-                  
-                  <div class="relative overflow-visible">
-                    <button 
-                      @click="toggleDictionaryDropdown"
-                      class="dictionary-source-btn btn btn-sm btn-block justify-between"
-                      :class="{ 'btn-primary': showDictionaryDropdown }"
-                    >
-                      <span class="font-mono text-xs capitalize">{{ dictionarySource }}</span>
-                      <ChevronDown 
-                        :size="14" 
-                        :stroke-width="2.5"
-                        class="transition-transform"
-                        :class="{ 'rotate-180': showDictionaryDropdown }"
-                      />
-                    </button>
-                    <!-- dropdown menu (teleported to root) -->
-                    <Teleport to="#dropdown-portal">
-                      <Transition
-                        enter-active-class="transition-all duration-200 ease-out"
-                        enter-from-class="opacity-0 scale-95 -translate-y-2"
-                        enter-to-class="opacity-100 scale-100 translate-y-0"
-                        leave-active-class="transition-all duration-150 ease-in"
-                        leave-from-class="opacity-100 scale-100 translate-y-0"
-                        leave-to-class="opacity-0 scale-95 -translate-y-2"
-                      >
-                        <ul 
-                          v-if="showDictionaryDropdown" 
-                          class="dictionary-source-dropdown menu fixed p-1.5 rounded-lg shadow-depth-3 pointer-events-auto"
-                          :style="{ 
-                            top: dictionaryDropdownPos.top + 'px', 
-                            left: dictionaryDropdownPos.left + 'px', 
-                            width: dictionaryDropdownPos.width + 'px',
-                            background: `linear-gradient(135deg, oklch(from var(--b2) l c h / 0.5), oklch(from var(--accent) l c h / 0.08))`,
-                            backdropFilter: 'blur(24px)',
-                            borderColor: `oklch(from var(--accent) l c h / 0.25)`,
-                            boxShadow: `0 8px 32px oklch(from var(--accent) l c h / 0.15), inset 0 1px 0 oklch(from var(--bc) l c h / 0.1)`
-                          }"
-                        >
-                          <li>
-                            <a 
-                              @click="selectDictionarySource('api')"
-                              :class="{ 'active': dictionarySource === 'api' }"
-                              class="font-mono text-xs py-1.5"
-                              :style="{ 
-                                color: dictionarySource === 'api' ? 'oklch(from var(--bc) l c h)' : 'oklch(from var(--text) l c h)',
-                                backgroundColor: dictionarySource === 'api' ? 'oklch(from var(--accent) l c h / 0.2)' : 'transparent',
-                                borderRadius: '6px'
-                              }"
-                            >
-                              online
-                              <Check v-if="dictionarySource === 'api'" :size="14" :stroke-width="2.5" />
-                            </a>
-                          </li>
-                          <li>
-                            <a 
-                              @click="selectDictionarySource('local')"
-                              :class="{ 'active': dictionarySource === 'local' }"
-                              class="font-mono text-xs py-1.5"
-                              :style="{ 
-                                color: dictionarySource === 'local' ? 'oklch(from var(--bc) l c h)' : 'oklch(from var(--text) l c h)',
-                                backgroundColor: dictionarySource === 'local' ? 'oklch(from var(--accent) l c h / 0.2)' : 'transparent',
-                                borderRadius: '6px'
-                              }"
-                            >
-                              offline
-                              <Check v-if="dictionarySource === 'local'" :size="14" :stroke-width="2.5" />
-                            </a>
-                          </li>
-                        </ul>
-                      </Transition>
-                    </Teleport>
-                  </div>
-                </div>
-              </div>
             </div>
           </div>
 
@@ -1019,33 +723,27 @@ onMounted(async () => {
                 <Sparkles :size="14" :stroke-width="2.5" />
                 appearance
               </h2>
-              <div class="grid grid-cols-1 gap-3">
+              <div class="grid grid-cols-2 gap-1.5">
                 <button
                   v-for="(themeData, key) in themeStore.themes"
                   :key="key"
                   @click="themeStore.setTheme(key)"
-                  @mouseenter="(e) => handleVideoHover(e, key)"
-                  @mouseleave="(e) => handleVideoLeave(e, key)"
-                  class="theme-card-btn group"
+                  class="theme-palette-btn group"
                   :class="{ 'is-active': themeStore.currentTheme === key }"
+                  :title="themeData.name"
                 >
-                  <!-- video background -->
-                  <div class="theme-video-container">
-                    <video
-                      :src="themeData.video"
-                      muted
-                      loop
-                      playsinline
-                      class="theme-video"
-                      :ref="(el) => setVideoRef(el, key)"
-                    ></video>
-                    <div class="theme-video-overlay"></div>
+                  <!-- color palette display (slanted shades) -->
+                  <div class="palette-container">
+                    <div class="palette-shade" :style="{ background: themeData.primary }"></div>
+                    <div class="palette-shade" :style="{ background: themeData.secondary }"></div>
+                    <div class="palette-shade" :style="{ background: themeData.accent }"></div>
+                    <div class="palette-shade" :style="{ background: themeData.bg }"></div>
                   </div>
                   
-                  <!-- theme name -->
-                  <div class="theme-text-container">
-                    <span class="theme-name">{{ themeData.name }}</span>
-                    <div v-if="themeStore.currentTheme === key" class="theme-check">
+                  <!-- theme name + check -->
+                  <div class="palette-label">
+                    <span class="palette-name">{{ themeData.name }}</span>
+                    <div v-if="themeStore.currentTheme === key" class="palette-check">
                       <Check :size="12" :stroke-width="3" />
                     </div>
                   </div>
@@ -1070,7 +768,6 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-/* scrollbar */
 main::-webkit-scrollbar {
   width: 6px;
 }
@@ -1088,7 +785,6 @@ main::-webkit-scrollbar-thumb:hover {
   background: oklch(from var(--bc) l c h / 0.3);
 }
 
-/* dropdown overflow fix: ensure dropdowns don't get clipped by parent overflow */
 .card.overflow-visible {
   overflow: visible !important;
 }
@@ -1109,12 +805,11 @@ main::-webkit-scrollbar-thumb:hover {
   overflow: visible !important;
 }
 
-/* ensure dropdown menus stack above everything */
 .model-dropdown,
 .word-lookup-dropdown,
 .dictionary-source-dropdown {
   z-index: 9999 !important;
-  position: absolute !important;
+  position: fixed !important;
 }
 
 .fade-enter-active,
@@ -1132,7 +827,6 @@ main::-webkit-scrollbar-thumb:hover {
   transform: translateY(-8px) scale(0.98);
 }
 
-/* refined interactions */
 .tab {
   transition: all var(--transition-fast);
 }
@@ -1186,161 +880,130 @@ main::-webkit-scrollbar-thumb:hover {
   background: oklch(from var(--bc) l c h / 0.3);
 }
 
-/* theme selector styles - following design philosophy */
-.theme-card-btn {
+.theme-palette-btn {
   position: relative;
-  display: block;
+  display: flex;
+  flex-direction: column;
   width: 100%;
-  height: 80px;
-  border-radius: 16px;
+  height: 28px;
+  border-radius: 6px;
   overflow: hidden;
-  border: 2px solid transparent;
+  border: none;
   cursor: pointer;
-  transition: all 280ms cubic-bezier(0.32, 0.72, 0, 1);
-  background: var(--b2);
-  /* depth: multi-shadow technique */
+  transition: all 200ms cubic-bezier(0.32, 0.72, 0, 1);
+  background: oklch(from var(--b2) l c h / 0.6);
   box-shadow: 
-    0 2px 4px oklch(from var(--bc) l c h / 0.08),
-    0 8px 16px oklch(from var(--bc) l c h / 0.12);
+    0 1px 3px oklch(from var(--bc) l c h / 0.1),
+    0 2px 6px oklch(from var(--bc) l c h / 0.08);
+  padding: 2px;
+  gap: 3px;
 }
 
-.theme-card-btn:hover {
+.theme-palette-btn:hover {
   transform: translateY(-2px);
-  /* deeper shadow on hover */
+  background: oklch(from var(--b2) l c h / 0.7);
   box-shadow: 
-    0 4px 8px oklch(from var(--bc) l c h / 0.12),
-    0 12px 24px oklch(from var(--bc) l c h / 0.16);
-  border-color: oklch(from var(--p) l c h / 0.3);
+    0 2px 5px oklch(from var(--bc) l c h / 0.15),
+    0 6px 14px oklch(from var(--bc) l c h / 0.12);
 }
 
-.theme-card-btn.is-active {
-  border-color: var(--p);
-  /* raised effect for active state */
+.theme-palette-btn.is-active {
+  background: oklch(from var(--p) l c h / 0.1);
   box-shadow: 
-    0 0 0 1px var(--p),
-    0 4px 8px oklch(from var(--p) l c h / 0.2),
-    0 12px 24px oklch(from var(--p) l c h / 0.25);
-  transform: translateY(-1px);
+    0 0 0 1.5px var(--p),
+    0 3px 8px oklch(from var(--p) l c h / 0.25),
+    0 8px 20px oklch(from var(--p) l c h / 0.2);
 }
 
-.theme-card-btn:active {
-  transform: translateY(0) scale(0.99);
+.theme-palette-btn:active {
+  transform: translateY(-1px) scale(1.02);
+  box-shadow: 
+    0 0 0 2px var(--p),
+    0 1px 3px oklch(from var(--p) l c h / 0.3),
+    0 0 12px oklch(from var(--p) l c h / 0.4);
 }
 
-/* video background container */
-.theme-video-container {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+.palette-container {
+  display: flex;
+  gap: 0;
+  flex: 1;
+  height: 14px;
   overflow: hidden;
-  border-radius: 14px;
-}
-
-.theme-video {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  transition: all 400ms cubic-bezier(0.32, 0.72, 0, 1);
-  filter: brightness(0.7) saturate(0.8) grayscale(0.3);
-}
-
-/* hover state: brighten and enhance video */
-.theme-card-btn:hover .theme-video {
-  filter: brightness(1) saturate(1.1) grayscale(0);
-  transform: scale(1.05);
-}
-
-/* active state: keep video bright */
-.theme-card-btn.is-active .theme-video {
-  filter: brightness(0.9) saturate(1) grayscale(0);
-}
-
-/* non-active state: heavily greyed out */
-.theme-card-btn:not(.is-active):not(:hover) .theme-video {
-  filter: brightness(0.4) saturate(0.3) grayscale(0.7);
-}
-
-/* overlay for text legibility - gradient from bottom */
-.theme-video-overlay {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(
-    to top,
-    oklch(0 0 0 / 0.85) 0%,
-    oklch(0 0 0 / 0.5) 50%,
-    oklch(0 0 0 / 0.2) 100%
-  );
-  transition: opacity 280ms ease;
-}
-
-.theme-card-btn:hover .theme-video-overlay {
-  background: linear-gradient(
-    to top,
-    oklch(0 0 0 / 0.75) 0%,
-    oklch(0 0 0 / 0.4) 50%,
-    oklch(0 0 0 / 0.15) 100%
-  );
-}
-
-/* text container - positioned at bottom */
-.theme-text-container {
+  border-radius: 3px;
   position: relative;
-  z-index: 10;
+  background: oklch(from var(--bc) l c h / 0.08);
+  box-shadow: inset 0 0 0 1px oklch(from var(--bc) l c h / 0.1);
+}
+
+.palette-shade {
+  flex: 1;
+  height: 100%;
+  transition: all 200ms cubic-bezier(0.32, 0.72, 0, 1);
+  transform: skewX(-6deg);
+  transform-origin: center;
+  position: relative;
+}
+
+.palette-shade::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: oklch(1 0 0 / 0);
+  transition: all 200ms ease;
+}
+
+.theme-palette-btn:hover .palette-shade {
+  transform: skewX(-6deg) scaleY(1.08);
+}
+
+.theme-palette-btn:hover .palette-shade::after {
+  background: oklch(1 0 0 / 0.05);
+}
+
+.theme-palette-btn:active .palette-shade {
+  transform: skewX(-6deg) scaleY(1.15) scaleX(1.02);
+}
+
+.palette-label {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
-  height: 100%;
-  align-items: flex-end;
+  gap: 4px;
+  padding: 0 2px;
 }
 
-/* theme name typography - following design philosophy */
-.theme-name {
-  font-size: 14px;
+.palette-name {
+  font-size: 9px;
   font-weight: 600;
-  letter-spacing: 0.01em;
-  line-height: 1.3;
-  color: oklch(0.95 0.02 265);
-  text-shadow: 
-    0 1px 2px oklch(0 0 0 / 0.4),
-    0 2px 8px oklch(0 0 0 / 0.3);
-  transition: all 280ms ease;
-  /* enhanced contrast for accessibility */
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  letter-spacing: 0.02em;
+  color: var(--bc);
+  text-transform: capitalize;
+  white-space: nowrap;
+  min-width: 45px;
+  transition: all 200ms ease;
 }
 
-.theme-card-btn:hover .theme-name {
-  color: oklch(1 0 0);
-  text-shadow: 
-    0 1px 3px oklch(0 0 0 / 0.5),
-    0 3px 12px oklch(0 0 0 / 0.4);
-  transform: translateX(2px);
+.theme-palette-btn:hover .palette-name {
+  color: var(--p);
 }
 
-.theme-card-btn.is-active .theme-name {
-  color: oklch(1 0 0);
+.theme-palette-btn.is-active .palette-name {
+  color: var(--p);
   font-weight: 700;
 }
 
-/* check indicator for active theme */
-.theme-check {
+.palette-check {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
   background: var(--p);
   color: var(--pc);
-  box-shadow: 
-    0 2px 4px oklch(from var(--p) l c h / 0.3),
-    0 0 0 2px oklch(1 0 0 / 0.2);
-  animation: checkPop 300ms cubic-bezier(0.68, -0.55, 0.265, 1.55);
+  flex-shrink: 0;
+  font-size: 6px;
+  animation: checkPopLively 400ms cubic-bezier(0.68, -0.55, 0.265, 1.55);
 }
 
 @keyframes checkPop {
@@ -1357,17 +1020,40 @@ main::-webkit-scrollbar-thumb:hover {
   }
 }
 
-/* header tabs styling - minimal, clean, glass-feel */
+@keyframes checkPopLively {
+  0% {
+    transform: scale(0) rotate(-180deg);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.25) rotate(10deg);
+  }
+  75% {
+    transform: scale(0.95) rotate(-5deg);
+  }
+  100% {
+    transform: scale(1) rotate(0deg);
+    opacity: 1;
+  }
+}
+
+@keyframes buttonPulse {
+  0% {
+    box-shadow: 0 0 0 0 oklch(from var(--p) l c h / 0.4);
+  }
+  100% {
+    box-shadow: 0 0 0 8px oklch(from var(--p) l c h / 0);
+  }
+}
+
 header .tabs {
   gap: 4px;
 }
 
-/* hide tab content areas (we handle them separately) */
 header .tab-content {
   display: none;
 }
 
-/* enhance tab styling - inspired by theme card buttons */
 header .tab {
   padding: 10px 16px;
   border-radius: 10px;
