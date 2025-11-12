@@ -320,17 +320,6 @@ button, a, [role="button"] {
   animation: glow-pulse 2s ease-in-out infinite;
 }
 
-.glass {
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
-  background-color: var(--glass-bg-dark);
-  border: 1px solid var(--glass-border);
-}
-
-[data-theme="light"] .glass {
-  background-color: var(--glass-bg-light);
-}
-
 .shadow-depth-1 {
   box-shadow: var(--shadow-sm);
 }
