@@ -1,6 +1,8 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 
+// note: color values must stay in sync with src/lib/ThemeManager.js THEME_COLORS
+// ThemeManager is used by content script for email injections; this store applies CSS vars to side panel
 export const useThemeStore = defineStore('theme', () => {
   const themes = {
     default: {
