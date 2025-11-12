@@ -1,17 +1,10 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 
-const getVideoUrl = (filename) => {
-  const url = chrome.runtime.getURL(filename);
-  console.log(`metldr: video URL for ${filename}:`, url);
-  return url;
-};
-
 export const useThemeStore = defineStore('theme', () => {
   const themes = {
     default: {
       name: 'default',
-      video: getVideoUrl('default.mp4'),
       primary: 'oklch(0.55 0.12 240)',
       secondary: 'oklch(0.50 0.10 280)',
       accent: 'oklch(0.53 0.11 190)',
@@ -20,7 +13,6 @@ export const useThemeStore = defineStore('theme', () => {
       success: 'oklch(0.62 0.11 140)',
       bg: 'oklch(0.14 0.01 265)',
       bgSecondary: 'oklch(0.18 0.01 265)',
-      bgTertiary: 'oklch(0.22 0.01 265)',
       text: 'oklch(0.75 0.01 265)',
       textMuted: 'oklch(0.50 0.01 265)',
       border: 'oklch(0.28 0.01 265)',
@@ -29,7 +21,6 @@ export const useThemeStore = defineStore('theme', () => {
     },
     light: {
       name: 'light',
-      video: getVideoUrl('light.mp4'),
       primary: 'oklch(0.38 0.20 240)',
       secondary: 'oklch(0.42 0.16 280)',
       accent: 'oklch(0.45 0.17 190)',
@@ -38,7 +29,6 @@ export const useThemeStore = defineStore('theme', () => {
       success: 'oklch(0.50 0.16 140)',
       bg: 'oklch(1.00 0.00 0)',
       bgSecondary: 'oklch(0.975 0.00 265)',
-      bgTertiary: 'oklch(0.95 0.00 265)',
       text: 'oklch(0.18 0.02 265)',
       textMuted: 'oklch(0.58 0.01 265)',
       border: 'oklch(0.80 0.01 265)',
@@ -47,7 +37,6 @@ export const useThemeStore = defineStore('theme', () => {
     },
     cyberpunk: {
       name: 'cyberpunk',
-      video: getVideoUrl('cyberpunk_2077.mp4'),
       primary: 'oklch(0.75 0.22 200)',
       secondary: 'oklch(0.60 0.24 340)',
       accent: 'oklch(0.84 0.16 100)',
@@ -56,7 +45,6 @@ export const useThemeStore = defineStore('theme', () => {
       success: 'oklch(0.66 0.16 150)',
       bg: 'oklch(0.15 0.01 265)',
       bgSecondary: 'oklch(0.19 0.01 265)',
-      bgTertiary: 'oklch(0.23 0.01 265)',
       text: 'oklch(0.88 0.02 265)',
       textMuted: 'oklch(0.50 0.02 265)',
       border: 'oklch(0.75 0.22 200 / 0.2)',
@@ -65,7 +53,6 @@ export const useThemeStore = defineStore('theme', () => {
     },
     catppuccin: {
       name: 'catppuccin',
-      video: getVideoUrl('catppuccin.mp4'),
       primary: 'oklch(0.87 0.04 30)',
       secondary: 'oklch(0.72 0.13 290)',
       accent: 'oklch(0.77 0.12 35)',
@@ -74,7 +61,6 @@ export const useThemeStore = defineStore('theme', () => {
       success: 'oklch(0.73 0.13 140)',
       bg: 'oklch(0.19 0.02 265)',
       bgSecondary: 'oklch(0.23 0.02 265)',
-      bgTertiary: 'oklch(0.27 0.02 265)',
       text: 'oklch(0.87 0.03 250)',
       textMuted: 'oklch(0.54 0.03 250)',
       border: 'oklch(0.87 0.04 30 / 0.2)',
@@ -83,7 +69,6 @@ export const useThemeStore = defineStore('theme', () => {
     },
     gruvbox: {
       name: 'gruvbox',
-      video: getVideoUrl('gruvbox.mp4'),
       primary: 'oklch(0.66 0.15 45)',
       secondary: 'oklch(0.68 0.12 150)',
       accent: 'oklch(0.75 0.14 80)',
@@ -92,7 +77,6 @@ export const useThemeStore = defineStore('theme', () => {
       success: 'oklch(0.70 0.13 140)',
       bg: 'oklch(0.22 0.01 70)',
       bgSecondary: 'oklch(0.26 0.01 70)',
-      bgTertiary: 'oklch(0.30 0.01 70)',
       text: 'oklch(0.86 0.04 70)',
       textMuted: 'oklch(0.58 0.02 70)',
       border: 'oklch(0.66 0.15 45 / 0.3)',
@@ -122,7 +106,7 @@ export const useThemeStore = defineStore('theme', () => {
     root.style.setProperty('--color-success', theme.success);
     root.style.setProperty('--color-base-100', theme.bg);
     root.style.setProperty('--color-base-200', theme.bgSecondary);
-    root.style.setProperty('--color-base-300', theme.bgTertiary);
+    root.style.setProperty('--color-base-300', theme.bgSecondary);
     root.style.setProperty('--color-base-content', theme.text);
     root.style.setProperty('--color-neutral-content', theme.textMuted);
     root.style.setProperty('--color-border', theme.border);
@@ -135,7 +119,7 @@ export const useThemeStore = defineStore('theme', () => {
     root.style.setProperty('--ac', theme.text);
     root.style.setProperty('--b1', theme.bg);
     root.style.setProperty('--b2', theme.bgSecondary);
-    root.style.setProperty('--b3', theme.bgTertiary);
+    root.style.setProperty('--b3', theme.bgSecondary);
     root.style.setProperty('--bc', theme.text);
     root.style.setProperty('--su', theme.success);
     root.style.setProperty('--wa', theme.warning);
