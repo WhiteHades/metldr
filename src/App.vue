@@ -100,6 +100,8 @@ async function checkOllama() {
         selectedModel.value = models[0];
       }
       
+      // request summary for current tab
+      await requestCurrentPageSummary();
       return true;
     }
     
@@ -109,6 +111,23 @@ async function checkOllama() {
     console.error('metldr: ollama check failed:', error);
     ollamaStatus.value = 'not-found';
     return false;
+  }
+}
+
+async function requestCurrentPageSummary() {
+  try {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tabs.length) return;
+    
+    const tabId = tabs[0].id;
+    
+    chrome.tabs.sendMessage(tabId, {
+      type: 'REQUEST_PAGE_SUMMARY'
+    }).catch(err => {
+      console.log('metldr: could not request summary from tab:', err.message);
+    });
+  } catch (error) {
+    console.error('metldr: failed to request page summary:', error);
   }
 }
 
