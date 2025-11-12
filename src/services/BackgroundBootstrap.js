@@ -35,6 +35,11 @@ export class BackgroundBootstrap {
         return true;
       }
 
+      if (msg.type === 'CHAT_MESSAGE') {
+        this._onChatMessage(msg, respond);
+        return true;
+      }
+
       return false;
     });
 
@@ -122,6 +127,34 @@ export class BackgroundBootstrap {
       } catch (err) {
         console.error('[BackgroundBootstrap._onHealthCheck]', err.message);
         respond({ success: true, connected: false, models: [] });
+      }
+    })();
+  }
+
+  static _onChatMessage(msg, respond) {
+    (async () => {
+      try {
+        const { model, prompt } = msg;
+
+        if (!model || !prompt) {
+          respond({ ok: false, error: 'missing model or prompt' });
+          return;
+        }
+
+        const result = await OllamaService.complete(
+          model,
+          [{ role: 'user', content: prompt }],
+          { temperature: 0.7 }
+        );
+
+        if (!result.ok) {
+          respond({ ok: false, error: result.error });
+        } else {
+          respond({ ok: true, content: result.content });
+        }
+      } catch (err) {
+        console.error('[BackgroundBootstrap._onChatMessage]', err.message);
+        respond({ ok: false, error: err.message });
       }
     })();
   }
