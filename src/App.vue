@@ -1,11 +1,8 @@
 <script setup>
 import { ref, onMounted, onUnmounted, nextTick, computed, watch } from 'vue';
 import { useThemeStore } from './stores/theme.js';
-import { OllamaClient } from './lib/OllamaClient.js';
-import { CacheManager } from './lib/CacheManager.js';
-import { ModelRouter } from './lib/ModelRouter.js';
+import { StorageManager, SUPPORTED_LANGUAGES } from './lib/StorageManager.js';
 import HistoryManager from './components/HistoryManager.vue';
-import { dictionaryDB, SUPPORTED_LANGUAGES } from './lib/DictionaryDB.js';
 import { 
   Sparkles, BarChart3, Settings, Loader2, ChevronDown, Check, 
   Send, Trash2, X, RefreshCw, Globe, Database, 
@@ -32,10 +29,8 @@ const chatMessages = ref([]);
 const chatInput = ref('');
 const chatLoading = ref(false);
 
-// word lookup settings
 const wordPopupEnabled = ref(true);
 
-// dictionary settings
 const downloadedLanguages = ref([]);
 const selectedLanguages = ref(['en']);
 const downloadProgress = ref({});
@@ -43,9 +38,7 @@ const downloadProgress = ref({});
 const setupCommands = `curl -fsSL https://ollama.com/install.sh | sh
 OLLAMA_ORIGINS="chrome-extension://*" ollama serve`;
 
-const client = new OllamaClient();
-const cache = new CacheManager();
-const router = new ModelRouter(client);
+const storage = new StorageManager();
 
 const updateDropdownPosition = (buttonElement, posRef) => {
   if (!buttonElement) return;
@@ -79,24 +72,32 @@ const selectModel = async (model) => {
 
 async function checkOllama() {
   try {
-    await cache.init();
+    await storage.initDictionary();
     
-    const { connected, models } = await client.checkConnection();
+    const response = await chrome.runtime.sendMessage({
+      type: 'CHECK_OLLAMA_HEALTH'
+    });
     
-    if (connected) {
+    if (!response || !response.success) {
+      ollamaStatus.value = 'not-found';
+      return false;
+    }
+    
+    const { connected, models } = response;
+    
+    if (connected && models.length > 0) {
       ollamaStatus.value = 'ready';
       availableModels.value = models;
-      await router.detectModels();
       
       try {
         const result = await chrome.storage.local.get(['selectedModel']);
         if (result.selectedModel && models.includes(result.selectedModel)) {
           selectedModel.value = result.selectedModel;
         } else {
-          selectedModel.value = router.getModel('email_summary');
+          selectedModel.value = models[0];
         }
       } catch (error) {
-        selectedModel.value = router.getModel('email_summary');
+        selectedModel.value = models[0];
       }
       
       return true;
@@ -105,6 +106,7 @@ async function checkOllama() {
     ollamaStatus.value = 'error';
     return false;
   } catch (error) {
+    console.error('metldr: ollama check failed:', error);
     ollamaStatus.value = 'not-found';
     return false;
   }
@@ -156,16 +158,20 @@ async function sendChatMessage() {
     
     const prompt = `${context}user question: ${userMessage}\n\nprovide a concise, helpful answer based on the page context.`;
     
-    const response = await client.generate({
+    const response = await chrome.runtime.sendMessage({
+      type: 'CHAT_MESSAGE',
       model,
-      prompt,
-      stream: false
+      prompt
     });
     
-    chatMessages.value.push({
-      role: 'assistant',
-      content: response.response
-    });
+    if (response?.ok) {
+      chatMessages.value.push({
+        role: 'assistant',
+        content: response.content
+      });
+    } else {
+      throw new Error(response?.error || 'chat failed');
+    }
   } catch (error) {
     console.error('metldr: chat error:', error);
     chatMessages.value.push({
@@ -201,7 +207,7 @@ async function clearCache() {
   if (!confirm('clear all cached summaries?')) return;
   
   try {
-    await cache.init();
+    await storage.cacheClearAll();
     alert('cache cleared!');
     if (historyRef.value) {
       historyRef.value.refresh();
@@ -214,8 +220,8 @@ async function clearCache() {
 
 async function loadDictionarySettings() {
   try {
-    await dictionaryDB.init();
-    downloadedLanguages.value = await dictionaryDB.getDownloadedLanguages();
+    await storage.initDictionary();
+    downloadedLanguages.value = await storage.dictGetDownloadedLanguages();
     
     const settings = await chrome.storage.local.get(['selectedLanguages']);
     if (settings.selectedLanguages && settings.selectedLanguages.length > 0) {
@@ -238,7 +244,7 @@ async function startDownload(langCode) {
   };
   
   try {
-    await dictionaryDB.downloadLanguage(langCode, (progressData) => {
+    await storage.dictDownloadLanguage(langCode, (progressData) => {
       downloadProgress.value[langCode] = {
         progress: progressData.progress,
         letter: progressData.letter,
@@ -247,7 +253,7 @@ async function startDownload(langCode) {
     });
     
     delete downloadProgress.value[langCode];
-    downloadedLanguages.value = await dictionaryDB.getDownloadedLanguages();
+    downloadedLanguages.value = await storage.dictGetDownloadedLanguages();
   } catch (error) {
     console.error('metldr: download failed for', langCode, ':', error);
     delete downloadProgress.value[langCode];
@@ -274,8 +280,8 @@ async function deleteLanguageData(langCode) {
   if (!confirm(`delete ${langCode} dictionary data?`)) return;
   
   try {
-    await dictionaryDB.deleteLanguage(langCode);
-    downloadedLanguages.value = await dictionaryDB.getDownloadedLanguages();
+    await storage.dictDeleteLanguage(langCode);
+    downloadedLanguages.value = await storage.dictGetDownloadedLanguages();
     
     const index = selectedLanguages.value.indexOf(langCode);
     if (index !== -1) {
@@ -340,7 +346,7 @@ onMounted(async () => {
       summaryError.value = null;
     }
     
-    if (message.action === 'startBackgroundDownload') {
+    if (message.type === 'startBackgroundDownload') {
       handleBackgroundDownload(message.language);
     }
   });
@@ -570,7 +576,7 @@ onMounted(async () => {
                   class="model-selector-btn btn btn-sm btn-block justify-between"
                   :class="{ 'btn-primary': showModelDropdown }"
                 >
-                  <span class="font-mono text-xs">{{ router.formatModelName(selectedModel) }}</span>
+                  <span class="font-mono text-xs">{{ selectedModel }}</span>
                   <ChevronDown 
                     :size="14" 
                     :stroke-width="2.5"
@@ -613,7 +619,7 @@ onMounted(async () => {
                             borderRadius: '6px'
                           }"
                         >
-                          {{ router.formatModelName(model) }}
+                          {{ model }}
                           <Check v-if="selectedModel === model" :size="14" :stroke-width="2.5" />
                         </a>
                       </li>
