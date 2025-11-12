@@ -1,21 +1,24 @@
-// background service worker
-
 chrome.sidePanel
   .setPanelBehavior({ openPanelOnActionClick: true })
   .catch((error) => console.error('side panel error:', error));
 
-// ollama wrapper for word lookups
-async function callOllama(model, prompt) {
+async function callOllama(model, prompt, options = {}) {
   try {
+    const body = {
+      model,
+      messages: [{ role: 'user', content: prompt }],
+      stream: false,
+      options: { temperature: options.temperature ?? 0 }
+    };
+    
+    if (options.format) {
+      body.format = options.format;
+    }
+    
     const response = await fetch('http://127.0.0.1:11434/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model,
-        messages: [{ role: 'user', content: prompt }],
-        stream: false,
-        options: { temperature: 0 }
-      })
+      body: JSON.stringify(body)
     });
 
     if (!response.ok) {
@@ -31,7 +34,6 @@ async function callOllama(model, prompt) {
   }
 }
 
-// message handler for all requests
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'SUMMARIZE_EMAIL') {
     handleEmailSummary(message.emailContent, message.emailId, message.metadata, sendResponse, message.forceRegenerate);
@@ -49,7 +51,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   
   if (message.action === 'downloadComplete') {
-    // clear download flag when dictionary download finishes
     if (message.language) {
       downloadingLanguages.delete(message.language);
     }
@@ -59,7 +60,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return false;
 });
 
-// indexeddb cache for email summaries
 let db = null;
 
 async function initDB() {
@@ -81,7 +81,6 @@ async function initDB() {
     request.onupgradeneeded = (event) => {
       const database = event.target.result;
       
-      // create or recreate the summaries store
       if (!database.objectStoreNames.contains('summaries')) {
         database.createObjectStore('summaries', { keyPath: 'emailId' });
       }
@@ -92,7 +91,6 @@ async function initDB() {
 async function getCachedSummary(emailId) {
   try {
     await initDB();
-    // check if object store exists before trying to access it
     if (!db.objectStoreNames.contains('summaries')) {
       return null;
     }
@@ -113,7 +111,6 @@ async function getCachedSummary(emailId) {
 async function cacheSummary(emailId, summary) {
   try {
     await initDB();
-    // check if object store exists before trying to access it
     if (!db.objectStoreNames.contains('summaries')) {
       return;
     }
@@ -129,7 +126,6 @@ async function handleEmailSummary(emailContent, emailId, metadata, sendResponse,
   const startTime = Date.now(); // track timing
   
   try {
-    // check cache first for instant return (unless regenerating)
     if (!forceRegenerate && emailId) {
       const cached = await getCachedSummary(emailId);
       if (cached) {
@@ -145,8 +141,7 @@ async function handleEmailSummary(emailContent, emailId, metadata, sendResponse,
       }
     }
     
-    // load selected model from chrome.storage
-    let selectedModel = 'gemma3:1b'; // default
+    let selectedModel = 'gemma3:1b';
     try {
       const result = await chrome.storage.local.get('selectedModel');
       if (result.selectedModel) {
@@ -156,7 +151,6 @@ async function handleEmailSummary(emailContent, emailId, metadata, sendResponse,
       console.error('metldr: failed to load model selection:', error);
     }
     
-    // check if ollama is running (only for new summaries)
     try {
       const healthCheck = await fetch('http://127.0.0.1:11434/api/tags', {
         signal: AbortSignal.timeout(2000)
@@ -176,7 +170,6 @@ async function handleEmailSummary(emailContent, emailId, metadata, sendResponse,
       return;
     }
     
-    // extract facts first, then summarise from facts
     const extractedFacts = jsExtractFacts(emailContent);
     
     if (!extractedFacts || Object.keys(extractedFacts).length === 0) {
@@ -191,19 +184,16 @@ async function handleEmailSummary(emailContent, emailId, metadata, sendResponse,
       return;
     }
     
-    // pass both facts and email body (trim if long)
     const emailSnippet = emailContent.length > 6000 
       ? emailContent.substring(0, 4000) + '\n...[content truncated]...\n' + emailContent.substring(emailContent.length - 2000)
       : emailContent;
     const summary = await generateSummaryFromFacts(extractedFacts, emailSnippet, metadata, selectedModel);
     
-    // add timing info and model name
     const timeTaken = Date.now() - startTime;
     summary.time_ms = timeTaken;
     summary.cached = false;
     summary.model = selectedModel;
     
-    // cache the summary with emailId in indexeddb
     if (emailId) {
       await cacheSummary(emailId, summary);
     }
@@ -223,7 +213,6 @@ async function handleEmailSummary(emailContent, emailId, metadata, sendResponse,
   }
 }
 
-// 1: extract facts from full email
 async function extractFactsFromEmail(emailContent) {
   const factsSchema = {
     "type": "object",
@@ -294,19 +283,15 @@ async function extractFactsFromEmail(emailContent) {
     }
   };
   
-  // for long emails, use map reduce
   if (emailContent.length > 30000) {
     return await extractFactsMapReduce(emailContent, factsSchema);
   }
   
-  // for long emails (> 12000), split into chunks but keep important sections together
   if (emailContent.length > 12000) {
-    // prioritise first 8000 chars + last 4000 chars
     const keyContent = emailContent.substring(0, 8000) + '\n\n[END OF EMAIL]\n\n' + emailContent.substring(emailContent.length - 4000);
     return await extractFactsSinglePass(keyContent, factsSchema);
   }
   
-  // standard extraction for normal length emails
   return await extractFactsSinglePass(emailContent, factsSchema);
 }
 
@@ -349,7 +334,6 @@ only extract information explicitly stated - do not infer or guess.`;
 }
 
 async function extractFactsMapReduce(emailContent, schema) {
-  // split email into 15000 char chunks with 2000 char overlap
   const chunkSize = 15000;
   const overlap = 2000;
   const chunks = [];
@@ -369,11 +353,9 @@ async function extractFactsMapReduce(emailContent, schema) {
     action_items: []
   };
   
-  // extract facts from each chunk
   for (const chunk of chunks) {
     const facts = await extractFactsSinglePass(chunk, schema);
     if (facts) {
-      // merge facts, deduplicating by value
       for (const key in allFacts) {
         if (Array.isArray(allFacts[key]) && Array.isArray(facts[key])) {
           const existing = new Set(JSON.stringify(allFacts[key]));
@@ -392,9 +374,7 @@ async function extractFactsMapReduce(emailContent, schema) {
   return allFacts;
 }
 
-// pass 2: generate summary from extracted facts + email context
 async function generateSummaryFromFacts(facts, emailSnippet = '', metadata = null, selectedModel = 'llama3.2:1b') {
-  // clean schema for human-readable summaries
   const summarySchema = {
     "type": "object",
     "required": ["summary", "action_items"],
@@ -429,10 +409,8 @@ async function generateSummaryFromFacts(facts, emailSnippet = '', metadata = nul
     }
   };
   
-  // build concise facts string
   const factsText = buildFactsSummary(facts);
 
-  // build metadata context if available
   let metadataContext = '';
   if (metadata) {
     metadataContext = 'email metadata:\n';
@@ -464,14 +442,12 @@ requirements:
 - use → for routes/paths where relevant
 - be direct and scannable`;
 
-  // use selected model with fallback list if it fails
-  const models = [selectedModel, 'llama3.2:1b', 'gemma3:4b', 'qwen2.5:3b'].filter((v, i, a) => a.indexOf(v) === i); // remove duplicates
+  const models = [selectedModel, 'llama3.2:1b', 'gemma3:4b', 'qwen2.5:3b'].filter((v, i, a) => a.indexOf(v) === i);
   
   for (const model of models) {
     try {
-      // add timeout to prevent hanging
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
+      const timeoutId = setTimeout(() => controller.abort(), 30000);
       
       const response = await fetch('http://127.0.0.1:11434/api/chat', {
         method: 'POST',
@@ -506,12 +482,10 @@ requirements:
 
       const parsed = JSON.parse(content);
       
-      // convert to ui format with intelligent fallbacks
       const mainDate = parsed.key_details?.main_date || (facts.dates?.[0]?.when);
       const bookingRef = parsed.key_details?.booking_reference || (facts.ids?.[0]?.value);
       const amount = parsed.key_details?.amount || (facts.amounts?.[0] ? `${facts.amounts[0].value} ${facts.amounts[0].currency || ''}` : null);
       
-      // clean and deduplicate action items (max 3)
       const actionItems = (parsed.action_items || [])
         .filter(item => item && item.length > 3)
         .slice(0, 3);
@@ -533,7 +507,6 @@ requirements:
     }
   }
   
-  // fallback to fact-based summary
   return createSummaryFromFacts(facts);
 }
 
@@ -594,7 +567,6 @@ function buildFactsSummary(facts) {
 }
 
 function createSummaryFromFacts(facts) {
-  // fallback: create simple summary from facts
   const bullets = [];
   
   if (facts.ids && facts.ids.length > 0) {
@@ -612,7 +584,6 @@ function createSummaryFromFacts(facts) {
     bullets.push(`dates: ${dates}`);
   }
 
-  // shipping/pickup heuristics (non-domain specific)
   const pickupLoc = (facts.locations && facts.locations[0]) || null;
   const packageId = (facts.ids || []).find(i => /package|parcel|tracking/i.test(i.label));
   if (pickupLoc || packageId) {
@@ -623,7 +594,6 @@ function createSummaryFromFacts(facts) {
     }
   }
 
-  // add deterministic guidance for locker pickups when hints exist
   const hasLocker = /z[- ]?box|locker|pickup point/i.test((facts.locations || []).join(' ') + ' ' + (facts.action_items || []).join(' '));
   if (hasLocker) {
     bullets.push('wait for notification; pick up at locker with code/app');
@@ -648,7 +618,6 @@ function createSummaryFromFacts(facts) {
   };
 }
 
-// amounts, ids, dates, simple contacts/links
 function jsExtractFacts(text) {
   const facts = {
     amounts: [],
@@ -662,7 +631,6 @@ function jsExtractFacts(text) {
   };
 
   try {
-    // amounts
     const amountRegex = /(?:USD|EUR|GBP|INR|BDT|HUF|AUD|CAD|CHF|JPY|CNY|HKD|[A-Z]{3})?\s?[$€£₹]?[\s]*\d{1,3}(?:[\s.,]\d{3})*(?:[.,]\d{2})?\s?(?:USD|EUR|GBP|INR|BDT|HUF|AUD|CAD|CHF|JPY|CNY|HKD|[A-Z]{3})?/g;
     const labelHints = [/total/i, /amount/i, /price/i, /fare/i, /paid/i, /due/i];
     const amounts = new Set();
@@ -681,7 +649,6 @@ function jsExtractFacts(text) {
       }
     }
 
-    // ids (order|booking|invoice|ticket|ref: ABC123-45)
     const idRegex = /(booking|order|invoice|ticket|reference|ref|pnr|record locator)[:#]?\s*([A-Z0-9-]{5,})/gi;
     const ids = new Set();
     while ((m = idRegex.exec(text)) !== null) {
@@ -694,7 +661,6 @@ function jsExtractFacts(text) {
       }
     }
 
-    // package/parcel/tracking id lines (e.g., "Package number Z 445 5070 212")
     const pkgLineRx = /(package|parcel)\s+number[:#]?\s*([A-Z0-9 \-]{6,})/gi;
     while ((m = pkgLineRx.exec(text)) !== null) {
       const label = 'package_number';
@@ -703,7 +669,6 @@ function jsExtractFacts(text) {
       if (!ids.has(key)) { facts.ids.push({ label, value }); ids.add(key); }
     }
 
-    // generic tracking ids (words like tracking/trace code)
     const trackingRx = /(tracking|trace|parcel id|shipment id)[:#]?\s*([A-Z0-9-]{6,})/gi;
     while ((m = trackingRx.exec(text)) !== null) {
       const label = 'tracking';
@@ -712,7 +677,6 @@ function jsExtractFacts(text) {
       if (!ids.has(key)) { facts.ids.push({ label, value }); ids.add(key); }
     }
 
-    // dates (iso-like or human readable common formats)
     const isoDate = /\b\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}(?::\d{2})?)?\b/g;
     const humanDate = /(Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*,?\s+\d{1,2}\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}(?:\s+\d{1,2}:\d{2}(?:\s*[AP]M)?\s*[A-Z]{2,3})?/gi;
     const dateSet = new Set();
@@ -726,7 +690,6 @@ function jsExtractFacts(text) {
     while ((m = humanDate.exec(text)) !== null) {
       const when = m[0];
       if (!dateSet.has(when)) {
-        // try infer label by nearby words
         const ctxStart = Math.max(0, m.index - 40);
         const ctx = text.substring(ctxStart, m.index + when.length + 10).toLowerCase();
         const label = /depart|departure|flight|outbound/.test(ctx) ? 'departure'
@@ -738,7 +701,6 @@ function jsExtractFacts(text) {
       }
     }
 
-    // contacts (emails/phones simple)
     const emailRx = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
     const phoneRx = /\+?\d[\d\s\-()]{6,}\d/g;
     const seenContact = new Set();
@@ -751,11 +713,9 @@ function jsExtractFacts(text) {
       if (!seenContact.has(v)) { facts.contacts.push({ type: 'phone', value: v }); seenContact.add(v); }
     }
 
-    // action items (imperatives/common cta verbs)
     const actionLines = text.split(/\n+/).filter(l => /\b(pay|confirm|check[- ]?in|download|track|manage|reset|verify|complete|submit|reply)\b/i.test(l));
     facts.action_items = Array.from(new Set(actionLines.map(l => l.trim()).filter(l => l.length > 0 && l.length < 160))).slice(0, 6);
 
-    // pickup location extraction: lines starting with z-box or similar locker keywords and the next line
     const lines = text.split(/\n+/);
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
@@ -774,7 +734,6 @@ function jsExtractFacts(text) {
 
   return facts;
 }
-// pre-summarisation handler (low priority background processing)
 async function handlePreSummarise(message, sender, sendResponse) {
   try {
     const cacheKey = `page:${message.url}`;
@@ -817,12 +776,10 @@ ${message.content}`;
   }
 }
 
-// extract json from llm response (handles markdown, extra text)
 function extractJSON(text) {
   try {
     return JSON.parse(text);
   } catch {
-    // try to find json object in response
     const jsonMatch = text.match(/\{[^{}]*\}/);
     if (jsonMatch) {
       return JSON.parse(jsonMatch[0]);
@@ -831,10 +788,8 @@ function extractJSON(text) {
   }
 }
 
-// track ongoing downloads to prevent duplicates
 const downloadingLanguages = new Set();
 
-// cache db connection for faster lookups
 let cachedDictDb = null;
 let cachedLanguages = null;
 let cacheTimestamp = 0;
@@ -849,7 +804,6 @@ async function getCachedSettings() {
   const settings = await chrome.storage.local.get(['selectedLanguages']);
   let languages = settings.selectedLanguages || ['en'];
   
-  // ensure languages is an array
   if (!Array.isArray(languages)) {
     if (typeof languages === 'object') {
       languages = Object.values(languages);
@@ -876,95 +830,159 @@ async function getCachedDb() {
   });
 }
 
-// word lookup handler with three-tier fallback: api → local → ollama
+async function detectLanguage(word, sentence = '') {
+  const heuristics = {
+    'de': /[äöüßÄÖÜ]/i, // german umlauts
+    'fr': /[àâäéèêëïîôùûüÿç]/i, // french accents
+    'es': /[ñáéíóúüÑÁÉÍÓÚ]/i, // spanish accents
+    'it': /[àèéìíîòóùú]/i, // italian accents
+    'pt': /[àáâãéêíóôõúüç]/i, // portuguese accents
+    'ru': /[а-яё]/i, // cyrillic
+    'ja': /[ひらがなカタカナ漢字]/i, // japanese
+    'zh': /[一-龯]/i, // chinese
+    'ko': /[가-힣]/i, // korean
+    'ar': /[ا-ي]/i, // arabic
+    'he': /[א-ת]/i, // hebrew
+    'th': /[ก-๙]/i, // thai
+    'vi': /[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i, // vietnamese
+  };
+  
+  const text = sentence || word;
+  for (const [lang, pattern] of Object.entries(heuristics)) {
+    if (pattern.test(text)) {
+      return lang;
+    }
+  }
+  
+  try {
+    const modelsResponse = await fetch('http://127.0.0.1:11434/api/tags', {
+      signal: AbortSignal.timeout(2000)
+    });
+    
+    if (modelsResponse.ok) {
+      const modelsData = await modelsResponse.json();
+      const models = modelsData.models?.map(m => m.name) || [];
+      
+      if (models.length > 0) {
+        const smallModels = ['llama3.2:1b', 'qwen2.5:1.5b', 'llama3.2:3b'];
+        let model = models[0];
+        
+        for (const small of smallModels) {
+          const found = models.find(m => m.includes(small));
+          if (found) {
+            model = found;
+            break;
+          }
+        }
+        
+        const detectionSchema = {
+          type: 'object',
+          properties: {
+            language: {
+              type: 'string',
+              description: 'ISO 639-1 language code (e.g., en, de, fr, es, it, pt, ru, ja, zh, ko, ar, he, th, vi)',
+              enum: ['en', 'de', 'fr', 'es', 'it', 'pt', 'ru', 'ja', 'zh', 'ko', 'ar', 'he', 'th', 'vi', 'other']
+            }
+          },
+          required: ['language']
+        };
+        
+        const prompt = `Detect the language of this word/sentence. Return only the ISO 639-1 language code (e.g., en, de, fr, es, it, pt, ru, ja, zh, ko, ar, he, th, vi).
+
+Word/sentence: "${text}"
+
+Respond only with JSON.`;
+        
+        const result = await callOllama(model, prompt, {
+          format: detectionSchema,
+          temperature: 0
+        });
+        
+        if (result.success) {
+          try {
+            const parsed = JSON.parse(result.response);
+            const detected = parsed.language;
+            if (detected && detected !== 'other') {
+              return detected;
+            }
+          } catch (e) {
+            console.log('[detectLanguage] failed to parse ollama response:', e);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.log('[detectLanguage] ollama detection failed:', err.message);
+  }
+  
+  return 'en';
+}
+
 async function handleWordLookup(message, sendResponse) {
   const startTime = performance.now();
   
   try {
-    // get settings
     const settings = await chrome.storage.local.get(['selectedLanguages', 'dictionarySource', 'selectedModel']);
     let languages = settings.selectedLanguages || ['en'];
     const dictionarySource = settings.dictionarySource || 'api';
     const userModel = settings.selectedModel || null;
+    const context = message.context || {};
+    const fullSentence = context.fullSentence || '';
     
-    // ensure languages is an array
     if (!Array.isArray(languages)) {
-      if (typeof languages === 'object') {
-        languages = Object.values(languages);
+      if (typeof languages === 'object' && languages !== null) {
+        languages = Object.values(languages).filter(l => typeof l === 'string');
       } else {
         languages = [languages];
       }
     }
     
-    const word = message.word.toLowerCase().trim();
-    
-    // step 1: try local db only if user chose 'local' and not downloading
-    if (dictionarySource === 'local') {
-      let shouldTryLocal = true;
-      for (const langCode of languages) {
-        if (downloadingLanguages.has(langCode)) {
-          shouldTryLocal = false;
-          break;
-        }
-      }
-      
-      if (shouldTryLocal) {
-        try {
-          const dictDb = await getCachedDb();
-        
-          for (const langCode of languages) {
-            try {
-              const tx = dictDb.transaction([langCode], 'readonly');
-              const store = tx.objectStore(langCode);
-              const result = await new Promise((resolve, reject) => {
-                const request = store.get(word);
-                request.onsuccess = () => resolve(request.result);
-                request.onerror = () => reject(request.error);
-              });
-              
-              if (result) {
-                const elapsed = performance.now() - startTime;
-                sendResponse({ 
-                  success: true, 
-                  result: {
-                    definitions: [{
-                      definition: result.definition,
-                      partOfSpeech: result.pos,
-                      example: null
-                    }],
-                    language: langCode,
-                    source: 'local'
-                  }
-                });
-                return;
-              }
-            } catch (err) {
-              continue;
-            }
-          }
-        } catch (dbError) {
-          console.error('[word_lookup] local db error, falling back to api:', dbError);
-        }
-      }
+    if (!languages || languages.length === 0) {
+      languages = ['en'];
+      await chrome.storage.local.set({ selectedLanguages: languages }).catch(() => {});
     }
     
-    // step 2: fallback to free dictionary api
-    let apiFound = false;
-    for (const langCode of languages) {
+    const word = message.word.toLowerCase().trim();
+    
+    console.log('[word_lookup] settings:', { languages, dictionarySource, userModel });
+    console.log('[word_lookup] looking up word:', word, 'in languages:', languages);
+    console.log('[word_lookup] full sentence context:', fullSentence);
+    
+    let detectedLanguage = 'en';
+    const isEnglish = /^[a-zA-Z]+$/.test(word);
+    
+    if (!isEnglish) {
+      detectedLanguage = await detectLanguage(word, fullSentence || word);
+      console.log('[word_lookup] detected language:', detectedLanguage);
+    }
+    
+    const languagePriority = [detectedLanguage];
+    for (const lang of languages) {
+      if (lang !== detectedLanguage) {
+        languagePriority.push(lang);
+      }
+    }
+    if (detectedLanguage !== 'en' && !languages.includes('en')) {
+      languagePriority.push('en');
+    }
+    
+    let apiLangs = languagePriority;
+    
+    for (const langCode of apiLangs) {
       try {
-        const url = `https://api.dictionaryapi.dev/api/v2/entries/${langCode}/${word}`;
+        let url = `https://api.dictionaryapi.dev/api/v2/entries/${langCode}/${word}`;
+        console.log('[word_lookup] trying API with url:', url);
         
         const response = await fetch(url);
+        console.log('[word_lookup] api response status:', response.status);
         
         if (response.ok) {
           const data = await response.json();
           
           if (data && data[0] && data[0].meanings) {
-            // collect all definitions from all meanings
             const allDefinitions = [];
             const preferredPos = ['noun', 'verb', 'adjective', 'adverb'];
             
-            // prioritise common parts of speech
             const sortedMeanings = [...data[0].meanings].sort((a, b) => {
               const aIndex = preferredPos.indexOf(a.partOfSpeech);
               const bIndex = preferredPos.indexOf(b.partOfSpeech);
@@ -974,13 +992,11 @@ async function handleWordLookup(message, sendResponse) {
               return aIndex - bIndex;
             });
             
-            // extract all clean definitions
             for (const meaning of sortedMeanings) {
               if (meaning.definitions && meaning.definitions.length > 0) {
                 for (const def of meaning.definitions) {
                   const defText = (def.definition || '').toLowerCase();
                   
-                  // filter out vulgar/archaic/obsolete
                   if (defText.includes('vulgar') || 
                       defText.includes('archaic') || 
                       defText.includes('obsolete') || 
@@ -991,44 +1007,51 @@ async function handleWordLookup(message, sendResponse) {
                   allDefinitions.push({
                     definition: def.definition,
                     partOfSpeech: meaning.partOfSpeech || 'unknown',
-                    example: def.example || null
+                    example: def.example || null,
+                    synonyms: def.synonyms || []
                   });
                 }
               }
             }
             
             if (allDefinitions.length === 0) {
-              // fallback: use first definition even if filtered
               const firstMeaning = data[0].meanings[0];
               allDefinitions.push({
                 definition: firstMeaning.definitions[0].definition,
                 partOfSpeech: firstMeaning.partOfSpeech || 'unknown',
-                example: firstMeaning.definitions[0].example || null
+                example: firstMeaning.definitions[0].example || null,
+                synonyms: firstMeaning.definitions[0].synonyms || []
               });
             }
+            
+            const allSynonyms = [];
+            for (const meaning of data[0].meanings || []) {
+              for (const def of meaning.definitions || []) {
+                if (def.synonyms && Array.isArray(def.synonyms)) {
+                  allSynonyms.push(...def.synonyms);
+                }
+              }
+            }
+            const uniqueSynonyms = [...new Set(allSynonyms)].filter(s => s && s.toLowerCase() !== word.toLowerCase());
             
             sendResponse({ 
               success: true, 
               result: {
                 definitions: allDefinitions,
+                synonyms: uniqueSynonyms,
                 language: langCode,
                 source: 'api'
               }
             });
             
-            apiFound = true;
-            
-            // trigger background download (if not already downloading)
-            if (!downloadingLanguages.has(langCode)) {
+              if (!downloadingLanguages.has(langCode)) {
               downloadingLanguages.add(langCode);
               
-              // notify side panel to start download
               chrome.runtime.sendMessage({
                 action: 'startBackgroundDownload',
                 language: langCode
               }).catch(() => {});
               
-              // cleanup flag after 5 minutes (timeout)
               setTimeout(() => {
                 downloadingLanguages.delete(langCode);
               }, 300000);
@@ -1038,67 +1061,70 @@ async function handleWordLookup(message, sendResponse) {
           }
         }
       } catch (err) {
+        console.log('[word_lookup] api lookup failed for', langCode, ':', err.message);
         continue;
       }
     }
     
-    // step 3: if api failed, try local dictionary (regardless of user preference)
-    if (!apiFound && dictionarySource === 'api') {
-      try {
-        const dictDb = await getCachedDb();
-      
-        for (const langCode of languages) {
-          try {
-            const tx = dictDb.transaction([langCode], 'readonly');
-            const store = tx.objectStore(langCode);
-            const result = await new Promise((resolve, reject) => {
-              const request = store.get(word);
-              request.onsuccess = () => resolve(request.result);
-              request.onerror = () => reject(request.error);
+    try {
+      const dictDb = await getCachedDb();
+    
+      for (const langCode of languagePriority) {
+        try {
+          const tx = dictDb.transaction([langCode], 'readonly');
+          const store = tx.objectStore(langCode);
+          const result = await new Promise((resolve, reject) => {
+            const request = store.get(word);
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+          });
+          
+          if (result) {
+            const elapsed = performance.now() - startTime;
+            console.log('[word_lookup] found in local dictionary:', result);
+            sendResponse({ 
+              success: true, 
+              result: {
+                definitions: [{
+                  definition: result.definition,
+                  partOfSpeech: result.pos,
+                  example: null,
+                  synonyms: result.synonyms || []
+                }],
+                synonyms: result.synonyms || [],
+                language: langCode,
+                source: 'local'
+              }
             });
-            
-            if (result) {
-              const elapsed = performance.now() - startTime;
-              sendResponse({ 
-                success: true, 
-                result: {
-                  definitions: [{
-                    definition: result.definition,
-                    partOfSpeech: result.pos,
-                    example: null
-                  }],
-                  language: langCode,
-                  source: 'local'
-                }
-              });
-              return;
-            }
-          } catch (err) {
-            continue;
+            return;
           }
+        } catch (err) {
+          continue;
         }
-      } catch (dbError) {
-        console.error('[word_lookup] local fallback failed:', dbError);
       }
+    } catch (dbError) {
+      console.error('[word_lookup] local db error:', dbError);
     }
     
-    // step 4: final fallback to ollama llm
     try {
-      // import ollama client dynamically
-      const { OllamaClient } = await import(chrome.runtime.getURL('lib/OllamaClient.js'));
-      const ollamaClient = new OllamaClient();
+      const modelsResponse = await fetch('http://127.0.0.1:11434/api/tags', {
+        signal: AbortSignal.timeout(2000)
+      });
       
-      // check if ollama is available
-      const { connected, models } = await ollamaClient.checkConnection();
-      if (!connected || models.length === 0) {
+      if (!modelsResponse.ok) {
         throw new Error('ollama not available');
       }
       
-      // prefer smallest model for quick definitions
+      const modelsData = await modelsResponse.json();
+      const models = modelsData.models?.map(m => m.name) || [];
+      
+      if (!models || models.length === 0) {
+        throw new Error('ollama not available');
+      }
+      
       const smallModels = ['llama3.2:1b', 'qwen2.5:1.5b', 'llama3.2:3b'];
       let model = userModel || models[0];
       
-      // find smallest available model if no user preference
       if (!userModel) {
         for (const small of smallModels) {
           const found = models.find(m => m.includes(small));
@@ -1109,24 +1135,84 @@ async function handleWordLookup(message, sendResponse) {
         }
       }
       
-      // generate one-line definition
-      const prompt = `define the word "${word}" in one concise sentence (15-20 words max). include part of speech in parentheses.`;
-      const definition = await ollamaClient.generate(prompt, {
-        model,
-        temperature: 0.3,
-        system: 'you are a concise dictionary. respond with only the definition, nothing else.'
+      const contextStr = fullSentence
+        ? `Full sentence context: "${fullSentence}"`
+        : (context.contextBefore || context.contextAfter
+          ? `Usage context: "${context.contextBefore} [${word}] ${context.contextAfter}"`
+          : '');
+      
+      const definitionSchema = {
+        type: 'object',
+        properties: {
+          partOfSpeech: {
+            type: 'string',
+            description: 'part of speech in English (noun, verb, adjective, adverb, etc.)',
+            enum: ['noun', 'verb', 'adjective', 'adverb', 'pronoun', 'preposition', 'conjunction', 'interjection', 'other']
+          },
+          definition: {
+            type: 'string',
+            description: 'definition in English - clear and concise (15-20 words max), considering the sentence context'
+          },
+          example: {
+            type: 'string',
+            description: 'optional English usage example'
+          },
+          synonyms: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'list of 3-5 English synonyms (words with similar meaning)'
+          }
+        },
+        required: ['partOfSpeech', 'definition']
+      };
+      
+      const prompt = `${contextStr}
+
+The word "${word}" appears in the sentence above. 
+Please provide:
+1. The English part of speech (considering how it's used in the sentence)
+2. A concise English definition (1 sentence, 15-20 words) that matches the meaning in this specific context
+3. An optional English example
+4. A list of 3-5 English synonyms (words with similar meaning)
+
+Respond only with JSON.`;
+      
+      const ollamaResult = await callOllama(model, prompt, {
+        format: definitionSchema,
+        temperature: 0
       });
       
+      if (!ollamaResult.success) {
+        throw new Error('ollama generation failed: ' + ollamaResult.error);
+      }
+      
+      let definition = {};
+      
+      try {
+        const parsed = JSON.parse(ollamaResult.response);
+        definition = {
+          partOfSpeech: parsed.partOfSpeech || 'unknown',
+          definition: parsed.definition || 'no definition provided',
+          example: parsed.example || null,
+          synonyms: parsed.synonyms || []
+        };
+      } catch (parseErr) {
+        console.error('[word_lookup] json parse failed:', parseErr);
+        definition = {
+          partOfSpeech: 'unknown',
+          definition: ollamaResult.response.trim(),
+          example: null
+        };
+      }
+      
       const elapsed = performance.now() - startTime;
+      console.log('[word_lookup] ollama response:', definition);
       
       sendResponse({ 
         success: true, 
         result: {
-          definitions: [{
-            definition: definition.trim(),
-            partOfSpeech: 'generated',
-            example: null
-          }],
+          definitions: [definition],
+          synonyms: definition.synonyms || [],
           language: 'en',
           source: 'ollama'
         }
@@ -1136,7 +1222,6 @@ async function handleWordLookup(message, sendResponse) {
       console.error('[word_lookup] ollama fallback failed:', ollamaErr);
     }
     
-    // absolute failure - no definition anywhere
     sendResponse({ 
       success: false, 
       error: 'word not found in any dictionary source or llm unavailable' 
