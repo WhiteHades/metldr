@@ -8,12 +8,11 @@ const processedEmails = new Set();
 const injectionTimestamps = new Map();
 const INJECTION_COOLDOWN = 3000;
 
-// dwell-time pre-summarisation state
 let dwellTimer = 0;
 let dwellInterval = null;
 let summarisationQueued = false;
 let currentPageUrl = window.location.href;
-const DWELL_THRESHOLD = 0; // instant for testing (change to 30 for production)
+const DWELL_THRESHOLD = 0;
 
 if (!document.getElementById('metldr-animations')) {
   const style = document.createElement('style');
@@ -35,7 +34,6 @@ if (!document.getElementById('metldr-animations')) {
 
 loadCurrentTheme();
 
-// start dwell-time monitoring for pre-summarisation
 if (!isGmail) {
   startDwellMonitoring();
 }
@@ -301,14 +299,12 @@ function extractEmailMetadata(threadElement) {
   };
 
   try {
-    // extract date/time - gmail uses span with title attribute for full timestamp
     const dateElement = document.querySelector('span.g3[title]') || 
                        document.querySelector('.gH .gK span[title]') ||
                        document.querySelector('[data-tooltip][role="gridcell"] span[title]');
     
     if (dateElement) {
       metadata.date = dateElement.getAttribute('title') || dateElement.textContent?.trim();
-      // try to parse timestamp
       if (metadata.date) {
         const parsedDate = new Date(metadata.date);
         if (!isNaN(parsedDate.getTime())) {
@@ -317,7 +313,6 @@ function extractEmailMetadata(threadElement) {
       }
     }
 
-    // extract sender name and email
     const senderElement = document.querySelector('span.gD[email]') || 
                          document.querySelector('.gE.iv.gt span[email]') ||
                          document.querySelector('[email][data-hovercard-id]');
@@ -327,7 +322,6 @@ function extractEmailMetadata(threadElement) {
       metadata.sender = senderElement.getAttribute('name') || senderElement.textContent?.trim();
     }
 
-    // extract subject from h2 or title
     const subjectElement = document.querySelector('h2.hP') || 
                           document.querySelector('.ha h2') ||
                           document.querySelector('[data-thread-perm-id] h2');
@@ -336,7 +330,6 @@ function extractEmailMetadata(threadElement) {
       metadata.subject = subjectElement.textContent?.trim();
     }
 
-    // extract "to" recipients
     const toElement = document.querySelector('.gE.iv.gt .g2') ||
                      document.querySelector('[data-hovercard-id]');
     
@@ -357,8 +350,8 @@ function extractEmailText(threadElement) {
   
   const selectors = [
     '.ii.gt',
-    '.a3s.aiL', //  gmail body
-    '.ii', //  email content
+    '.a3s.aiL',
+    '.ii',
     '[dir="ltr"]',
     '.gmail_signature'
   ];
@@ -395,7 +388,6 @@ function extractEmailText(threadElement) {
   return '';
 }
 
-// get summary via background script
 async function getSummaryFromBackground(emailText, emailId, metadata = null, forceRegenerate = false) {
   return new Promise((resolve) => {
     if (!chrome || !chrome.runtime || !chrome.runtime.sendMessage) {
@@ -524,7 +516,7 @@ const THEME_COLORS = {
     secondary: 'oklch(0.70 0.16 285)',
     accent: 'oklch(0.76 0.15 165)',
     bg: 'oklch(0.10 0.01 265)',
-    bgSecondary: 'oklch(0.14 0.01 265 / 0.98)',
+    bgSecondary: 'oklch(0.14 0.01 265)',
     text: 'oklch(0.90 0.02 265)',
     textMuted: 'oklch(0.60 0.02 265)',
     border: 'oklch(0.30 0.02 265 / 0.3)',
@@ -548,7 +540,7 @@ const THEME_COLORS = {
     secondary: 'oklch(0.65 0.28 340)',
     accent: 'oklch(0.88 0.20 100)',
     bg: 'oklch(0.05 0.01 265)',
-    bgSecondary: 'oklch(0.09 0.01 265 / 0.98)',
+    bgSecondary: 'oklch(0.09 0.01 265)',
     text: 'oklch(0.92 0.02 265)',
     textMuted: 'oklch(0.55 0.02 265)',
     border: 'oklch(0.80 0.25 200 / 0.35)',
@@ -560,7 +552,7 @@ const THEME_COLORS = {
     secondary: 'oklch(0.72 0.13 290)',
     accent: 'oklch(0.77 0.12 35)',
     bg: 'oklch(0.19 0.02 265)',
-    bgSecondary: 'oklch(0.23 0.02 265 / 0.98)',
+    bgSecondary: 'oklch(0.23 0.02 265)',
     text: 'oklch(0.87 0.03 250)',
     textMuted: 'oklch(0.54 0.03 250)',
     border: 'oklch(0.87 0.04 30 / 0.25)',
@@ -572,7 +564,7 @@ const THEME_COLORS = {
     secondary: 'oklch(0.68 0.12 150)',
     accent: 'oklch(0.75 0.14 80)',
     bg: 'oklch(0.22 0.01 70)',
-    bgSecondary: 'oklch(0.26 0.01 70 / 0.98)',
+    bgSecondary: 'oklch(0.26 0.01 70)',
     text: 'oklch(0.86 0.04 70)',
     textMuted: 'oklch(0.58 0.02 70)',
     border: 'oklch(0.66 0.15 45 / 0.35)',
@@ -581,7 +573,6 @@ const THEME_COLORS = {
   },
 };
 
-// store both theme name (string) and theme object separately
 let currentThemeName = 'default';
 let currentTheme = THEME_COLORS.default;
 
@@ -593,7 +584,6 @@ async function loadCurrentTheme() {
     currentTheme = THEME_COLORS[themeName] || THEME_COLORS.default;
     console.log('metldr: loaded theme from storage:', themeName, currentTheme);
 
-    // Update any existing summaries with the loaded theme
     updateSummaryTheme();
   } catch (error) {
     console.error('metldr: failed to load theme:', error);
@@ -630,7 +620,7 @@ function injectSummaryUI(threadElement, summary) {
   const dates = summary.dates || [];
   const confidence = summary.confidence || 'medium';
   const currentThreadId = getCurrentThreadId();
-  const theme = currentTheme; // Use the already-loaded theme object directly
+  const theme = currentTheme;
 
   const confidenceColors = {
     high: '#10b981',
@@ -639,12 +629,11 @@ function injectSummaryUI(threadElement, summary) {
   };
   const confColor = confidenceColors[confidence] || '#6b7280';
 
-  // create card with persistence attributes
   const summaryDiv = document.createElement('div');
   summaryDiv.className = 'metldr-summary';
-  summaryDiv.setAttribute('data-metldr-thread', currentThreadId); // mark with thread ID
-  summaryDiv.setAttribute('data-metldr-injected', 'true'); // mark as our element
-  summaryDiv.setAttribute('data-metldr-persistent', 'true'); // signal to not remove
+  summaryDiv.setAttribute('data-metldr-thread', currentThreadId);
+  summaryDiv.setAttribute('data-metldr-injected', 'true');
+  summaryDiv.setAttribute('data-metldr-persistent', 'true');
   summaryDiv.style.cssText = `
     opacity: 0 !important;
     transform: scale(0.985) !important;
@@ -671,8 +660,6 @@ function injectSummaryUI(threadElement, summary) {
         align-items: center;
         gap: 8px;
         background: ${theme.bgSecondary};
-        backdrop-filter: blur(24px) saturate(180%);
-        -webkit-backdrop-filter: blur(24px) saturate(180%);
         padding: 6px 14px;
         border: 0.5px solid ${theme.borderSubtle};
         border-radius: 12px;
@@ -735,8 +722,6 @@ function injectSummaryUI(threadElement, summary) {
         align-items: center;
         justify-content: center;
         background: ${theme.bgSecondary};
-        backdrop-filter: blur(24px) saturate(180%);
-        -webkit-backdrop-filter: blur(24px) saturate(180%);
         border: 0.5px solid ${theme.borderSubtle};
         border-radius: 50%;
         color: ${theme.primary};
@@ -753,8 +738,6 @@ function injectSummaryUI(threadElement, summary) {
       <!-- main card with liquid glass -->
       <div style="
         background: ${theme.bg};
-        backdrop-filter: blur(32px) saturate(200%);
-        -webkit-backdrop-filter: blur(32px) saturate(200%);
         border: 0.5px solid ${theme.border};
         border-radius: 16px;
         padding: 16px;
@@ -860,7 +843,6 @@ function injectSummaryUI(threadElement, summary) {
     </style>
   `;
 
-  // inject into Gmail right after sender info (same as loading indicator)
   const emailHeader = document.querySelector('.gE.iv.gt') || 
                        document.querySelector('.gE.iv') ||
                        document.querySelector('[data-message-id]');
@@ -873,21 +855,16 @@ function injectSummaryUI(threadElement, summary) {
     
     emailHeader.parentNode.insertBefore(summaryDiv, emailHeader.nextSibling);
     
-    // record injection timestamp to prevent rapid re-injection
     injectionTimestamps.set(currentThreadId, Date.now());
     
-    // use synchronous animation (no rAF delay) with !important to force immediate render
     summaryDiv.style.setProperty('opacity', '0', 'important');
     summaryDiv.style.setProperty('transform', 'scale(0.985)', 'important');
     
-    // force reflow
     summaryDiv.offsetHeight;
     
-    // trigger animation
     summaryDiv.style.setProperty('opacity', '1', 'important');
     summaryDiv.style.setProperty('transform', 'scale(1)', 'important');
     
-    // cleanup will-change after animation
     setTimeout(() => {
       summaryDiv.style.setProperty('will-change', 'auto', 'important');
     }, 500);
@@ -905,17 +882,15 @@ function injectSummaryUI(threadElement, summary) {
   }
 }
 
-// find insertion point in Gmail DOM
 function findInsertionPoint() {
   console.log('MeTLDR: Finding insertion point...');
   
-  // try Gmail specific selectors to find where to inject
   const selectors = [
-    '.nH.if', // expanded email view
-    '.gE.iv.gt', // email header
-    'div[data-message-id]', // message container
-    '.ii.gt', // email body container
-    'div[role="main"] div:first-child', // first child of main area
+    '.nH.if',
+    '.gE.iv.gt',
+    'div[data-message-id]',
+    '.ii.gt',
+    'div[role="main"] div:first-child',
   ];
 
   for (const selector of selectors) {
@@ -926,7 +901,6 @@ function findInsertionPoint() {
     }
   }
 
-  // fallback: find any container that likely contains the email
   const fallback = document.querySelector('div[role="main"] > div:first-child');
   if (fallback) {
     console.log('MeTLDR: Using fallback insertion point');
@@ -937,14 +911,12 @@ function findInsertionPoint() {
   return null;
 }
 
-// escape HTML
 function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
 }
 
-// format time for display
 function formatTime(ms) {
   if (ms < 1000) {
     return `${ms}ms`;
@@ -957,10 +929,8 @@ function formatTime(ms) {
   }
 }
 
-// debounce flag to prevent duplicate regenerations
 let isRegenerating = false;
 
-// regenerate summary (called by button click)
 async function regenerateSummary(threadId) {
   if (isRegenerating) {
     console.log('metldr: regeneration already in progress, skipping');
@@ -971,7 +941,6 @@ async function regenerateSummary(threadId) {
   console.log('metldr: regenerating summary for:', threadId);
   
   try {
-    // remove existing summary fast fade-out + scale-down
     const existing = document.querySelector('.metldr-summary');
     if (existing) {
       existing.style.transition = 'opacity 0.2s cubic-bezier(0.4, 0, 1, 1), transform 0.2s cubic-bezier(0.4, 0, 1, 1)';
@@ -981,7 +950,6 @@ async function regenerateSummary(threadId) {
       existing.remove();
     }
     
-    // process email again with forceRegenerate flag
     const metadata = extractEmailMetadata(document);
     const emailText = extractEmailText(document);
     if (emailText && emailText.length > 50) {
@@ -1004,53 +972,92 @@ async function regenerateSummary(threadId) {
   }
 }
 
-// word selection handling
 let inlinePopupContainer = null;
 
-// update popup theme in real-time when theme changes
 function updatePopupTheme() {
   if (!inlinePopupContainer) return;
   
   const popup = inlinePopupContainer.querySelector('.metldr-popup-body');
   if (!popup) return;
   
-  // update popup background and border with !important
-  popup.style.setProperty('background', currentTheme.bgSecondary, 'important');
-  popup.style.setProperty('background-color', currentTheme.bgSecondary, 'important');
+  const popupBg = currentTheme.bgSecondary;
+  
+  popup.style.setProperty('--metldr-primary', currentTheme.primary, 'important');
+  popup.style.setProperty('--metldr-secondary', currentTheme.secondary, 'important');
+  popup.style.setProperty('--metldr-text', currentTheme.text, 'important');
+  popup.style.setProperty('--metldr-bg-secondary', popupBg, 'important');
+  popup.style.setProperty('--metldr-border', currentTheme.border, 'important');
+  
+  popup.style.setProperty('background', popupBg, 'important');
+  popup.style.setProperty('background-color', popupBg, 'important');
   popup.style.setProperty('border-color', currentTheme.border, 'important');
   popup.style.setProperty('box-shadow', `0 8px 24px ${currentTheme.shadow}, 0 4px 12px ${currentTheme.shadow}, inset 0 1px 0 ${currentTheme.borderSubtle}`, 'important');
   
-  // update all text elements with !important
-  const allSpans = popup.querySelectorAll('span');
-  allSpans.forEach((span, index) => {
-    if (index === 0) {
-      // word (primary color)
-      span.style.setProperty('color', currentTheme.primary, 'important');
-    } else if (span.textContent.includes('AI')) {
-      // ai badge (accent color)
-      span.style.setProperty('color', currentTheme.accent, 'important');
-    } else if (span.parentElement && (span.parentElement.tagName === 'HEADER' || span.style.fontSize === '10px')) {
-      // part of speech (muted)
-      span.style.setProperty('color', currentTheme.textMuted, 'important');
-    }
-  });
-  
-  // update POS tags specifically
-  const posTags = popup.querySelectorAll('div[style*="font-size: 9px"][style*="text-transform: uppercase"]');
-  posTags.forEach(tag => {
-    tag.style.setProperty('color', currentTheme.secondary, 'important');
-  });
+  const header = popup.querySelector('.metldr-popup-header');
+  if (header) {
+    header.style.setProperty('background', popupBg, 'important');
+    header.style.setProperty('background-color', popupBg, 'important');
+  }
   
   const content = popup.querySelector('.metldr-popup-content');
   if (content) {
+    content.style.setProperty('background', popupBg, 'important');
+    content.style.setProperty('background-color', popupBg, 'important');
     content.style.setProperty('color', currentTheme.text, 'important');
-    const defDivs = content.querySelectorAll('div');
-    defDivs.forEach(div => {
-      div.style.setProperty('color', currentTheme.text, 'important');
+  }
+  
+  const defsContainer = popup.querySelector('.metldr-definitions-scroll');
+  if (defsContainer) {
+    defsContainer.style.setProperty('background', popupBg, 'important');
+    defsContainer.style.setProperty('background-color', popupBg, 'important');
+  }
+  
+  const synonymsLabel = content?.querySelector('span[style*="text-transform: uppercase"]');
+  const synonymsContainer = synonymsLabel?.parentElement;
+  if (synonymsContainer && synonymsLabel?.textContent?.toLowerCase().includes('synonyms')) {
+    synonymsContainer.style.setProperty('background', popupBg, 'important');
+    synonymsContainer.style.setProperty('background-color', popupBg, 'important');
+    synonymsContainer.style.setProperty('border-color', currentTheme.borderSubtle || currentTheme.border, 'important');
+    
+    const synTags = synonymsContainer.querySelectorAll('span[style*="padding: 2px 6px"]');
+    synTags.forEach(tag => {
+      tag.style.setProperty('color', currentTheme.secondary || currentTheme.primary, 'important');
+      tag.style.setProperty('background', currentTheme.bgSecondary, 'important');
+      tag.style.setProperty('background-color', currentTheme.bgSecondary, 'important');
     });
   }
   
-  console.log('[POPUP] theme updated in real-time:', currentTheme);
+  const wordSpan = header?.querySelector('span');
+  if (wordSpan && wordSpan.textContent && wordSpan.textContent.length < 50 && !wordSpan.textContent.includes('AI')) {
+    wordSpan.style.setProperty('color', currentTheme.primary, 'important');
+  }
+  
+  const aiBadge = header?.querySelector('span[title="AI generated definition"]');
+  if (aiBadge) {
+    aiBadge.style.setProperty('color', currentTheme.accent, 'important');
+  }
+  
+  if (content) {
+    const posElements = content.querySelectorAll('[data-element-type="pos"]');
+    posElements.forEach(el => {
+      el.style.setProperty('color', currentTheme.secondary, 'important');
+      el.style.setProperty('border-bottom-color', currentTheme.border, 'important');
+    });
+    
+    const defElements = content.querySelectorAll('[data-element-type="definition"]');
+    defElements.forEach(el => {
+      el.style.setProperty('color', currentTheme.text, 'important');
+    });
+    
+    const defBlocks = content.querySelectorAll('[data-element-type="def-block"]');
+    defBlocks.forEach(block => {
+      block.style.setProperty('background', popupBg, 'important');
+      block.style.setProperty('background-color', popupBg, 'important');
+      block.style.setProperty('border-bottom-color', currentTheme.border, 'important');
+    });
+  }
+  
+  console.log('[POPUP] theme updated in real-time:', currentThemeName, 'using bg:', popupBg);
 }
 
 function updateSummaryTheme() {
@@ -1087,104 +1094,74 @@ function updateSummaryTheme() {
   if (existingSummary) {
     console.log('Found existing summary, updating...');
 
-    // update the status badge background and styling
     const statusBadge = existingSummary.querySelector('div[style*="position: absolute"]');
     if (statusBadge) {
-      console.log('Updating status badge');
       statusBadge.style.setProperty('background', theme.bgSecondary, 'important');
       statusBadge.style.setProperty('background-color', theme.bgSecondary, 'important');
       statusBadge.style.setProperty('border-color', theme.borderSubtle, 'important');
       statusBadge.style.setProperty('box-shadow', `0 4px 12px ${theme.shadow}, inset 0 1px 0 ${theme.borderSubtle}`, 'important');
 
-      // update text colors in status badge
       const brandingText = statusBadge.querySelector('strong');
       if (brandingText) {
-        console.log('Updating branding text');
         brandingText.style.setProperty('color', theme.primary, 'important');
       }
 
       const modelText = statusBadge.querySelector('span[title*="model used"]');
       if (modelText) {
-        console.log('Updating model text');
         modelText.style.setProperty('color', theme.textMuted, 'important');
       }
 
       const timeText = statusBadge.querySelector('span[title*="time taken"]');
       if (timeText) {
-        console.log('Updating time text');
         timeText.style.setProperty('color', theme.textMuted, 'important');
       }
 
       const separators = statusBadge.querySelectorAll('span[style*="opacity: 0.5"]');
-      console.log(`Updating ${separators.length} separators`);
       separators.forEach(sep => sep.style.setProperty('color', theme.borderSubtle, 'important'));
-    } else {
-      console.log('Status badge not found');
     }
 
-    // update regenerate button
     const regenerateBtn = existingSummary.querySelector('.metldr-regenerate-btn');
     if (regenerateBtn) {
-      console.log('Updating regenerate button');
       regenerateBtn.style.setProperty('background', theme.bgSecondary, 'important');
       regenerateBtn.style.setProperty('background-color', theme.bgSecondary, 'important');
       regenerateBtn.style.setProperty('border-color', theme.borderSubtle, 'important');
       regenerateBtn.style.setProperty('color', theme.primary, 'important');
       regenerateBtn.style.setProperty('box-shadow', `0 4px 12px ${theme.shadow}, inset 0 1px 0 ${theme.borderSubtle}`, 'important');
-    } else {
-      console.log('Regenerate button not found');
     }
 
-    // update main card - use more specific selector for the outer card with backdrop-filter
-    const mainCard = existingSummary.querySelector('div[style*="backdrop-filter: blur(32px)"]');
+    const mainCard = existingSummary.querySelector('div[style*="border-radius: 16px"]');
     if (mainCard) {
-      console.log('updating main card');
       mainCard.style.setProperty('background', theme.bg, 'important');
       mainCard.style.setProperty('background-color', theme.bg, 'important');
       mainCard.style.setProperty('border-color', theme.border, 'important');
       mainCard.style.setProperty('box-shadow', `0 8px 32px ${theme.shadow}, inset 0 1px 0 ${theme.borderSubtle}`, 'important');
 
-      // update summary items
       const summaryItems = existingSummary.querySelectorAll('.metldr-summary-item');
-      console.log(`Found ${summaryItems.length} summary items to update`);
       summaryItems.forEach((item, index) => {
-        console.log(`Updating summary item ${index + 1}`);
-        // Set both background and background-color to ensure it overrides
         item.style.setProperty('background', theme.bgSecondary, 'important');
         item.style.setProperty('background-color', theme.bgSecondary, 'important');
         item.style.setProperty('color', theme.text, 'important');
-        console.log(`   After: background=${item.style.background}, backgroundColor=${item.style.backgroundColor}`);
 
-        // update action items header
         const actionHeader = item.querySelector('div[style*="text-transform: uppercase"]');
         if (actionHeader) {
-          console.log(`Updating action header in item ${index + 1}`);
           actionHeader.style.setProperty('color', theme.secondary, 'important');
         }
 
-        // update bullet points
         const bullets = item.querySelectorAll('span[style*="position: absolute"][style*="left: 0"]');
-        console.log(`Updating ${bullets.length} bullets in item ${index + 1}`);
         bullets.forEach(bullet => {
           bullet.style.setProperty('color', theme.secondary, 'important');
         });
 
-        // update list items
         const listItems = item.querySelectorAll('li');
-        console.log(`Updating ${listItems.length} list items in item ${index + 1}`);
         listItems.forEach(li => li.style.setProperty('color', theme.text, 'important'));
 
-        // Update date tags
         const dateTags = item.querySelectorAll('span[style*="background:"]');
-        console.log(`Updating ${dateTags.length} date tags in item ${index + 1}`);
         dateTags.forEach(tag => {
           tag.style.setProperty('background', theme.bgSecondary, 'important');
           tag.style.setProperty('background-color', theme.bgSecondary, 'important');
           tag.style.setProperty('color', theme.accent, 'important');
         });
       });
-    } else {
-      console.log('Main card not found');
     }
   } else {
     console.log('No existing summary found');
@@ -1194,10 +1171,8 @@ function updateSummaryTheme() {
 }document.addEventListener('mouseup', handleTextSelection);
 
 function handleTextSelection(e) {
-  // don't interfere with gmail email processing
   if (isGmail) return;
   
-  // ignore mouseup inside existing popup (allow interaction within popup)
   if (inlinePopupContainer && inlinePopupContainer.contains(e.target)) {
     return;
   }
@@ -1205,7 +1180,6 @@ function handleTextSelection(e) {
   const selection = window.getSelection();
   const selectedText = selection.toString().trim();
   
-  // remove existing popup (with animation if present)
   if (inlinePopupContainer) {
     cleanupPopup();
   }
@@ -1214,79 +1188,89 @@ function handleTextSelection(e) {
   
   const wordCount = selectedText.split(/\s+/).length;
   
-  // single word: show inline popup for definition/translation
   if (wordCount === 1) {
-    // get selection rect for accurate positioning
     const selection = window.getSelection();
     if (selection.rangeCount > 0) {
       const range = selection.getRangeAt(0);
       const rect = range.getBoundingClientRect();
-      showInlinePopup(selectedText, rect);
+      
+      const node = range.commonAncestorContainer;
+      const fullText = node.textContent || '';
+      const offset = range.startOffset;
+      
+      const sentenceEndChars = /[.!?\n]/;
+      let sentenceStart = 0;
+      let sentenceEnd = fullText.length;
+      
+      for (let i = offset; i >= 0; i--) {
+        if (sentenceEndChars.test(fullText[i]) || i === 0) {
+          sentenceStart = i === 0 ? 0 : i + 1;
+          break;
+        }
+      }
+      
+      for (let i = offset + selectedText.length; i < fullText.length; i++) {
+        if (sentenceEndChars.test(fullText[i])) {
+          sentenceEnd = i + 1;
+          break;
+        }
+      }
+      
+      const fullSentence = fullText.substring(sentenceStart, sentenceEnd).trim();
+      const contextBefore = fullText.substring(sentenceStart, offset).trim();
+      const contextAfter = fullText.substring(offset + selectedText.length, sentenceEnd).trim();
+      
+      showInlinePopup(selectedText, rect, { contextBefore, contextAfter, fullSentence });
     }
   }
-  // multi-word: context menu handles this (already implemented)
 }
 
-// store selection range for persistent positioning
 let popupAnchorRange = null;
 let scrollListener = null;
 let resizeListener = null;
 let clickListener = null;
 
-// update popup position based on current word location
 function updatePopupPosition() {
   if (!inlinePopupContainer || !popupAnchorRange) return;
   
-  // get current position of the anchored word
-  const rect = popupAnchorRange.getBoundingClientRect();
-  const popupRect = inlinePopupContainer.getBoundingClientRect();
-  
-  const scrollX = window.pageXOffset || document.documentElement.scrollLeft;
-  const scrollY = window.pageYOffset || document.documentElement.scrollTop;
-  
-  // calculate center of word in document coordinates
-  const wordCenterX = rect.left + (rect.width / 2) + scrollX;
-  const wordBottomY = rect.bottom + scrollY;
-  
-  // position popup centered below word
-  let finalX = wordCenterX - (popupRect.width / 2);
-  let finalY = wordBottomY + 12;
-  
-  // viewport boundary checks
-  const viewportWidth = window.innerWidth;
-  const viewportHeight = window.innerHeight;
-  
-  // convert to viewport coordinates for bounds checking
-  const viewportX = finalX - scrollX;
-  const viewportY = finalY - scrollY;
-  
-  // clamp horizontal position within viewport
-  if (viewportX < 10) {
-    finalX = scrollX + 10;
-  } else if (viewportX + popupRect.width > viewportWidth - 10) {
-    finalX = scrollX + viewportWidth - popupRect.width - 10;
+  try {
+    const rect = popupAnchorRange.getBoundingClientRect();
+    const popupRect = inlinePopupContainer.getBoundingClientRect();
+    
+    const wordCenterX = rect.left + (rect.width / 2);
+    const wordBottomY = rect.bottom;
+    
+    let finalX = wordCenterX - (popupRect.width / 2);
+    let finalY = wordBottomY + 12;
+    
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    
+    if (finalX < 10) {
+      finalX = 10;
+    } else if (finalX + popupRect.width > viewportWidth - 10) {
+      finalX = viewportWidth - popupRect.width - 10;
+    }
+    
+    if (finalY + popupRect.height > viewportHeight - 10) {
+      finalY = rect.top - popupRect.height - 8;
+    }
+    
+    if (finalY < 10) {
+      finalY = 10;
+    }
+    
+    inlinePopupContainer.style.position = 'fixed';
+    inlinePopupContainer.style.top = finalY + 'px';
+    inlinePopupContainer.style.left = finalX + 'px';
+  } catch (error) {
+    console.log('[POPUP] error updating position:', error.message);
   }
-  
-  // flip above word if no space below
-  if (viewportY + popupRect.height > viewportHeight - 10) {
-    finalY = wordBottomY - rect.height - popupRect.height - 8;
-  }
-  
-  // ensure not off top of viewport
-  if ((finalY - scrollY) < 10) {
-    finalY = scrollY + 10;
-  }
-  
-  // apply position
-  inlinePopupContainer.style.top = finalY + 'px';
-  inlinePopupContainer.style.left = finalX + 'px';
 }
 
-// cleanup popup and all event listeners
 function cleanupPopup() {
   if (!inlinePopupContainer) return;
   
-  // smooth fade-out animation before removal
   gsap.to(inlinePopupContainer, {
     opacity: 0,
     scale: 0.94,
@@ -1302,7 +1286,6 @@ function cleanupPopup() {
     }
   });
   
-  // remove event listeners immediately (don't wait for animation)
   if (scrollListener) {
     window.removeEventListener('scroll', scrollListener, true);
     scrollListener = null;
@@ -1319,42 +1302,44 @@ function cleanupPopup() {
   }
 }
 
-async function showInlinePopup(word, selectionRect) {
+async function showInlinePopup(word, selectionRect, contextData = {}) {
   const settings = await chrome.storage.local.get(['wordPopupEnabled']);
   if (settings.wordPopupEnabled === false) return;
   
-  // reload current theme to ensure reactivity
   await loadCurrentTheme();
   
   const isEnglish = /^[a-zA-Z]+$/.test(word);
   const lookupType = isEnglish ? 'definition' : 'translation';
   
-  // store the selection range for continuous repositioning
   const selection = window.getSelection();
   if (selection.rangeCount > 0) {
     popupAnchorRange = selection.getRangeAt(0).cloneRange();
   }
   
-  // create popup with absolute positioning
   inlinePopupContainer = document.createElement('div');
   inlinePopupContainer.className = 'metldr-inline-word-popup';
   
-  // initial position (will be updated by updatePopupPosition)
   inlinePopupContainer.style.cssText = `
-    position: absolute;
+    position: fixed;
     top: 0px;
     left: 0px;
     z-index: 999999;
     transform-origin: top left;
     visibility: hidden;
     will-change: opacity, transform;
+    background: transparent;
+    pointer-events: none;
   `;
   
   const popup = document.createElement('div');
   popup.className = 'metldr-popup-body';
+  
+  const popupBg = currentTheme.bgSecondary;
+  
   popup.style.cssText = `
     --metldr-primary: ${currentTheme.primary};
-    background: ${currentTheme.bgSecondary};
+    background: ${popupBg} !important;
+    background-color: ${popupBg} !important;
     border: 1.5px solid ${currentTheme.border};
     border-radius: 12px;
     padding: 12px 16px;
@@ -1363,9 +1348,9 @@ async function showInlinePopup(word, selectionRect) {
     box-shadow: 0 8px 24px ${currentTheme.shadow}, 0 4px 12px ${currentTheme.shadow}, inset 0 1px 0 ${currentTheme.borderSubtle};
     font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', system-ui, sans-serif;
     will-change: opacity, transform;
+    pointer-events: auto;
   `;
   
-  // header: word + part of speech + source (single line)
   const header = document.createElement('div');
   header.style.cssText = `
     display: flex;
@@ -1386,7 +1371,6 @@ async function showInlinePopup(word, selectionRect) {
   wordSpan.textContent = word;
   header.appendChild(wordSpan);
   
-  // content area (definition)
   const content = document.createElement('div');
   content.className = 'metldr-popup-content';
   content.style.cssText = `
@@ -1398,7 +1382,6 @@ async function showInlinePopup(word, selectionRect) {
     -webkit-font-smoothing: antialiased;
   `;
   
-  // loading state
   const loader = document.createElement('div');
   loader.style.cssText = 'display: flex; align-items: center; gap: 6px;';
   
@@ -1423,7 +1406,6 @@ async function showInlinePopup(word, selectionRect) {
   loader.appendChild(spinner);
   loader.appendChild(loadText);
   
-  // add loading to header
   const tempMeta = document.createElement('span');
   tempMeta.style.cssText = `
     font-size: 10px;
@@ -1442,13 +1424,12 @@ async function showInlinePopup(word, selectionRect) {
   inlinePopupContainer.appendChild(popup);
   document.body.appendChild(inlinePopupContainer);
   
-  // position popup initially
+  updatePopupTheme();
+  
   updatePopupPosition();
   
-  // show popup with animation
   inlinePopupContainer.style.visibility = 'visible';
   
-  // smooth pop animation with GSAP
   gsap.fromTo(inlinePopupContainer, 
     { 
       opacity: 0, 
@@ -1464,50 +1445,150 @@ async function showInlinePopup(word, selectionRect) {
     }
   );
   
-  // setup event listeners for persistent positioning
   scrollListener = () => updatePopupPosition();
   resizeListener = () => updatePopupPosition();
   clickListener = (e) => {
-    // don't close if clicking inside popup
     if (inlinePopupContainer && !inlinePopupContainer.contains(e.target)) {
       cleanupPopup();
     }
   };
   
-  // reposition on scroll/resize, close on outside click
-  window.addEventListener('scroll', scrollListener, true);
+  window.addEventListener('scroll', scrollListener, { passive: true });
   window.addEventListener('resize', resizeListener);
   
-  // add click listener after small delay to avoid immediate closure
   setTimeout(() => {
     document.addEventListener('click', clickListener);
   }, 100);
   
-  // fetch result
   try {
     console.log('[POPUP] sending word lookup request:', word);
     const response = await chrome.runtime.sendMessage({
       type: 'WORD_LOOKUP',
       word,
-      lookupType
+      lookupType,
+      context: contextData
     });
     
     console.log('[POPUP] received response:', response);
     
-    // clear loading state
     header.innerHTML = '';
     content.innerHTML = '';
     
-    // rebuild header with word
-    const wordSpan = document.createElement('span');
-    wordSpan.style.cssText = `
-      font-size: 14px;
-      font-weight: 600;
+    // reusable badge CSS style (for all synonym badges, counters, etc)
+    const badgeStyle = `
+      font-size: 11px;
       color: ${currentTheme.primary || '#00f0ff'};
-      letter-spacing: 0.2px;
+      padding: 3px 7px;
+      background: ${currentTheme.border || 'rgba(255,255,255,0.08)'};
+      border-radius: 4px;
+      font-weight: 700;
+      border: 1px solid ${currentTheme.border || 'rgba(255,255,255,0.15)'};
+      opacity: 1;
+      white-space: nowrap;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
     `;
-    wordSpan.textContent = word;
-    header.appendChild(wordSpan);
+    
+    // helper function to render word header with inline synonyms
+    function renderWordHeader(wordText, synonymsList = [], sourceType = null) {
+      const headerContainer = document.createElement('div');
+      headerContainer.style.cssText = `
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 6px;
+      `;
+      
+      // main word
+      const wordSpan = document.createElement('span');
+      wordSpan.style.cssText = `
+        font-size: 14px;
+        font-weight: 700;
+        color: ${currentTheme.primary || '#00f0ff'};
+        letter-spacing: 0.2px;
+      `;
+      wordSpan.textContent = word;
+      headerContainer.appendChild(wordSpan);
+      
+      // inline synonyms (visible ones)
+      if (synonymsList && synonymsList.length > 0) {
+        const visibleSyns = synonymsList.slice(0, 4);
+        const hiddenSyns = synonymsList.slice(4);
+        const hiddenCount = hiddenSyns.length;
+        
+        visibleSyns.forEach((syn, idx) => {
+          const synBadge = document.createElement('span');
+          synBadge.style.cssText = badgeStyle;
+          synBadge.textContent = syn.length > 11 ? syn.substring(0, 10) + '…' : syn;
+          headerContainer.appendChild(synBadge);
+        });
+        
+        // show "+N more" if there are hidden synonyms with tooltip
+        if (hiddenCount > 0) {
+          const moreIndicator = document.createElement('span');
+          moreIndicator.style.cssText = badgeStyle + `
+            cursor: help;
+            position: relative;
+          `;
+          moreIndicator.textContent = `+${hiddenCount}`;
+          
+          // hidden tooltip (starts invisible) - positioned to the right to avoid blocking
+          const tooltip = document.createElement('div');
+          tooltip.style.cssText = `
+            position: fixed;
+            background: ${currentTheme.bgSecondary};
+            color: ${currentTheme.text};
+            padding: 8px 10px;
+            border-radius: 5px;
+            border: 1px solid ${currentTheme.border};
+            font-size: 11px;
+            white-space: normal;
+            max-width: 200px;
+            z-index: 2147483647;
+            box-shadow: 0 8px 24px ${currentTheme.shadow};
+            pointer-events: auto;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 150ms ease-out, visibility 150ms ease-out;
+            font-weight: 600;
+            line-height: 1.5;
+            word-break: break-word;
+          `;
+          tooltip.textContent = hiddenSyns.join(', ');
+          document.body.appendChild(tooltip);
+          
+          // show tooltip on hover - position dynamically to right side
+          moreIndicator.addEventListener('mouseenter', () => {
+            const rect = moreIndicator.getBoundingClientRect();
+            tooltip.style.left = (rect.right + 8) + 'px';
+            tooltip.style.top = (rect.top - 8) + 'px';
+            tooltip.style.opacity = '1';
+            tooltip.style.visibility = 'visible';
+          });
+          
+          moreIndicator.addEventListener('mouseleave', () => {
+            tooltip.style.opacity = '0';
+            tooltip.style.visibility = 'hidden';
+          });
+          
+          headerContainer.appendChild(moreIndicator);
+        }
+      }
+      
+      // source badge (AI for ollama)
+      if (sourceType === 'ollama') {
+        const sourceHint = document.createElement('span');
+        sourceHint.setAttribute('title', 'AI generated definition');
+        sourceHint.style.cssText = badgeStyle + `
+          cursor: help;
+        `;
+        sourceHint.textContent = 'ai';
+        headerContainer.appendChild(sourceHint);
+      }
+      
+      return headerContainer;
+    }
     
     if (!response || response.error) {
       const errorText = document.createElement('span');
@@ -1516,24 +1597,26 @@ async function showInlinePopup(word, selectionRect) {
         color: ${currentTheme.secondary || '#ff0080'};
         font-size: 11px;
       `;
+      const wordSpan = document.createElement('span');
+      wordSpan.style.cssText = `
+        font-size: 14px;
+        font-weight: 600;
+        color: ${currentTheme.primary || '#00f0ff'};
+        letter-spacing: 0.2px;
+      `;
+      wordSpan.textContent = word;
+      header.appendChild(wordSpan);
       content.appendChild(errorText);
     } else if (response.result) {
       if (lookupType === 'definition') {
-        // add source indicator for ollama
-        if (response.result.source === 'ollama') {
-          const sourceHint = document.createElement('span');
-          sourceHint.style.cssText = `
-            font-size: 9px;
-            color: ${currentTheme.yellow || '#fbbf24'};
-            margin-left: 8px;
-            opacity: 0.8;
-            letter-spacing: 0.3px;
-          `;
-          sourceHint.textContent = 'AI';
-          header.appendChild(sourceHint);
-        }
+        // get synonyms from result
+        const synonymsList = response.result.synonyms || [];
+        const sourceType = response.result.source; // 'api', 'local', or 'ollama'
         
-        // render all definitions
+        // render header with inline synonyms
+        header.appendChild(renderWordHeader(word, synonymsList, sourceType));
+
+        
         const definitions = response.result.definitions || [];
         
         if (definitions.length === 0) {
@@ -1545,7 +1628,6 @@ async function showInlinePopup(word, selectionRect) {
           `;
           content.appendChild(errorText);
         } else {
-          // create scrollable container for definitions
           const defsContainer = document.createElement('div');
           defsContainer.className = 'metldr-definitions-scroll';
           defsContainer.style.cssText = `
@@ -1553,23 +1635,29 @@ async function showInlinePopup(word, selectionRect) {
             overflow-y: auto;
             margin: 0;
             padding-right: 4px;
+            background: ${currentTheme.bgSecondary} !important;
+            background-color: ${currentTheme.bgSecondary} !important;
+            border-radius: 8px;
           `;
           
-          // prevent internal scroll from triggering popup repositioning
           defsContainer.addEventListener('scroll', (e) => {
             e.stopPropagation();
           }, true);
           
           definitions.forEach((def, index) => {
             const defBlock = document.createElement('div');
+            defBlock.setAttribute('data-element-type', 'def-block');
             defBlock.style.cssText = `
+              background: ${currentTheme.bgSecondary} !important;
+              background-color: ${currentTheme.bgSecondary} !important;
               margin-bottom: ${index < definitions.length - 1 ? '12px' : '0'};
+              padding: 8px 0;
               padding-bottom: ${index < definitions.length - 1 ? '12px' : '0'};
               border-bottom: ${index < definitions.length - 1 ? `1px solid ${currentTheme.border || 'rgba(255,255,255,0.1)'}` : 'none'};
             `;
             
-            // part of speech tag
             const posTag = document.createElement('div');
+            posTag.setAttribute('data-element-type', 'pos');
             posTag.style.cssText = `
               font-size: 9px;
               color: ${currentTheme.secondary || '#ff0080'};
@@ -1581,8 +1669,8 @@ async function showInlinePopup(word, selectionRect) {
             posTag.textContent = def.partOfSpeech || 'unknown';
             defBlock.appendChild(posTag);
             
-            // definition text
             const defText = document.createElement('div');
+            defText.setAttribute('data-element-type', 'definition');
             defText.style.cssText = `
               font-size: 13px;
               line-height: 1.55;
@@ -1592,7 +1680,6 @@ async function showInlinePopup(word, selectionRect) {
             defText.textContent = def.definition;
             defBlock.appendChild(defText);
             
-            // example (if available)
             if (def.example) {
               const exampleText = document.createElement('div');
               exampleText.style.cssText = `
@@ -1634,7 +1721,6 @@ async function showInlinePopup(word, selectionRect) {
       }
     }
     
-    // reposition after content loaded (popup size changed)
     updatePopupPosition();
   } catch (error) {
     console.error('metldr: word lookup failed:', error);
@@ -1644,12 +1730,10 @@ async function showInlinePopup(word, selectionRect) {
     errorText.style.cssText = `color: ${currentTheme.secondary || '#ff0080'}; font-size: 10px;`;
     content.appendChild(errorText);
     
-    // reposition after error content loaded
     updatePopupPosition();
   }
 }
 
-// add animations and scrollbar styling
 if (!document.getElementById('metldr-word-popup-animations')) {
   const style = document.createElement('style');
   style.id = 'metldr-word-popup-animations';
@@ -1682,7 +1766,6 @@ if (!document.getElementById('metldr-word-popup-animations')) {
       }
     }
     
-    /* minimal themed scrollbar */
     .metldr-definitions-scroll::-webkit-scrollbar {
       width: 4px;
     }
@@ -1701,7 +1784,6 @@ if (!document.getElementById('metldr-word-popup-animations')) {
       opacity: 0.8;
     }
     
-    /* firefox scrollbar */
     .metldr-definitions-scroll {
       scrollbar-width: thin;
       scrollbar-color: var(--metldr-primary) transparent;
@@ -1710,11 +1792,9 @@ if (!document.getElementById('metldr-word-popup-animations')) {
   document.head.appendChild(style);
 }
 
-// dwell-time monitoring for pre-summarisation
 function startDwellMonitoring() {
   console.log('metldr: starting dwell-time monitoring');
   
-  // reset timer on page change
   const urlObserver = setInterval(() => {
     if (window.location.href !== currentPageUrl) {
       console.log('metldr: url changed, resetting dwell timer');
@@ -1724,12 +1804,10 @@ function startDwellMonitoring() {
     }
   }, 1000);
 
-  // increment dwell timer when page is focused
   dwellInterval = setInterval(() => {
     if (!document.hidden && document.hasFocus()) {
       dwellTimer++;
       
-      // trigger pre summarisation at threshold
       if (dwellTimer === DWELL_THRESHOLD && !summarisationQueued) {
         console.log('metldr: dwell threshold reached, queueing pre-summarisation');
         queuePreSummarisation();
@@ -1737,13 +1815,11 @@ function startDwellMonitoring() {
     }
   }, 1000);
 
-  // reset timer on user navigation
   window.addEventListener('beforeunload', () => {
     dwellTimer = 0;
     summarisationQueued = false;
   });
 
-  // pause timer when tab hidden
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
       console.log('metldr: tab hidden, pausing dwell timer');
@@ -1756,7 +1832,6 @@ function startDwellMonitoring() {
 async function queuePreSummarisation() {
   summarisationQueued = true;
   
-  // detect if page is worth summarising
   const detector = new ContentDetector();
   const pageInfo = detector.detectPageType();
   
@@ -1767,7 +1842,6 @@ async function queuePreSummarisation() {
     return;
   }
 
-  // extract content
   const extracted = detector.extractContent();
   
   if (!extracted.content || extracted.content.length < 200) {
@@ -1777,14 +1851,13 @@ async function queuePreSummarisation() {
 
   console.log('metldr: sending content for pre-summarisation');
   
-  // send to background for low priority summarisation
   chrome.runtime.sendMessage({
     type: 'PRE_SUMMARISE',
     priority: 'low',
     url: window.location.href,
     pageType: pageInfo.type,
     metadata: pageInfo.metadata,
-    content: extracted.content.slice(0, 5000), // limit to 5k chars
+    content: extracted.content.slice(0, 5000),
     sections: extracted.sections
   }).catch(err => {
     console.error('metldr: failed to queue pre-summarisation:', err);
