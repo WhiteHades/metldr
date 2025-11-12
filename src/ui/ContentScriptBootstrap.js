@@ -32,6 +32,22 @@ export class ContentScriptBootstrap {
       });
       pageMonitor.startDwellMonitoring();
     }
+
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (message.type === 'REQUEST_PAGE_SUMMARY' && !isGmail) {
+        console.log('metldr: received request for page summary from side panel');
+        (async () => {
+          try {
+            await pageMonitor.queuePreSummarization();
+            sendResponse({ queued: true });
+          } catch (err) {
+            console.error('metldr: failed to queue pre-summarisation:', err);
+            sendResponse({ queued: false, error: err.message });
+          }
+        })();
+        return true;
+      }
+    });
   }
 
   static setupThemeListeners() {
