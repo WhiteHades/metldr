@@ -34,17 +34,5 @@
     "http://localhost:11434/*",
     "http://127.0.0.1:11434/*",
     "<all_urls>"
-  ],
-  "web_accessible_resources": [
-    {
-      "resources": [
-        "default.mp4",
-        "light.mp4",
-        "cyberpunk_2077.mp4",
-        "catppuccin.mp4",
-        "gruvbox.mp4"
-      ],
-      "matches": ["<all_urls>"]
-    }
   ]
 }
