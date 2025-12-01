@@ -1,11 +1,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue';
-import { useThemeStore } from '../stores/theme.js';
 import { gsap } from 'gsap';
-import { Mail, Zap, Database, Loader2, ChevronRight, Sparkles } from 'lucide-vue-next';
-
-const themeStore = useThemeStore();
-const theme = computed(() => themeStore.colors);
+import { FileText, Clock, Zap, Loader2, ChevronRight, TrendingUp, Trash2 } from 'lucide-vue-next';
 
 const props = defineProps({
   limit: {
@@ -19,7 +15,7 @@ const loading = ref(true);
 
 async function openDB() {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open('metldr_summaries', 2);
+    const request = indexedDB.open('metldr_cache', 2);
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
     request.onupgradeneeded = (event) => {
@@ -58,26 +54,35 @@ async function loadHistory() {
 }
 
 const stats = computed(() => {
-  const today = new Date().setHours(0, 0, 0, 0);
-  const todayItems = history.value.filter(item => {
-    const itemDate = new Date(item.timestamp).setHours(0, 0, 0, 0);
-    return itemDate === today;
-  });
-
-  const totalTime = todayItems.reduce((sum, item) => {
-    return sum + (item.summary?.time_ms || 0);
+  const total = history.value.length;  
+  const timeSavedMins = total * 2.5;
+  const totalTime = history.value.reduce((sum, item) => {
+    return sum + (item.summary?.time_ms || 2000);
   }, 0);
+  const avgTime = total > 0 ? totalTime / total : 0;
 
-  const avgTime = todayItems.length > 0 ? totalTime / todayItems.length : 0;
-
-  const cacheHits = todayItems.filter(item => item.summary?.cached).length;
+  const weekAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+  const thisWeek = history.value.filter(item => item.timestamp > weekAgo).length;
 
   return {
-    todayCount: todayItems.length,
-    avgTime: avgTime,
-    cacheHitRate: todayItems.length > 0 ? (cacheHits / todayItems.length) * 100 : 0
+    total,
+    timeSaved: timeSavedMins,
+    avgSpeed: avgTime,
+    thisWeek
   };
 });
+
+async function clearHistory() {
+  if (!confirm('clear all summary history?')) return;
+  try {
+    const db = await openDB();
+    const tx = db.transaction(['summaries'], 'readwrite');
+    tx.objectStore('summaries').clear();
+    history.value = [];
+  } catch (err) {
+    console.error('metldr: failed to clear history:', err);
+  }
+}
 
 function formatTimestamp(ts) {
   const date = new Date(ts);
@@ -102,7 +107,6 @@ function openThread(emailId) {
   chrome.tabs.create({ url });
 }
 
-// gsap
 async function animateStats() {
   await nextTick();
   
@@ -110,7 +114,6 @@ async function animateStats() {
   const values = document.querySelectorAll('.stat-value');
   const bars = document.querySelectorAll('.stat-bar');
   
-  // only animate if elements exist
   if (cards.length === 0) return;
   
   gsap.from(cards, {
@@ -186,116 +189,98 @@ defineExpose({
 <template>
   <div class="space-y-4">
     <!-- stats -->
-    <div class="grid grid-cols-3 gap-2.5">
-      <!-- today count -->
+    <div class="grid grid-cols-3 gap-2">
+      <!-- total summaries -->
       <div 
-        class="stat-card glass-strong rounded-xl px-4 py-4 border overflow-hidden transition-all duration-200 hover:scale-[1.02]"
-        title="emails summarised today"
-        :style="{ 
-          borderColor: theme.primary,
-          boxShadow: `0 4px 16px color-mix(in oklch, ${theme.primary} 20%, transparent)`
-        }"
+        class="stat-card bg-base-200/60 backdrop-blur-sm border border-primary/20 rounded-xl p-3 relative overflow-hidden transition-all duration-200 hover:scale-[1.02] hover:shadow-lg"
       >
         <div class="flex flex-col items-center text-center relative z-10">
-          <Mail :size="16" :stroke-width="2.5" class="mb-2" :style="{ color: theme.primary }" />
-          <div class="stat-value text-2xl font-bold font-mono tabular-nums" :style="{ color: theme.primary }">
-            {{ stats.todayCount }}
+          <div class="w-8 h-8 rounded-lg bg-primary/15 flex items-center justify-center mb-2">
+            <FileText :size="14" :stroke-width="2.5" class="text-primary" />
           </div>
-          <div class="text-[10px] font-semibold mt-1 uppercase tracking-wider" :style="{ color: theme.textMuted }">
-            today
+          <div class="stat-value text-xl font-bold font-mono tabular-nums text-primary">
+            {{ stats.total }}
+          </div>
+          <div class="text-[10px] font-medium mt-0.5 uppercase tracking-wider text-base-content/50">
+            Total
           </div>
         </div>
-        <div 
-          class="stat-bar absolute bottom-0 left-0 right-0 h-0.5"
-          :style="{ 
-            background: `linear-gradient(90deg, transparent, ${theme.primary}, transparent)`
-          }"
-        ></div>
+        <div class="stat-bar absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-primary to-transparent"></div>
       </div>
 
-      <!-- avg speed -->
+      <!-- time saved -->
       <div 
-        class="stat-card glass-strong rounded-xl px-4 py-4 border overflow-hidden transition-all duration-200 hover:scale-[1.02]"
-        title="average processing time"
-        :style="{ 
-          borderColor: theme.secondary,
-          boxShadow: `0 4px 16px color-mix(in oklch, ${theme.secondary} 20%, transparent)`
-        }"
+        class="stat-card bg-base-200/60 backdrop-blur-sm border border-secondary/20 rounded-xl p-3 relative overflow-hidden transition-all duration-200 hover:scale-[1.02] hover:shadow-lg"
       >
         <div class="flex flex-col items-center text-center relative z-10">
-          <Zap :size="16" :stroke-width="2.5" class="mb-2" :style="{ color: theme.secondary }" />
-          <div class="stat-value text-2xl font-bold font-mono tabular-nums" :style="{ color: theme.secondary }">
-            {{ (stats.avgTime / 1000).toFixed(1) }}s
+          <div class="w-8 h-8 rounded-lg bg-secondary/15 flex items-center justify-center mb-2">
+            <Clock :size="14" :stroke-width="2.5" class="text-secondary" />
           </div>
-          <div class="text-[10px] font-semibold mt-1 uppercase tracking-wider" :style="{ color: theme.textMuted }">
-            speed
+          <div class="stat-value text-xl font-bold font-mono tabular-nums text-secondary">
+            {{ stats.timeSaved >= 60 ? Math.round(stats.timeSaved / 60) + 'h' : Math.round(stats.timeSaved) + 'm' }}
+          </div>
+          <div class="text-[10px] font-medium mt-0.5 uppercase tracking-wider text-base-content/50">
+            Saved
           </div>
         </div>
-        <div 
-          class="stat-bar absolute bottom-0 left-0 right-0 h-0.5"
-          :style="{ 
-            background: `linear-gradient(90deg, transparent, ${theme.secondary}, transparent)`
-          }"
-        ></div>
+        <div class="stat-bar absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-secondary to-transparent"></div>
       </div>
 
-      <!-- cache -->
+      <!-- this week -->
       <div 
-        class="stat-card glass-strong rounded-xl px-4 py-4 border overflow-hidden transition-all duration-200 hover:scale-[1.02]"
-        title="cache efficiency"
-        :style="{ 
-          borderColor: theme.accent,
-          boxShadow: `0 4px 16px color-mix(in oklch, ${theme.accent} 20%, transparent)`
-        }"
+        class="stat-card bg-base-200/60 backdrop-blur-sm border border-accent/20 rounded-xl p-3 relative overflow-hidden transition-all duration-200 hover:scale-[1.02] hover:shadow-lg"
       >
         <div class="flex flex-col items-center text-center relative z-10">
-          <Database :size="16" :stroke-width="2.5" class="mb-2" :style="{ color: theme.accent }" />
-          <div class="stat-value text-2xl font-bold font-mono tabular-nums" :style="{ color: theme.accent }">
-            {{ stats.cacheHitRate.toFixed(0) }}%
+          <div class="w-8 h-8 rounded-lg bg-accent/15 flex items-center justify-center mb-2">
+            <TrendingUp :size="14" :stroke-width="2.5" class="text-accent" />
           </div>
-          <div class="text-[10px] font-semibold mt-1 uppercase tracking-wider" :style="{ color: theme.textMuted }">
-            cache
+          <div class="stat-value text-xl font-bold font-mono tabular-nums text-accent">
+            {{ stats.thisWeek }}
+          </div>
+          <div class="text-[10px] font-medium mt-0.5 uppercase tracking-wider text-base-content/50">
+            This Week
           </div>
         </div>
-        <div 
-          class="stat-bar absolute bottom-0 left-0 right-0 h-0.5"
-          :style="{ 
-            background: `linear-gradient(90deg, transparent, ${theme.accent}, transparent)`
-          }"
-        ></div>
+        <div class="stat-bar absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-accent to-transparent"></div>
       </div>
     </div>
 
     <div>
-      <div class="flex items-center gap-2 mb-3">
-        <Sparkles :size="12" :stroke-width="2.5" :style="{ color: theme.textMuted }" />
-        <h3 
-          class="text-[11px] font-semibold uppercase tracking-wider"
-          :style="{ color: theme.textMuted }"
+      <div class="flex items-center justify-between mb-3 px-1">
+        <div class="flex items-center gap-2">
+          <Zap :size="12" :stroke-width="2.5" class="text-base-content/40" />
+          <h3 class="text-[11px] font-semibold uppercase tracking-wider text-base-content/40">
+            Recent
+          </h3>
+        </div>
+        <button 
+          v-if="history.length > 0"
+          @click="clearHistory"
+          class="flex items-center gap-1 text-[10px] text-base-content/30 hover:text-error/60 transition-colors"
         >
-          recent summaries
-        </h3>
+          <Trash2 :size="10" />
+          clear
+        </button>
       </div>
       
       <div v-if="loading" class="flex items-center justify-center py-12">
-        <Loader2 
-          class="w-8 h-8 animate-spin" 
-          :stroke-width="2"
-          :style="{ color: theme.primary }"
-        />
+        <div class="w-10 h-10 rounded-full bg-base-200 flex items-center justify-center">
+          <Loader2 class="w-5 h-5 animate-spin text-primary" :stroke-width="2" />
+        </div>
       </div>
 
       <div 
         v-else-if="history.length === 0" 
-        class="text-center py-8 px-5 rounded-xl glass border"
-        :style="{ borderColor: theme.borderSubtle }"
+        class="flex flex-col items-center justify-center py-10 px-5 rounded-xl bg-base-200/50 border border-base-300/20"
       >
-        <Mail :size="32" :stroke-width="2" class="mx-auto mb-3 opacity-40" :style="{ color: theme.textMuted }" />
-        <p class="text-[14px] mb-1.5 font-semibold" :style="{ color: theme.text }">
-          no summaries yet
+        <div class="w-14 h-14 rounded-2xl bg-base-300/50 flex items-center justify-center mb-3">
+          <FileText :size="24" :stroke-width="1.5" class="text-base-content/25" />
+        </div>
+        <p class="text-sm font-medium text-base-content/70 mb-1">
+          No summaries yet
         </p>
-        <p class="text-[12px] leading-relaxed" :style="{ color: theme.textMuted }">
-          visit gmail to generate your first summary
+        <p class="text-xs text-base-content/40 text-center max-w-[200px]">
+          Browse articles to start building your reading history
         </p>
       </div>
 
@@ -303,29 +288,22 @@ defineExpose({
         <div 
           v-for="item in history" 
           :key="item.emailId"
-          class="history-item group flex items-center gap-3 px-4 py-3 rounded-xl cursor-pointer transition-all duration-200 hover:scale-[1.01] active:scale-[0.99] glass border"
-          :style="{ 
-            borderColor: theme.borderSubtle
-          }"
+          class="group flex items-center gap-3 px-3.5 py-3 rounded-xl cursor-pointer transition-all duration-200 hover:scale-[1.01] active:scale-[0.99] bg-base-200/50 border border-base-300/20 hover:bg-base-200/80 hover:border-base-300/40"
           @click="openThread(item.emailId)"
         >
           <div class="flex-1 min-w-0">
-            <p class="text-[13px] line-clamp-2 mb-1.5 font-medium leading-relaxed" :style="{ color: theme.text }">
-              {{ item.summary?.summary || 'no summary available' }}
+            <p class="text-sm line-clamp-2 mb-1.5 font-medium leading-relaxed text-base-content/85">
+              {{ item.summary?.summary || 'No summary available' }}
             </p>
-            <div class="flex items-center gap-2.5 text-[11px]">
-              <span class="font-medium" :style="{ color: theme.textMuted }">
+            <div class="flex items-center gap-2 text-[11px]">
+              <span class="text-base-content/50">
                 {{ formatTimestamp(item.timestamp) }}
               </span>
               <span 
                 v-if="item.summary?.cached" 
-                class="flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-semibold glass border"
-                :style="{ 
-                  color: theme.accent,
-                  borderColor: theme.accent
-                }"
+                class="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-accent/10 text-accent"
               >
-                <Database :size="10" :stroke-width="2.5" />
+                <Database :size="9" :stroke-width="2.5" />
                 cached
               </span>
             </div>
@@ -333,8 +311,7 @@ defineExpose({
           <ChevronRight 
             :size="16" 
             :stroke-width="2.5"
-            class="arrow-icon shrink-0 transition-all duration-200 group-hover:translate-x-1"
-            :style="{ color: theme.primary }"
+            class="shrink-0 text-primary/50 transition-all duration-200 group-hover:translate-x-0.5 group-hover:text-primary"
           />
         </div>
       </div>
