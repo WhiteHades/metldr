@@ -1,7 +1,7 @@
 import { UIService } from './UIService.js';
 import { WordPopup } from './WordPopup.js';
 import { emailExtractor } from './EmailExtractor.js';
-import { pageMonitor } from './PageMonitor.js';
+import { ArticleExtractor } from './ArticleExtractor.js';
 
 export class ContentScriptBootstrap {
   static async init() {
@@ -11,6 +11,7 @@ export class ContentScriptBootstrap {
     await UIService.loadFromStorage();
 
     this.setupThemeListeners();
+    this.setupMessageListeners();
 
     const popupManager = new WordPopup();
 
@@ -20,33 +21,21 @@ export class ContentScriptBootstrap {
     }
 
     document.addEventListener('mouseup', (e) => popupManager.handleTextSelection(e));
+  }
 
-    if (!isGmail) {
-      pageMonitor.setPreSummarizeCallback((preSumData) => {
-        chrome.runtime.sendMessage({
-          type: 'PRE_SUMMARISE',
-          ...preSumData
-        }).catch(err => {
-          console.error('metldr: failed to queue pre-summarization:', err);
-        });
-      });
-      pageMonitor.startDwellMonitoring();
-    }
-
-    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-      if (message.type === 'REQUEST_PAGE_SUMMARY' && !isGmail) {
-        console.log('metldr: received request for page summary from side panel');
-        (async () => {
-          try {
-            await pageMonitor.queuePreSummarization();
-            sendResponse({ queued: true });
-          } catch (err) {
-            console.error('metldr: failed to queue pre-summarisation:', err);
-            sendResponse({ queued: false, error: err.message });
-          }
-        })();
+  static setupMessageListeners() {
+    chrome.runtime.onMessage.addListener((msg, sender, respond) => {
+      if (msg.type === 'EXTRACT_ARTICLE') {
+        try {
+          const extracted = ArticleExtractor.extract();
+          respond({ success: true, data: extracted });
+        } catch (err) {
+          console.error('metldr: extraction failed:', err);
+          respond({ success: false, error: err.message });
+        }
         return true;
       }
+      return false;
     });
   }
 
