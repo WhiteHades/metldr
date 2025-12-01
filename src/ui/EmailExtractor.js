@@ -100,11 +100,25 @@ export class EmailExtractor {
   }
 
   getCurrentThreadId() {
+    const hash = window.location.hash;
+    
+    // pattern #label/THREAD_ID or #inbox/THREAD_ID or #sent/THREAD_ID
+    // typically 16+ chars alphanumeric
+    const hashMatch = hash.match(/#[^/]+\/([A-Za-z0-9_-]{16,})$/);
+    if (hashMatch) {
+      return hashMatch[1];
+    }
+
     const url = new URL(window.location.href);
-    return url.searchParams.get('msgid') || 
-           url.searchParams.get('tid') ||
-           document.querySelector('[data-thread-perm-id]')?.getAttribute('data-thread-perm-id') ||
-           null;
+    const queryId = url.searchParams.get('msgid') || url.searchParams.get('tid');
+    if (queryId) return queryId;
+
+    const threadEl = document.querySelector('[data-thread-perm-id]');
+    if (threadEl) {
+      return threadEl.getAttribute('data-thread-perm-id');
+    }
+
+    return null;
   }
 
   findEmailContainer() {
@@ -186,17 +200,33 @@ export class EmailExtractor {
   }
 
   async processCurrentEmail() {
-    if (this.isProcessing) return;
+    console.log('metldr: processCurrentEmail called');
+    
+    if (this.isProcessing) {
+      console.log('metldr: already processing, skipping');
+      return;
+    }
 
     const threadId = this.getCurrentThreadId();
-    if (!threadId) return;
+    console.log('metldr: threadId =', threadId);
+    if (!threadId) {
+      console.log('metldr: no threadId found, checking URL:', window.location.href);
+      return;
+    }
 
     const existingSummary = document.querySelector('.metldr-summary');
     const existingLoading = document.querySelector('.metldr-loading');
-    if (existingSummary || existingLoading) return;
+    if (existingSummary || existingLoading) {
+      console.log('metldr: summary/loading already exists, skipping');
+      return;
+    }
 
     const emailContainer = this.findEmailContainer();
-    if (!emailContainer) return;
+    console.log('metldr: emailContainer =', emailContainer);
+    if (!emailContainer) {
+      console.log('metldr: no email container found');
+      return;
+    }
 
     this.isProcessing = true;
 
@@ -213,11 +243,18 @@ export class EmailExtractor {
   }
 
   async processEmailThread(threadElement) {
+    console.log('metldr: processEmailThread started');
     try {
       const metadata = this.extractMetadata(threadElement);
+      console.log('metldr: metadata =', metadata);
+      
       const emailText = this.extractText(threadElement);
+      console.log('metldr: emailText length =', emailText?.length || 0);
 
-      if (!emailText || emailText.length < 50) return;
+      if (!emailText || emailText.length < 50) {
+        console.log('metldr: email text too short, skipping');
+        return;
+      }
 
       const threadId = this.getCurrentThreadId();
 
@@ -228,14 +265,18 @@ export class EmailExtractor {
         UIService.injectLoading(emailHeader, loadingDiv);
       }, 100);
 
+      console.log('metldr: requesting summary from background...');
       const summary = await this.getSummaryFromBackground(emailText, threadId, metadata);
+      console.log('metldr: summary response =', summary);
 
       clearTimeout(loadingTimer);
       if (loadingDiv) loadingDiv.remove();
 
       if (summary) {
+        console.log('metldr: creating summary card');
         const summaryCard = UIService.createSummaryCard(summary, threadId);
         const emailHeader = this.findEmailHeader();
+        console.log('metldr: emailHeader for injection =', emailHeader);
         UIService.injectSummary(emailHeader, summaryCard);
 
         this.attachRegenerateListener(summaryCard);
@@ -256,31 +297,46 @@ export class EmailExtractor {
   }
 
   async getSummaryFromBackground(emailText, emailId, metadata = null, forceRegenerate = false) {
-    return new Promise((resolve) => {
-      if (!chrome?.runtime?.sendMessage) {
-        resolve(null);
-        return;
+    if (!chrome?.runtime?.sendMessage) {
+      return null;
+    }
+
+    const maxRetries = 3;
+    const delays = [0, 100, 200];
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      if (delays[attempt] > 0) {
+        await new Promise(r => setTimeout(r, delays[attempt]));
       }
 
       try {
-        chrome.runtime.sendMessage({
-          type: 'SUMMARIZE_EMAIL',
-          emailContent: emailText,
-          emailId: emailId,
-          metadata: metadata,
-          forceRegenerate: forceRegenerate
-        }, (response) => {
-          if (chrome.runtime.lastError) {
-            resolve(null);
-          } else {
-            resolve(response?.summary || null);
-          }
+        const response = await new Promise((resolve, reject) => {
+          chrome.runtime.sendMessage({
+            type: 'SUMMARIZE_EMAIL',
+            emailContent: emailText,
+            emailId: emailId,
+            metadata: metadata,
+            forceRegenerate: forceRegenerate
+          }, (resp) => {
+            if (chrome.runtime.lastError) {
+              reject(new Error(chrome.runtime.lastError.message));
+            } else {
+              resolve(resp);
+            }
+          });
         });
+
+        return response?.summary || null;
       } catch (err) {
-        console.error('metldr: message send failed:', err);
-        resolve(null);
+        console.warn(`metldr: email summary attempt ${attempt + 1}/${maxRetries} failed:`, err.message);
+        if (attempt === maxRetries - 1) {
+          console.error('metldr: all email summary attempts failed');
+          return null;
+        }
       }
-    });
+    }
+
+    return null;
   }
 
   async regenerateSummary(threadId) {
