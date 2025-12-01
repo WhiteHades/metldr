@@ -9,6 +9,16 @@ export class OllamaService {
     email_summary: ['llama3.2:3b', 'llama3.2:1b', 'qwen2.5:3b']
   };
 
+  static stripThinking(text) {
+    if (!text) return text;
+    return text
+      .replace(/<think>[\s\S]*?<\/think>/gi, '')
+      .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
+      .replace(/<reason>[\s\S]*?<\/reason>/gi, '')
+      .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, '')
+      .trim();
+  }
+
   static async checkAvailable() {
     try {
       const res = await fetch(`${this.BASE_URL}/api/tags`, {
@@ -56,7 +66,8 @@ export class OllamaService {
       }
 
       const data = await res.json();
-      const content = data?.message?.content || data?.response;
+      const rawContent = data?.message?.content || data?.response;
+      const content = this.stripThinking(rawContent);
 
       return { ok: true, content };
     } catch (err) {
