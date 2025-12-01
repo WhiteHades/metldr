@@ -3,14 +3,35 @@ import { ref, onMounted, onUnmounted, nextTick, computed, watch } from 'vue';
 import { useThemeStore } from './stores/theme.js';
 import { StorageManager, SUPPORTED_LANGUAGES } from './lib/StorageManager.js';
 import HistoryManager from './components/HistoryManager.vue';
+import { marked } from 'marked';
 import { 
-  Sparkles, BarChart3, Settings, Loader2, ChevronDown, Check, 
-  Send, Trash2, X, RefreshCw, Globe, Database, 
-  Zap, Server, Circle, MessageCircle
+  Sparkles, BarChart3, Settings, Loader2, ChevronDown, ChevronUp, Check, 
+  Send, Trash2, X, RefreshCw, Database, 
+  Zap, Server, Circle, MessageCircle, FileText, AlertCircle
 } from 'lucide-vue-next';
 
+marked.setOptions({
+  breaks: true,
+  gfm: true
+});
+
+function stripThinking(text) {
+  if (!text) return text;
+  return text
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
+    .replace(/<reason>[\s\S]*?<\/reason>/gi, '')
+    .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, '')
+    .trim();
+}
+
+function renderMarkdown(text) {
+  if (!text) return '';
+  const cleaned = stripThinking(text);
+  return marked.parseInline(cleaned);
+}
+
 const themeStore = useThemeStore();
-const theme = computed(() => themeStore.colors);
 
 const activeTab = ref('summary');
 const ollamaStatus = ref('checking');
@@ -20,11 +41,19 @@ const historyRef = ref(null);
 const showModelDropdown = ref(false);
 
 const modelDropdownPos = ref({ top: 0, left: 0, width: 0 });
+const chatContainer = ref(null);
+const chatInputRef = ref(null);
 
+// page summary state
 const pageSummary = ref(null);
+const pageMetadata = ref(null);
 const summaryLoading = ref(false);
 const summaryError = ref(null);
-const expandedSections = ref(new Set());
+const currentTabId = ref(null);
+const currentTabUrl = ref(null);
+const summaryCollapsed = ref(false);
+
+// chat state
 const chatMessages = ref([]);
 const chatInput = ref('');
 const chatLoading = ref(false);
@@ -39,6 +68,71 @@ const setupCommands = `curl -fsSL https://ollama.com/install.sh | sh
 OLLAMA_ORIGINS="chrome-extension://*" ollama serve`;
 
 const storage = new StorageManager();
+
+function getTabStorageKey(url) {
+  if (!url) return null;
+  // normalise url to remove query params for consistency
+  try {
+    const u = new URL(url);
+    return `tab_session_${u.origin}${u.pathname}`;
+  } catch {
+    return `tab_session_${url}`;
+  }
+}
+
+async function saveTabSession() {
+  const key = getTabStorageKey(currentTabUrl.value);
+  if (!key) return;
+  
+  try {
+    const session = {
+      chatMessages: chatMessages.value,
+      pageSummary: pageSummary.value,
+      summaryCollapsed: summaryCollapsed.value,
+      timestamp: Date.now()
+    };
+    await chrome.storage.local.set({ [key]: session });
+  } catch (err) {
+    console.warn('metldr: failed to save tab session:', err.message);
+  }
+}
+
+async function loadTabSession(url) {
+  const key = getTabStorageKey(url);
+  if (!key) return false;
+  
+  try {
+    const result = await chrome.storage.local.get([key]);
+    const session = result[key];
+    
+    // check if session exists and is not too old 24 hours
+    if (session && (Date.now() - session.timestamp) < 86400000) {
+      const msgs = session.chatMessages;
+      chatMessages.value = Array.isArray(msgs) ? msgs : [];
+      pageSummary.value = session.pageSummary || null;
+      summaryCollapsed.value = session.summaryCollapsed || false;
+      return true;
+    }
+  } catch (err) {
+    console.warn('metldr: failed to load tab session:', err.message);
+  }
+  return false;
+}
+
+async function sendToBackground(message, retries = 2) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const response = await chrome.runtime.sendMessage(message);
+      return response;
+    } catch (error) {
+      if (error.message?.includes('Receiving end does not exist') && attempt < retries) {
+        await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)));
+        continue;
+      }
+      throw error;
+    }
+  }
+}
 
 const updateDropdownPosition = (buttonElement, posRef) => {
   if (!buttonElement) return;
@@ -63,20 +157,16 @@ const selectModel = async (model) => {
   showModelDropdown.value = false;
   try {
     await chrome.storage.local.set({ selectedModel: model });
-    console.log('metldr: saved model selection:', model);
   } catch (error) {
     console.error('metldr: failed to save model selection:', error);
   }
 };
 
-
 async function checkOllama() {
   try {
     await storage.initDictionary();
     
-    const response = await chrome.runtime.sendMessage({
-      type: 'CHECK_OLLAMA_HEALTH'
-    });
+    const response = await sendToBackground({ type: 'CHECK_OLLAMA_HEALTH' });
     
     if (!response || !response.success) {
       ollamaStatus.value = 'not-found';
@@ -100,8 +190,7 @@ async function checkOllama() {
         selectedModel.value = models[0];
       }
       
-      // request summary for current tab
-      await requestCurrentPageSummary();
+      await fetchCurrentPageSummary();
       return true;
     }
     
@@ -114,20 +203,64 @@ async function checkOllama() {
   }
 }
 
-async function requestCurrentPageSummary() {
+async function fetchCurrentPageSummary(force = false) {
   try {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tabs.length) return;
+    if (!tabs.length) {
+      summaryError.value = 'no active tab';
+      return;
+    }
     
-    const tabId = tabs[0].id;
+    const tab = tabs[0];
+    currentTabId.value = tab.id;
+    currentTabUrl.value = tab.url;
     
-    chrome.tabs.sendMessage(tabId, {
-      type: 'REQUEST_PAGE_SUMMARY'
-    }).catch(err => {
-      console.log('metldr: could not request summary from tab:', err.message);
+    if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('edge://') || tab.url.startsWith('about:')) {
+      summaryError.value = 'system page';
+      return;
+    }
+    
+    if (!force) {
+      const hasSession = await loadTabSession(tab.url);
+      if (hasSession && pageSummary.value) {
+        pageMetadata.value = { title: pageSummary.value.title, url: tab.url };
+        return;
+      }
+    }
+    
+    if (force) {
+      chatMessages.value = [];
+    }
+    
+    summaryLoading.value = true;
+    summaryError.value = null;
+    
+    const response = await sendToBackground({
+      type: 'EXTRACT_AND_SUMMARIZE',
+      tabId: tab.id,
+      force
     });
+    if (!response || !response.success) {
+      if (response?.skip) {
+        summaryError.value = response.reason || 'page skipped';
+      } else {
+        summaryError.value = response?.error || 'summarisation failed';
+      }
+      summaryLoading.value = false;
+      return;
+    }
+    
+    pageSummary.value = response.summary;
+    pageMetadata.value = { title: response.summary.title, url: tab.url };
+    summaryError.value = null;
+    
+    await saveTabSession();
+    
   } catch (error) {
-    console.error('metldr: failed to request page summary:', error);
+    console.error('metldr: page summary failed:', error);
+    summaryError.value = error.message || 'unknown error';
+  } finally {
+    summaryLoading.value = false;
   }
 }
 
@@ -145,61 +278,86 @@ function copySetupCommands() {
   navigator.clipboard.writeText(setupCommands);
 }
 
-function toggleSection(index) {
-  if (expandedSections.value.has(index)) {
-    expandedSections.value.delete(index);
-  } else {
-    expandedSections.value.add(index);
-  }
-}
-
 async function sendChatMessage() {
   if (!chatInput.value.trim() || chatLoading.value) return;
   
   const userMessage = chatInput.value.trim();
   chatInput.value = '';
   
-  chatMessages.value.push({
-    role: 'user',
-    content: userMessage
-  });
+  if (!Array.isArray(chatMessages.value)) {
+    chatMessages.value = [];
+  }
+  
+  chatMessages.value.push({ role: 'user', content: userMessage });
+  
+  await nextTick();
+  if (chatContainer.value) {
+    chatContainer.value.scrollTop = chatContainer.value.scrollHeight;
+  }
+  
+  if (chatInputRef.value) {
+    chatInputRef.value.focus();
+  }
   
   chatLoading.value = true;
   
   try {
     const model = selectedModel.value || availableModels.value[0];
     
-    let context = '';
-    if (pageSummary.value) {
-      context = `page context: ${pageSummary.value.metadata?.title}\n`;
-      context += `summary: ${pageSummary.value.bullets.join('. ')}\n\n`;
-    }
+    // last 6 messages for context
+    const recentMessages = chatMessages.value.slice(-6).map(m => ({
+      role: m.role,
+      content: m.content
+    }));
     
-    const prompt = `${context}user question: ${userMessage}\n\nprovide a concise, helpful answer based on the page context.`;
-    
-    const response = await chrome.runtime.sendMessage({
+    // full page context
+    const response = await sendToBackground({
       type: 'CHAT_MESSAGE',
       model,
-      prompt
+      messages: recentMessages,
+      pageContext: pageSummary.value ? {
+        title: pageSummary.value.title,
+        author: pageSummary.value.author,
+        publication: pageSummary.value.publication,
+        content: pageSummary.value.content,
+        fullContent: pageSummary.value.fullContent
+      } : null
     });
     
     if (response?.ok) {
-      chatMessages.value.push({
-        role: 'assistant',
-        content: response.content
-      });
+      chatMessages.value.push({ role: 'assistant', content: response.content });
     } else {
       throw new Error(response?.error || 'chat failed');
     }
   } catch (error) {
-    console.error('metldr: chat error:', error);
+    console.warn('metldr: chat error:', error.message);
     chatMessages.value.push({
       role: 'assistant',
-      content: 'sorry, i couldn\'t process that request.'
+      content: 'sorry, something went wrong. try again.'
     });
   } finally {
+    await nextTick();
+    if (chatContainer.value) {
+      chatContainer.value.scrollTop = chatContainer.value.scrollHeight;
+    }
     chatLoading.value = false;
+    
+    await saveTabSession();
+    
+    if (chatInputRef.value) {
+      chatInputRef.value.focus();
+    }
   }
+}
+
+function clearChat() {
+  chatMessages.value = [];
+  saveTabSession();
+  nextTick(() => {
+    if (chatInputRef.value) {
+      chatInputRef.value.focus();
+    }
+  });
 }
 
 async function toggleWordPopup() {
@@ -207,7 +365,6 @@ async function toggleWordPopup() {
   
   try {
     await chrome.storage.local.set({ wordPopupEnabled: wordPopupEnabled.value });
-    console.log('metldr: word popup toggled to:', wordPopupEnabled.value);
     
     const tabs = await chrome.tabs.query({});
     tabs.forEach(tab => {
@@ -220,7 +377,6 @@ async function toggleWordPopup() {
     console.error('metldr: failed to save word popup setting:', error);
   }
 }
-
 
 async function clearCache() {
   if (!confirm('clear all cached summaries?')) return;
@@ -256,11 +412,7 @@ async function loadDictionarySettings() {
 }
 
 async function startDownload(langCode) {
-  downloadProgress.value[langCode] = {
-    progress: 0,
-    letter: 'a',
-    entries: 0
-  };
+  downloadProgress.value[langCode] = { progress: 0, letter: 'a', entries: 0 };
   
   try {
     await storage.dictDownloadLanguage(langCode, (progressData) => {
@@ -313,17 +465,34 @@ async function deleteLanguageData(langCode) {
   }
 }
 
-async function handleBackgroundDownload(langCode) {
-  if (downloadedLanguages.value.includes(langCode) || downloadProgress.value[langCode]) {
-    return;
-  }
+function setupTabListener() {
+  chrome.tabs.onActivated.addListener(async (activeInfo) => {
+    if (ollamaStatus.value === 'ready') {
+      await saveTabSession();
+      
+      pageSummary.value = null;
+      pageMetadata.value = null;
+      chatMessages.value = [];
+      summaryCollapsed.value = false;
+      
+      await fetchCurrentPageSummary();
+    }
+  });
   
-  if (!selectedLanguages.value.includes(langCode)) {
-    selectedLanguages.value.push(langCode);
-    await chrome.storage.local.set({ selectedLanguages: [...selectedLanguages.value] });
-  }
-  
-  startDownload(langCode);
+  chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+    if (changeInfo.status === 'complete' && tabId === currentTabId.value && ollamaStatus.value === 'ready') {
+      const urlChanged = tab.url !== currentTabUrl.value;
+      
+      if (urlChanged) {
+        await saveTabSession();
+        pageSummary.value = null;
+        pageMetadata.value = null;
+        chatMessages.value = [];
+      }
+      
+      await fetchCurrentPageSummary(urlChanged);
+    }
+  });
 }
 
 onMounted(async () => {
@@ -342,31 +511,18 @@ onMounted(async () => {
   
   try {
     await chrome.storage.local.set({ 
-      selectedLanguages: selectedLanguages.value && selectedLanguages.value.length > 0 
-        ? selectedLanguages.value 
-        : ['en']
+      selectedLanguages: selectedLanguages.value?.length > 0 ? selectedLanguages.value : ['en']
     });
   } catch (error) {
     console.error('metldr: failed to save selectedLanguages:', error);
   }
   
   await checkOllama();
+  setupTabListener();
 
   document.addEventListener('click', (e) => {
     if (showModelDropdown.value && !e.target.closest('.model-selector-btn') && !e.target.closest('.model-dropdown')) {
       showModelDropdown.value = false;
-    }
-  });
-
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.type === 'PAGE_SUMMARY') {
-      pageSummary.value = message.summary;
-      summaryLoading.value = false;
-      summaryError.value = null;
-    }
-    
-    if (message.type === 'startBackgroundDownload') {
-      handleBackgroundDownload(message.language);
     }
   });
 
@@ -383,191 +539,223 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div 
-    class="h-screen flex flex-col bg-base-100 text-base-content overflow-hidden"
-  >
-    <!-- teleport target for dropdowns (above main content) -->
+  <div class="h-screen flex flex-col bg-base-100 text-base-content overflow-hidden">
+    <!-- teleport target for dropdowns -->
     <div id="dropdown-portal" class="fixed inset-0 pointer-events-none z-50"></div>
 
     <!-- header with tabs -->
-    <header 
-      v-if="ollamaStatus === 'ready'"
-      class="shrink-0 sticky top-0 z-10"
-    >
-      <div class="tabs tabs-box gap-2 p-3 bg-base-100/50 backdrop-blur-md border-b border-base-300/10">
-        <input 
-          type="radio" 
-          name="main_tabs" 
-          class="tab font-semibold transition-all"
-          aria-label="summary"
-          :checked="activeTab === 'summary'"
-          @change="switchTab('summary')"
-        />
-        <input 
-          type="radio" 
-          name="main_tabs" 
-          class="tab font-semibold transition-all"
-          aria-label="stats"
-          :checked="activeTab === 'stats'"
-          @change="switchTab('stats')"
-        />
-        <input 
-          type="radio" 
-          name="main_tabs" 
-          class="tab font-semibold transition-all"
-          aria-label="settings"
-          :checked="activeTab === 'settings'"
-          @change="switchTab('settings')"
-        />
+    <header v-if="ollamaStatus === 'ready'" class="shrink-0 sticky top-0 z-10 border-b border-base-content/5">
+      <div class="flex gap-1 p-2 bg-base-100/95 backdrop-blur-lg">
+        <button 
+          v-for="tab in [{key: 'summary', label: 'Summary', icon: FileText}, {key: 'stats', label: 'Stats', icon: BarChart3}, {key: 'settings', label: 'Settings', icon: Settings}]"
+          :key="tab.key"
+          @click="switchTab(tab.key)"
+          class="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 text-xs font-medium rounded-lg transition-all duration-150"
+          :class="[
+            activeTab === tab.key 
+              ? 'bg-base-content/10 text-base-content' 
+              : 'text-base-content/50 hover:text-base-content/70 hover:bg-base-content/5'
+          ]"
+        >
+          <component :is="tab.icon" :size="14" :stroke-width="2" />
+          {{ tab.label }}
+        </button>
       </div>
     </header>
 
     <!-- main content -->
-    <main class="flex-1 overflow-x-hidden overflow-y-auto p-2 relative">
-      <!-- checking state -->
+    <main class="flex-1 overflow-hidden">
       <Transition name="fade" mode="out-in">
-        <div v-if="ollamaStatus === 'checking'" class="flex flex-col items-center justify-center h-full">
-          <div class="relative">
-            <div class="absolute inset-0 blur-xl opacity-30 bg-primary rounded-full animate-pulse"></div>
-            <Loader2 class="w-10 h-10 mb-4 animate-spin text-primary relative z-10" :stroke-width="2" />
-          </div>
-          <p class="text-sm font-medium text-base-content/70">checking for ollama</p>
+        <!-- checking state -->
+        <div v-if="ollamaStatus === 'checking'" class="flex flex-col items-center justify-center h-full p-6">
+          <Loader2 class="w-8 h-8 mb-3 animate-spin text-base-content/40" :stroke-width="2" />
+          <p class="text-sm text-base-content/50">connecting to ollama...</p>
         </div>
 
         <!-- not found state -->
-        <div v-else-if="ollamaStatus === 'not-found'" class="max-w-xl mx-auto">
-          <div class="card bg-base-200 shadow-depth-2">
-            <div class="card-body p-4">
-              <h2 class="card-title text-sm leading-tight text-error mb-3">
-                <Server :size="16" :stroke-width="2.5" />
-                ollama not detected
-              </h2>
-              
-              <div class="mockup-code mt-2 text-xs">
-                <pre><code>{{ setupCommands }}</code></pre>
+        <div v-else-if="ollamaStatus === 'not-found'" class="p-4">
+          <div class="rounded-xl bg-base-content/5 p-4">
+            <div class="flex items-start gap-3 mb-4">
+              <div class="w-8 h-8 rounded-lg bg-error/10 flex items-center justify-center shrink-0">
+                <Server :size="16" class="text-error/70" />
               </div>
-              
-              <div class="card-actions justify-end mt-3 gap-1.5">
-                <button @click="copySetupCommands" class="btn btn-outline btn-primary btn-sm">
-                  <Check :size="14" :stroke-width="2.5" />
-                  copy commands
-                </button>
-                <button @click="retryDetection" class="btn btn-primary btn-sm">
-                  <RefreshCw :size="14" :stroke-width="2.5" />
-                  check again
-                </button>
+              <div>
+                <h2 class="text-sm font-medium text-base-content/80 mb-1">ollama not detected</h2>
+                <p class="text-xs text-base-content/50">run these commands to set up ollama:</p>
               </div>
+            </div>
+            
+            <div class="bg-base-content/5 rounded-lg p-3 font-mono text-xs text-base-content/70 mb-4 overflow-x-auto">
+              <pre class="whitespace-pre-wrap">{{ setupCommands }}</pre>
+            </div>
+            
+            <div class="flex gap-2">
+              <button @click="copySetupCommands" class="btn btn-sm btn-ghost text-xs">
+                copy commands
+              </button>
+              <button @click="retryDetection" class="btn btn-sm bg-base-content/10 hover:bg-base-content/15 border-0 text-xs">
+                <RefreshCw :size="12" />
+                retry
+              </button>
             </div>
           </div>
         </div>
 
         <!-- summary tab -->
-        <div v-else-if="ollamaStatus === 'ready' && activeTab === 'summary'" class="max-w-2xl mx-auto space-y-3">
-          <!-- page context -->
-          <div v-if="pageSummary" class="alert bg-base-200/80 border-base-300/50 py-2 min-h-0 shadow-depth-1">
-            <Globe :size="14" :stroke-width="2.5" class="text-accent shrink-0" />
-            <div class="flex-1 min-w-0">
-              <h3 class="font-semibold text-sm leading-tight truncate">{{ pageSummary.metadata?.title || 'untitled page' }}</h3>
-              <p class="text-xs opacity-60 leading-snug">{{ pageSummary.pageType }} • {{ pageSummary.metadata?.domain }}</p>
-            </div>
-          </div>
-
-          <!-- loading state -->
-          <div v-if="summaryLoading" class="alert bg-base-200/80 py-2 min-h-0 shadow-depth-1">
-            <Loader2 class="w-4 h-4 animate-spin text-primary" :stroke-width="2.5" />
-            <span class="text-sm font-medium">analysing page</span>
-          </div>
-
-          <!-- summary card -->
-          <div v-else-if="pageSummary" class="card bg-base-200 shadow-depth-2">
-            <div class="card-body p-4">
-              <h2 class="card-title text-base leading-tight mb-2">
-                <Sparkles :size="16" :stroke-width="2.5" class="text-primary" />
-                <span>instant summary</span>
-              </h2>
-              
-              <ul class="space-y-1.5 my-2">
-                <li v-for="(bullet, i) in pageSummary.bullets" :key="i" class="flex gap-2.5 text-sm leading-relaxed">
-                  <Circle :size="5" :fill="theme.primary" :stroke-width="0" class="mt-1.5 shrink-0" />
-                  <span>{{ bullet }}</span>
-                </li>
-              </ul>
-              
-              <div class="flex items-center gap-3 pt-2 mt-2 border-t border-base-300">
-                <div class="badge badge-accent badge-outline badge-sm gap-1">
-                  <Zap :size="10" :stroke-width="2.5" />
-                  {{ pageSummary.confidence }}% confidence
+        <div v-else-if="ollamaStatus === 'ready' && activeTab === 'summary'" class="flex flex-col h-full">
+          <!-- collapsible summary area -->
+          <div class="shrink-0 p-2 pb-0">
+            <!-- summary card with collapse toggle -->
+            <div v-if="pageSummary" class="rounded-lg bg-base-content/5">
+              <!-- header (always visible) -->
+              <div 
+                class="flex items-center gap-2 p-2.5 cursor-pointer hover:bg-base-content/5 rounded-t-lg transition-colors"
+                @click="summaryCollapsed = !summaryCollapsed"
+              >
+                <component 
+                  :is="summaryCollapsed ? ChevronDown : ChevronUp" 
+                  :size="12" 
+                  class="text-base-content/40 shrink-0 transition-transform"
+                />
+                <div class="flex-1 min-w-0">
+                  <h3 class="text-xs font-medium text-base-content/70 truncate leading-tight">
+                    {{ pageSummary.title || 'untitled' }}
+                  </h3>
+                  <p v-if="summaryCollapsed" class="text-[10px] text-base-content/40 truncate">
+                    {{ pageSummary.bullets.length }} key points · {{ pageSummary.readTime || 'n/a' }} read
+                  </p>
                 </div>
-                <span class="text-xs opacity-60">
-                  {{ pageSummary.readTime || 'n/a' }} read
-                </span>
+                <button 
+                  @click.stop="fetchCurrentPageSummary(true)" 
+                  class="btn btn-ghost btn-xs btn-circle shrink-0"
+                  :disabled="summaryLoading"
+                >
+                  <RefreshCw :size="10" :class="{ 'animate-spin': summaryLoading }" />
+                </button>
               </div>
-            </div>
-          </div>
-
-          <!-- sections -->
-          <div v-if="pageSummary?.sections && pageSummary.sections.length > 0" class="space-y-1.5">
-            <h3 class="text-xs font-semibold uppercase tracking-wider opacity-50 px-0.5 mb-1">sections</h3>
-            <div 
-              v-for="(section, i) in pageSummary.sections" 
-              :key="i"
-              class="collapse collapse-arrow bg-base-200/80 rounded-lg shadow-depth-1 hover:shadow-depth-2 transition-shadow"
-            >
-              <input type="checkbox" :checked="expandedSections.has(i)" @change="toggleSection(i)" />
-              <div class="collapse-title font-medium text-sm py-2.5 min-h-0">{{ section.title }}</div>
-              <div class="collapse-content pb-2.5">
-                <p class="text-sm opacity-75 leading-relaxed">{{ section.content }}</p>
-              </div>
-            </div>
-          </div>
-
-          <!-- no summary state -->
-          <div v-else-if="!summaryLoading && !pageSummary" class="alert bg-base-200/80 py-3 min-h-0 shadow-depth-1">
-            <div class="flex-1 text-center">
-              <p class="text-sm opacity-60">browse any page to see auto-summary</p>
-            </div>
-          </div>
-
-          <!-- chat interface -->
-          <div class="card bg-base-200 shadow-depth-2 mt-6">
-            <div class="card-body p-4">
-              <h2 class="card-title text-sm leading-tight mb-2">
-                <MessageCircle :size="14" :stroke-width="2.5" />
-                chat (optional)
-              </h2>
               
-              <!-- messages -->
-              <div class="space-y-1.5 my-3 max-h-52 overflow-y-auto">
+              <!-- collapsible content -->
+              <Transition
+                enter-active-class="transition-all duration-200 ease-out"
+                enter-from-class="opacity-0 max-h-0"
+                enter-to-class="opacity-100 max-h-96"
+                leave-active-class="transition-all duration-150 ease-in"
+                leave-from-class="opacity-100 max-h-96"
+                leave-to-class="opacity-0 max-h-0"
+              >
+                <div v-if="!summaryCollapsed" class="overflow-hidden">
+                  <div class="px-3 pb-3 pt-1 border-t border-base-content/5">
+                    <!-- metadata -->
+                    <p v-if="pageSummary.publication || pageSummary.author" class="text-[10px] text-base-content/40 mb-2">
+                      {{ pageSummary.publication }}{{ pageSummary.author ? ` · ${pageSummary.author}` : '' }}
+                    </p>
+                    
+                    <!-- bullets -->
+                    <ul class="space-y-1.5">
+                      <li v-for="(bullet, i) in pageSummary.bullets" :key="i" class="flex gap-2 text-xs leading-relaxed">
+                        <span class="text-base-content/30 shrink-0 mt-0.5">•</span>
+                        <span class="text-base-content/70 markdown-content" v-html="renderMarkdown(bullet)"></span>
+                      </li>
+                    </ul>
+                    
+                    <div class="flex items-center gap-2 pt-2 mt-2 border-t border-base-content/5">
+                      <span class="text-[10px] text-base-content/30">{{ pageSummary.readTime || 'n/a' }} read</span>
+                    </div>
+                  </div>
+                </div>
+              </Transition>
+            </div>
+
+            <!-- loading state -->
+            <div v-else-if="summaryLoading" class="flex items-center gap-2 p-3 rounded-lg bg-base-content/5">
+              <Loader2 class="w-4 h-4 animate-spin text-base-content/40" />
+              <span class="text-xs text-base-content/50">analysing...</span>
+            </div>
+
+            <!-- error state -->
+            <div v-else-if="summaryError" class="flex items-center gap-2 p-3 rounded-lg bg-base-content/5">
+              <AlertCircle :size="14" class="text-base-content/30 shrink-0" />
+              <div>
+                <p class="text-xs text-base-content/50">{{ summaryError }}</p>
+                <p class="text-[10px] text-base-content/30">navigate to an article to see a summary</p>
+              </div>
+            </div>
+
+            <!-- no page state -->
+            <div v-else class="flex items-center gap-2 p-3 rounded-lg bg-base-content/5">
+              <FileText :size="14" class="text-base-content/20 shrink-0" />
+              <p class="text-xs text-base-content/40">browse a page to get a summary</p>
+            </div>
+          </div>
+
+          <!-- chat ui -->
+          <div class="flex-1 flex flex-col min-h-0 p-2">
+            <div class="flex-1 flex flex-col rounded-lg bg-base-content/5 p-3 min-h-0">
+              <div class="flex items-center justify-between mb-2 shrink-0">
+                <div class="flex items-center gap-1.5">
+                  <MessageCircle :size="12" class="text-base-content/50" />
+                  <span class="text-[10px] font-medium text-base-content/50 uppercase tracking-wide">chat</span>
+                </div>
+                <button 
+                  v-if="chatMessages.length > 0"
+                  @click="clearChat" 
+                  class="text-[10px] text-base-content/40 hover:text-base-content/60"
+                >
+                  clear
+                </button>
+              </div>
+              
+              <!-- messages container -->
+              <div 
+                ref="chatContainer"
+                class="flex-1 overflow-y-auto space-y-2 min-h-0"
+              >
+                <!-- empty state -->
+                <div v-if="chatMessages.length === 0 && !chatLoading" class="flex items-center justify-center h-full">
+                  <p class="text-[10px] text-base-content/30">ask about the article</p>
+                </div>
+                
+                <!-- messages -->
                 <div v-for="(msg, i) in chatMessages" :key="i">
-                  <div v-if="msg.role === 'user'" class="chat chat-end">
-                    <div class="chat-bubble chat-bubble-primary text-sm py-2 px-3">{{ msg.content }}</div>
+                  <div v-if="msg.role === 'user'" class="flex justify-end">
+                    <div class="max-w-[85%] bg-base-content/10 rounded-xl rounded-br-sm px-2.5 py-1.5 text-xs text-base-content/80">
+                      {{ msg.content }}
+                    </div>
                   </div>
-                  <div v-else class="chat chat-start">
-                    <div class="chat-bubble text-sm py-2 px-3">{{ msg.content }}</div>
+                  <div v-else class="flex justify-start">
+                    <div class="max-w-[85%] bg-base-content/5 rounded-xl rounded-bl-sm px-2.5 py-1.5 text-xs text-base-content/70 markdown-content" v-html="renderMarkdown(msg.content)">
+                    </div>
                   </div>
                 </div>
-                <div v-if="chatLoading" class="chat chat-start">
-                  <div class="chat-bubble flex gap-1 py-2 px-3">
-                    <span class="loading loading-dots loading-sm"></span>
+                
+                <!-- loading -->
+                <div v-if="chatLoading" class="flex justify-start">
+                  <div class="bg-base-content/5 rounded-xl rounded-bl-sm px-3 py-2">
+                    <div class="flex gap-1">
+                      <span class="w-1 h-1 bg-base-content/30 rounded-full animate-bounce" style="animation-delay: 0ms"></span>
+                      <span class="w-1 h-1 bg-base-content/30 rounded-full animate-bounce" style="animation-delay: 150ms"></span>
+                      <span class="w-1 h-1 bg-base-content/30 rounded-full animate-bounce" style="animation-delay: 300ms"></span>
+                    </div>
                   </div>
                 </div>
               </div>
 
               <!-- input -->
-              <div class="join w-full">
+              <div class="flex gap-2 mt-2 shrink-0">
                 <input 
+                  ref="chatInputRef"
                   v-model="chatInput"
-                  @keypress.enter="sendChatMessage"
+                  @keydown.enter.prevent="sendChatMessage"
                   type="text"
-                  placeholder="ask anything..."
-                  class="input input-bordered input-sm join-item flex-1 text-sm"
+                  placeholder="ask something..."
+                  class="flex-1 bg-base-content/5 border-0 rounded-lg px-2.5 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-base-content/20 placeholder:text-base-content/30"
                 />
                 <button 
                   @click="sendChatMessage"
                   :disabled="!chatInput.trim() || chatLoading"
-                  class="btn btn-primary btn-sm join-item"
+                  class="btn btn-circle btn-xs bg-base-content/10 hover:bg-base-content/15 border-0 disabled:opacity-30"
                 >
-                  <Send :size="14" :stroke-width="2.5" />
+                  <Send :size="12" class="text-base-content/60" />
                 </button>
               </div>
             </div>
@@ -575,216 +763,181 @@ onMounted(async () => {
         </div>
 
         <!-- stats tab -->
-        <div v-else-if="ollamaStatus === 'ready' && activeTab === 'stats'" class="max-w-2xl mx-auto">
+        <div v-else-if="ollamaStatus === 'ready' && activeTab === 'stats'" class="p-3 h-full overflow-y-auto">
           <HistoryManager ref="historyRef" :limit="10" />
         </div>
 
-        <!-- settings -->
-        <div v-else-if="ollamaStatus === 'ready' && activeTab === 'settings'" class="max-w-2xl mx-auto space-y-3">
+        <!-- settings tab -->
+        <div v-else-if="ollamaStatus === 'ready' && activeTab === 'settings'" class="p-3 space-y-3 h-full overflow-y-auto">
           <!-- model selection -->
-          <div class="card bg-base-200 shadow-depth-2 overflow-visible">
-            <div class="card-body p-4 overflow-visible">
-              <h2 class="card-title text-sm leading-tight mb-2">
-                <Server :size="14" :stroke-width="2.5" />
-                model
-              </h2>
-              
-              <div class="relative overflow-visible">
-                <button 
-                  @click="toggleModelDropdown"
-                  class="model-selector-btn btn btn-sm btn-block justify-between"
-                  :class="{ 'btn-primary': showModelDropdown }"
+          <div class="rounded-xl bg-base-content/5 p-4">
+            <div class="flex items-center gap-2 mb-3">
+              <Server :size="14" class="text-base-content/50" />
+              <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">ai model</span>
+            </div>
+            
+            <div class="relative">
+              <button 
+                @click="toggleModelDropdown"
+                class="model-selector-btn w-full flex items-center justify-between px-3 py-2.5 bg-base-content/5 hover:bg-base-content/10 rounded-lg transition-colors"
+              >
+                <span class="font-mono text-sm text-base-content/70">{{ selectedModel }}</span>
+                <ChevronDown 
+                  :size="14" 
+                  class="text-base-content/40 transition-transform"
+                  :class="{ 'rotate-180': showModelDropdown }"
+                />
+              </button>
+
+              <Teleport to="#dropdown-portal">
+                <Transition
+                  enter-active-class="transition-all duration-150"
+                  enter-from-class="opacity-0 scale-95"
+                  enter-to-class="opacity-100 scale-100"
+                  leave-active-class="transition-all duration-100"
+                  leave-from-class="opacity-100 scale-100"
+                  leave-to-class="opacity-0 scale-95"
                 >
-                  <span class="font-mono text-xs">{{ selectedModel }}</span>
-                  <ChevronDown 
-                    :size="14" 
-                    :stroke-width="2.5"
-                    class="transition-transform"
-                    :class="{ 'rotate-180': showModelDropdown }"
-                  />
-                </button>
-
-                <!-- dropdown menu (teleported to root) -->
-                <Teleport to="#dropdown-portal">
-                  <Transition
-                    enter-active-class="transition-all duration-200 ease-out"
-                    enter-from-class="opacity-0 scale-95 -translate-y-2"
-                    enter-to-class="opacity-100 scale-100 translate-y-0"
-                    leave-active-class="transition-all duration-150 ease-in"
-                    leave-from-class="opacity-100 scale-100 translate-y-0"
-                    leave-to-class="opacity-0 scale-95 -translate-y-2"
+                  <div 
+                    v-if="showModelDropdown" 
+                    class="model-dropdown fixed rounded-lg bg-base-100 border border-base-content/10 shadow-xl max-h-48 overflow-y-auto pointer-events-auto"
+                    :style="{ 
+                      top: modelDropdownPos.top + 'px', 
+                      left: modelDropdownPos.left + 'px', 
+                      width: modelDropdownPos.width + 'px'
+                    }"
                   >
-                    <ul 
-                      v-if="showModelDropdown" 
-                      class="model-dropdown menu fixed p-1.5 rounded-lg shadow-depth-3 border max-h-52 overflow-y-auto pointer-events-auto"
-                      :style="{ 
-                        top: modelDropdownPos.top + 'px', 
-                        left: modelDropdownPos.left + 'px', 
-                        width: modelDropdownPos.width + 'px', 
-                        background: `linear-gradient(135deg, oklch(from var(--b2) l c h / 0.5), oklch(from var(--primary) l c h / 0.08))`,
-                        backdropFilter: 'blur(24px)',
-                        borderColor: `oklch(from var(--primary) l c h / 0.25)`,
-                        boxShadow: `0 8px 32px oklch(from var(--primary) l c h / 0.15), inset 0 1px 0 oklch(from var(--bc) l c h / 0.1)`
-                      }"
+                    <button 
+                      v-for="model in availableModels" 
+                      :key="model"
+                      @click="selectModel(model)"
+                      class="w-full flex items-center justify-between px-3 py-2 text-sm font-mono hover:bg-base-content/5 transition-colors"
+                      :class="{ 'bg-base-content/10': selectedModel === model }"
                     >
-                      <li v-for="model in availableModels" :key="model">
-                        <a 
-                          @click="selectModel(model)"
-                          :class="{ 'active': selectedModel === model }"
-                          class="font-mono text-xs py-1.5"
-                          :style="{ 
-                            color: selectedModel === model ? 'oklch(from var(--bc) l c h)' : 'oklch(from var(--text) l c h)',
-                            backgroundColor: selectedModel === model ? 'oklch(from var(--primary) l c h / 0.2)' : 'transparent',
-                            borderRadius: '6px'
-                          }"
-                        >
-                          {{ model }}
-                          <Check v-if="selectedModel === model" :size="14" :stroke-width="2.5" />
-                        </a>
-                      </li>
-                    </ul>
-                  </Transition>
-                </Teleport>
-              </div>
-            </div>
-          </div>
-
-          <!-- word lookup -->
-          <div class="card bg-base-200 shadow-depth-2 overflow-visible">
-            <div class="card-body p-4 overflow-visible">
-              <h2 class="card-title text-sm leading-tight mb-2">word lookup</h2>
-              
-              <div class="form-control">
-                <label class="label cursor-pointer justify-between py-1.5 px-0">
-                  <span class="label-text text-sm">enable popup</span>
-                  <input 
-                    type="checkbox" 
-                    class="toggle toggle-primary toggle-sm" 
-                    :checked="wordPopupEnabled"
-                    @click="toggleWordPopup"
-                  />
-                </label>
-              </div>
-            </div>
-          </div>
-
-          <!-- offline dictionaries -->
-          <div class="card bg-base-200 shadow-depth-2">
-            <div class="card-body p-4">
-              <h2 class="card-title text-sm leading-tight mb-2">
-                <Database :size="14" :stroke-width="2.5" />
-                offline dictionaries
-              </h2>
-              
-              <div class="space-y-1.5 max-h-60 overflow-y-auto">
-                <div v-for="lang in SUPPORTED_LANGUAGES" :key="lang.code" class="form-control">
-                  <label class="label cursor-pointer justify-start gap-2.5 py-1.5 px-0">
-                    <input 
-                      type="checkbox"
-                      :checked="selectedLanguages.includes(lang.code)"
-                      @change="toggleLanguage(lang.code)"
-                      class="checkbox checkbox-primary checkbox-sm"
-                    />
-                    <span class="label-text text-sm flex-1">{{ lang.name }}</span>
-                    
-                    <!-- status badges -->
-                    <span 
-                      v-if="downloadProgress[lang.code]"
-                      class="badge badge-warning badge-xs"
-                    >
-                      {{ downloadProgress[lang.code].progress.toFixed(0) }}%
-                    </span>
-                    <span 
-                      v-else-if="downloadedLanguages.includes(lang.code)"
-                      class="badge badge-success badge-xs"
-                    >
-                      ✓
-                    </span>
-                    
-                    <button
-                      v-if="downloadedLanguages.includes(lang.code)"
-                      @click.stop="deleteLanguageData(lang.code)"
-                      class="btn btn-ghost btn-xs text-error h-6 min-h-0 px-1.5"
-                    >
-                      ✕
+                      <span class="text-base-content/70">{{ model }}</span>
+                      <Check v-if="selectedModel === model" :size="14" class="text-base-content/50" />
                     </button>
-                  </label>
-                  
-                  <!-- progress bar -->
-                  <div v-if="downloadProgress[lang.code]" class="ml-7 space-y-0.5">
-                    <progress 
-                      class="progress progress-primary w-full h-1.5" 
-                      :value="downloadProgress[lang.code].progress" 
-                      max="100"
-                    ></progress>
-                    <div class="flex justify-between text-xs opacity-50">
-                      <span>{{ downloadProgress[lang.code].letter }}</span>
-                      <span>{{ downloadProgress[lang.code].entries.toLocaleString() }}</span>
-                    </div>
                   </div>
+                </Transition>
+              </Teleport>
+            </div>
+          </div>
+
+          <!-- word lookup toggle -->
+          <div class="rounded-xl bg-base-content/5 p-4">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <Sparkles :size="14" class="text-base-content/50" />
+                <div>
+                  <span class="text-sm text-base-content/70">word lookup</span>
+                  <p class="text-xs text-base-content/40">show definitions on text selection</p>
                 </div>
               </div>
+              <input 
+                type="checkbox" 
+                class="toggle toggle-sm" 
+                :checked="wordPopupEnabled"
+                @click="toggleWordPopup"
+              />
+            </div>
+          </div>
+
+          <!-- dictionaries -->
+          <div class="rounded-xl bg-base-content/5 p-4">
+            <div class="flex items-center gap-2 mb-3">
+              <Database :size="14" class="text-base-content/50" />
+              <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">dictionaries</span>
+            </div>
+            
+            <div class="space-y-1 max-h-48 overflow-y-auto">
+              <label 
+                v-for="lang in SUPPORTED_LANGUAGES" 
+                :key="lang.code" 
+                class="flex items-center gap-2.5 py-1.5 cursor-pointer hover:bg-base-content/5 rounded-lg px-2 -mx-2 transition-colors"
+              >
+                <input 
+                  type="checkbox"
+                  :checked="selectedLanguages.includes(lang.code)"
+                  @change="toggleLanguage(lang.code)"
+                  class="checkbox checkbox-sm"
+                />
+                <span class="text-sm text-base-content/70 flex-1">{{ lang.name }}</span>
+                
+                <span 
+                  v-if="downloadProgress[lang.code]"
+                  class="text-xs text-base-content/40"
+                >
+                  {{ downloadProgress[lang.code].progress.toFixed(0) }}%
+                </span>
+                <Check 
+                  v-else-if="downloadedLanguages.includes(lang.code)"
+                  :size="14" 
+                  class="text-base-content/30"
+                />
+                
+                <button
+                  v-if="downloadedLanguages.includes(lang.code)"
+                  @click.stop="deleteLanguageData(lang.code)"
+                  class="btn btn-ghost btn-xs text-base-content/30 hover:text-error/70"
+                >
+                  <X :size="12" />
+                </button>
+              </label>
             </div>
           </div>
 
           <!-- cache -->
-          <div class="card bg-base-200 shadow-depth-2">
-            <div class="card-body p-4">
-              <h2 class="card-title text-sm leading-tight mb-2">
-                <Database :size="14" :stroke-width="2.5" />
-                cache
-              </h2>
-              <button @click="clearCache" class="btn btn-outline btn-error btn-sm">
-                <Trash2 :size="14" :stroke-width="2.5" />
-                clear all summaries
+          <div class="rounded-xl bg-base-content/5 p-4">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <Trash2 :size="14" class="text-base-content/50" />
+                <div>
+                  <span class="text-sm text-base-content/70">cache</span>
+                  <p class="text-xs text-base-content/40">clear cached summaries</p>
+                </div>
+              </div>
+              <button @click="clearCache" class="btn btn-sm btn-ghost text-error/60 hover:text-error/80 hover:bg-error/10">
+                clear
               </button>
             </div>
           </div>
 
-          <!-- theme selector -->
-          <div class="card bg-base-200 shadow-depth-2">
-            <div class="card-body p-4">
-              <h2 class="card-title text-sm leading-tight mb-3">
-                <Sparkles :size="14" :stroke-width="2.5" />
-                appearance
-              </h2>
-              <div class="grid grid-cols-2 gap-1.5">
-                <button
-                  v-for="(themeData, key) in themeStore.themes"
-                  :key="key"
-                  @click="themeStore.setTheme(key)"
-                  class="theme-palette-btn group"
-                  :class="{ 'is-active': themeStore.currentTheme === key }"
-                  :title="themeData.name"
-                >
-                  <!-- color palette display (slanted shades) -->
-                  <div class="palette-container">
-                    <div class="palette-shade" :style="{ background: themeData.primary }"></div>
-                    <div class="palette-shade" :style="{ background: themeData.secondary }"></div>
-                    <div class="palette-shade" :style="{ background: themeData.accent }"></div>
-                    <div class="palette-shade" :style="{ background: themeData.bg }"></div>
-                  </div>
-                  
-                  <!-- theme name + check -->
-                  <div class="palette-label">
-                    <span class="palette-name">{{ themeData.name }}</span>
-                    <div v-if="themeStore.currentTheme === key" class="palette-check">
-                      <Check :size="12" :stroke-width="3" />
-                    </div>
-                  </div>
-                </button>
-              </div>
+          <!-- theme -->
+          <div class="rounded-xl bg-base-content/5 p-4">
+            <div class="flex items-center gap-2 mb-3">
+              <Sparkles :size="14" class="text-base-content/50" />
+              <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">theme</span>
+            </div>
+            <div class="grid grid-cols-3 gap-2">
+              <button
+                v-for="(themeData, key) in themeStore.themes"
+                :key="key"
+                @click="themeStore.setTheme(key)"
+                class="flex flex-col items-center gap-1.5 p-2 rounded-lg transition-all"
+                :class="[
+                  themeStore.currentTheme === key 
+                    ? 'bg-base-content/10 ring-1 ring-base-content/20' 
+                    : 'hover:bg-base-content/5'
+                ]"
+              >
+                <div class="flex gap-0.5">
+                  <div class="w-3 h-3 rounded-full" :style="{ background: themeData.primary }"></div>
+                  <div class="w-3 h-3 rounded-full" :style="{ background: themeData.secondary }"></div>
+                  <div class="w-3 h-3 rounded-full" :style="{ background: themeData.accent }"></div>
+                </div>
+                <span class="text-xs text-base-content/50">{{ themeData.name }}</span>
+              </button>
             </div>
           </div>
         </div>
 
         <!-- error state -->
-        <div v-else-if="ollamaStatus === 'error'" class="flex flex-col items-center justify-center h-full">
-          <X :size="40" :stroke-width="2" class="mb-3 text-error" />
-          <p class="text-base font-semibold text-error mb-3 leading-tight">connection error</p>
-          <button @click="retryDetection" class="btn btn-error btn-outline btn-sm">
-            <RefreshCw :size="14" :stroke-width="2.5" />
-            check again
+        <div v-else-if="ollamaStatus === 'error'" class="flex flex-col items-center justify-center h-full p-6">
+          <X :size="32" class="mb-3 text-error/50" />
+          <p class="text-sm text-base-content/50 mb-3">connection error</p>
+          <button @click="retryDetection" class="btn btn-sm btn-ghost">
+            <RefreshCw :size="12" />
+            retry
           </button>
         </div>
       </Transition>
@@ -794,7 +947,7 @@ onMounted(async () => {
 
 <style scoped>
 main::-webkit-scrollbar {
-  width: 6px;
+  width: 4px;
 }
 
 main::-webkit-scrollbar-track {
@@ -802,308 +955,76 @@ main::-webkit-scrollbar-track {
 }
 
 main::-webkit-scrollbar-thumb {
-  background: oklch(from var(--bc) l c h / 0.2);
-  border-radius: 4px;
+  background: oklch(from var(--bc) l c h / 0.1);
+  border-radius: 2px;
 }
 
 main::-webkit-scrollbar-thumb:hover {
-  background: oklch(from var(--bc) l c h / 0.3);
+  background: oklch(from var(--bc) l c h / 0.15);
 }
 
-.card.overflow-visible {
-  overflow: visible !important;
+.chat-container::-webkit-scrollbar {
+  width: 3px;
 }
 
-.card-body.overflow-visible {
-  overflow: visible !important;
+.chat-container::-webkit-scrollbar-track {
+  background: transparent;
 }
 
-.form-control.overflow-visible {
-  overflow: visible !important;
+.chat-container::-webkit-scrollbar-thumb {
+  background: oklch(from var(--bc) l c h / 0.1);
+  border-radius: 2px;
 }
 
-.space-y-2.overflow-visible {
-  overflow: visible !important;
-}
-
-.relative.overflow-visible {
-  overflow: visible !important;
-}
-
-.model-dropdown,
-.word-lookup-dropdown,
-.dictionary-source-dropdown {
+.model-dropdown {
   z-index: 9999 !important;
-  position: fixed !important;
+}
+
+.markdown-content :deep(strong),
+.markdown-content :deep(b) {
+  font-weight: 600;
+  color: oklch(from var(--bc) calc(l + 0.1) c h);
+}
+
+.markdown-content :deep(em),
+.markdown-content :deep(i) {
+  font-style: italic;
+}
+
+.markdown-content :deep(code) {
+  background: oklch(from var(--bc) l c h / 0.1);
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+  font-family: ui-monospace, monospace;
+  font-size: 0.9em;
+}
+
+.markdown-content :deep(a) {
+  color: oklch(from var(--p) l c h);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.markdown-content :deep(a:hover) {
+  opacity: 0.8;
 }
 
 .fade-enter-active,
 .fade-leave-active {
-  transition: all var(--transition-normal) cubic-bezier(0.32, 0.72, 0, 1);
+  transition: all 150ms ease;
 }
 
 .fade-enter-from {
   opacity: 0;
-  transform: translateY(8px) scale(0.98);
+  transform: translateY(4px);
 }
 
 .fade-leave-to {
   opacity: 0;
-  transform: translateY(-8px) scale(0.98);
-}
-
-.tab {
-  transition: all var(--transition-fast);
-}
-
-.tab:hover {
-  transform: translateY(-1px);
+  transform: translateY(-4px);
 }
 
 .btn {
-  transition: all var(--transition-fast);
-}
-
-.btn:hover {
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-sm);
-}
-
-.btn:active {
-  transform: translateY(0);
-}
-
-.card {
-  transition: box-shadow var(--transition-normal);
-  background: oklch(from var(--b2) l c h / 0.6);
-  backdrop-filter: blur(12px);
-  border: 1px solid oklch(from var(--bc) l c h / 0.05);
-}
-
-.card-body {
-  padding: 1rem;
-}
-
-.card-title {
-  gap: 8px;
-}
-
-.model-dropdown::-webkit-scrollbar {
-  width: 6px;
-}
-
-.model-dropdown::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.model-dropdown::-webkit-scrollbar-thumb {
-  background: oklch(from var(--bc) l c h / 0.2);
-  border-radius: 4px;
-}
-
-.model-dropdown::-webkit-scrollbar-thumb:hover {
-  background: oklch(from var(--bc) l c h / 0.3);
-}
-
-.theme-palette-btn {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  height: 28px;
-  border-radius: 6px;
-  overflow: hidden;
-  border: none;
-  cursor: pointer;
-  transition: all 200ms cubic-bezier(0.32, 0.72, 0, 1);
-  background: oklch(from var(--b2) l c h / 0.6);
-  box-shadow: 
-    0 1px 3px oklch(from var(--bc) l c h / 0.1),
-    0 2px 6px oklch(from var(--bc) l c h / 0.08);
-  padding: 2px;
-  gap: 3px;
-}
-
-.theme-palette-btn:hover {
-  transform: translateY(-2px);
-  background: oklch(from var(--b2) l c h / 0.7);
-  box-shadow: 
-    0 2px 5px oklch(from var(--bc) l c h / 0.15),
-    0 6px 14px oklch(from var(--bc) l c h / 0.12);
-}
-
-.theme-palette-btn.is-active {
-  background: oklch(from var(--p) l c h / 0.1);
-  box-shadow: 
-    0 0 0 1.5px var(--p),
-    0 3px 8px oklch(from var(--p) l c h / 0.25),
-    0 8px 20px oklch(from var(--p) l c h / 0.2);
-}
-
-.theme-palette-btn:active {
-  transform: translateY(-1px) scale(1.02);
-  box-shadow: 
-    0 0 0 2px var(--p),
-    0 1px 3px oklch(from var(--p) l c h / 0.3),
-    0 0 12px oklch(from var(--p) l c h / 0.4);
-}
-
-.palette-container {
-  display: flex;
-  gap: 0;
-  flex: 1;
-  height: 14px;
-  overflow: hidden;
-  border-radius: 3px;
-  position: relative;
-  background: oklch(from var(--bc) l c h / 0.08);
-  box-shadow: inset 0 0 0 1px oklch(from var(--bc) l c h / 0.1);
-}
-
-.palette-shade {
-  flex: 1;
-  height: 100%;
-  transition: all 200ms cubic-bezier(0.32, 0.72, 0, 1);
-  transform: skewX(-6deg);
-  transform-origin: center;
-  position: relative;
-}
-
-.palette-shade::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: oklch(1 0 0 / 0);
-  transition: all 200ms ease;
-}
-
-.theme-palette-btn:hover .palette-shade {
-  transform: skewX(-6deg) scaleY(1.08);
-}
-
-.theme-palette-btn:hover .palette-shade::after {
-  background: oklch(1 0 0 / 0.05);
-}
-
-.theme-palette-btn:active .palette-shade {
-  transform: skewX(-6deg) scaleY(1.15) scaleX(1.02);
-}
-
-.palette-label {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 4px;
-  padding: 0 2px;
-}
-
-.palette-name {
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--bc);
-  text-transform: capitalize;
-  white-space: nowrap;
-  min-width: 45px;
-  transition: all 200ms ease;
-}
-
-.theme-palette-btn:hover .palette-name {
-  color: var(--p);
-}
-
-.theme-palette-btn.is-active .palette-name {
-  color: var(--p);
-  font-weight: 700;
-}
-
-.palette-check {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: var(--p);
-  color: var(--pc);
-  flex-shrink: 0;
-  font-size: 6px;
-  animation: checkPopLively 400ms cubic-bezier(0.68, -0.55, 0.265, 1.55);
-}
-
-@keyframes checkPop {
-  0% {
-    transform: scale(0);
-    opacity: 0;
-  }
-  50% {
-    transform: scale(1.2);
-  }
-  100% {
-    transform: scale(1);
-    opacity: 1;
-  }
-}
-
-@keyframes checkPopLively {
-  0% {
-    transform: scale(0) rotate(-180deg);
-    opacity: 0;
-  }
-  50% {
-    transform: scale(1.25) rotate(10deg);
-  }
-  75% {
-    transform: scale(0.95) rotate(-5deg);
-  }
-  100% {
-    transform: scale(1) rotate(0deg);
-    opacity: 1;
-  }
-}
-
-@keyframes buttonPulse {
-  0% {
-    box-shadow: 0 0 0 0 oklch(from var(--p) l c h / 0.4);
-  }
-  100% {
-    box-shadow: 0 0 0 8px oklch(from var(--p) l c h / 0);
-  }
-}
-
-header .tabs {
-  gap: 4px;
-}
-
-header .tab-content {
-  display: none;
-}
-
-header .tab {
-  padding: 10px 16px;
-  border-radius: 10px;
-  transition: all 280ms cubic-bezier(0.32, 0.72, 0, 1);
-  background: oklch(from var(--bc) l c h / 0.06);
-  border: 1.5px solid transparent;
-}
-
-header .tab:hover {
-  background: oklch(from var(--bc) l c h / 0.1);
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px oklch(from var(--bc) l c h / 0.1);
-}
-
-header .tab:checked {
-  background: oklch(from var(--p) l c h / 0.15);
-  border-color: oklch(from var(--p) l c h / 0.4);
-  color: var(--p);
-  font-weight: 700;
-  transform: translateY(-2px);
-  box-shadow: 0 4px 16px oklch(from var(--p) l c h / 0.15);
-}
-
-header .tab:checked:hover {
-  background: oklch(from var(--p) l c h / 0.2);
-  transform: translateY(-3px);
+  transition: all 100ms ease;
 }
 </style>
