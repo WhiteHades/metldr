@@ -544,20 +544,25 @@ onMounted(async () => {
     <div id="dropdown-portal" class="fixed inset-0 pointer-events-none z-50"></div>
 
     <!-- header with tabs -->
-    <header v-if="ollamaStatus === 'ready'" class="shrink-0 sticky top-0 z-10 border-b border-base-content/5">
-      <div class="flex gap-1 p-2 bg-base-100/95 backdrop-blur-lg">
+    <header v-if="ollamaStatus === 'ready'" class="shrink-0 sticky top-0 z-10 border-b border-primary/10">
+      <div class="flex gap-1.5 p-2 bg-base-100/95 backdrop-blur-lg">
         <button 
-          v-for="tab in [{key: 'summary', label: 'Summary', icon: FileText}, {key: 'stats', label: 'Stats', icon: BarChart3}, {key: 'settings', label: 'Settings', icon: Settings}]"
+          v-for="(tab, idx) in [{key: 'summary', label: 'Summary', icon: FileText, color: 'primary'}, {key: 'stats', label: 'Stats', icon: BarChart3, color: 'secondary'}, {key: 'settings', label: 'Settings', icon: Settings, color: 'accent'}]"
           :key="tab.key"
           @click="switchTab(tab.key)"
-          class="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 text-xs font-medium rounded-lg transition-all duration-150"
+          class="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 text-xs font-medium rounded-lg transition-all duration-200"
           :class="[
             activeTab === tab.key 
-              ? 'bg-base-content/10 text-base-content' 
-              : 'text-base-content/50 hover:text-base-content/70 hover:bg-base-content/5'
+              ? `bg-${tab.color}/15 text-${tab.color} border border-${tab.color}/20` 
+              : 'text-base-content/50 hover:text-base-content/70 hover:bg-base-content/5 border border-transparent'
           ]"
         >
-          <component :is="tab.icon" :size="14" :stroke-width="2" />
+          <component 
+            :is="tab.icon" 
+            :size="14" 
+            :stroke-width="2" 
+            :class="activeTab === tab.key ? `text-${tab.color}` : ''"
+          />
           {{ tab.label }}
         </button>
       </div>
@@ -606,31 +611,31 @@ onMounted(async () => {
           <!-- collapsible summary area -->
           <div class="shrink-0 p-2 pb-0">
             <!-- summary card with collapse toggle -->
-            <div v-if="pageSummary" class="rounded-lg bg-base-content/5">
+            <div v-if="pageSummary" class="rounded-lg bg-primary/5 border border-primary/10">
               <!-- header (always visible) -->
               <div 
-                class="flex items-center gap-2 p-2.5 cursor-pointer hover:bg-base-content/5 rounded-t-lg transition-colors"
+                class="flex items-center gap-2 p-2.5 cursor-pointer hover:bg-primary/5 rounded-t-lg transition-colors"
                 @click="summaryCollapsed = !summaryCollapsed"
               >
                 <component 
                   :is="summaryCollapsed ? ChevronDown : ChevronUp" 
                   :size="12" 
-                  class="text-base-content/40 shrink-0 transition-transform"
+                  class="text-primary/60 shrink-0 transition-transform"
                 />
                 <div class="flex-1 min-w-0">
-                  <h3 class="text-xs font-medium text-base-content/70 truncate leading-tight">
+                  <h3 class="text-xs font-medium text-base-content/80 truncate leading-tight">
                     {{ pageSummary.title || 'untitled' }}
                   </h3>
-                  <p v-if="summaryCollapsed" class="text-[10px] text-base-content/40 truncate">
+                  <p v-if="summaryCollapsed" class="text-[10px] text-base-content/50 truncate">
                     {{ pageSummary.bullets.length }} key points · {{ pageSummary.readTime || 'n/a' }} read
                   </p>
                 </div>
                 <button 
                   @click.stop="fetchCurrentPageSummary(true)" 
-                  class="btn btn-ghost btn-xs btn-circle shrink-0"
+                  class="flex items-center justify-center w-6 h-6 rounded-md hover:bg-primary/10 shrink-0 transition-colors"
                   :disabled="summaryLoading"
                 >
-                  <RefreshCw :size="10" :class="{ 'animate-spin': summaryLoading }" />
+                  <RefreshCw :size="12" class="text-primary/60" :class="{ 'animate-spin': summaryLoading }" />
                 </button>
               </div>
               
@@ -644,22 +649,22 @@ onMounted(async () => {
                 leave-to-class="opacity-0 max-h-0"
               >
                 <div v-if="!summaryCollapsed" class="overflow-hidden">
-                  <div class="px-3 pb-3 pt-1 border-t border-base-content/5">
+                  <div class="px-3 pb-3 pt-1 border-t border-primary/10">
                     <!-- metadata -->
-                    <p v-if="pageSummary.publication || pageSummary.author" class="text-[10px] text-base-content/40 mb-2">
+                    <p v-if="pageSummary.publication || pageSummary.author" class="text-[10px] text-base-content/50 mb-2">
                       {{ pageSummary.publication }}{{ pageSummary.author ? ` · ${pageSummary.author}` : '' }}
                     </p>
                     
                     <!-- bullets -->
                     <ul class="space-y-1.5">
                       <li v-for="(bullet, i) in pageSummary.bullets" :key="i" class="flex gap-2 text-xs leading-relaxed">
-                        <span class="text-base-content/30 shrink-0 mt-0.5">•</span>
-                        <span class="text-base-content/70 markdown-content" v-html="renderMarkdown(bullet)"></span>
+                        <span class="text-primary/50 shrink-0 mt-0.5">•</span>
+                        <span class="text-base-content/75 markdown-content" v-html="renderMarkdown(bullet)"></span>
                       </li>
                     </ul>
                     
-                    <div class="flex items-center gap-2 pt-2 mt-2 border-t border-base-content/5">
-                      <span class="text-[10px] text-base-content/30">{{ pageSummary.readTime || 'n/a' }} read</span>
+                    <div class="flex items-center gap-2 pt-2 mt-2 border-t border-primary/10">
+                      <span class="text-[10px] text-base-content/40">{{ pageSummary.readTime || 'n/a' }} read</span>
                     </div>
                   </div>
                 </div>
@@ -667,39 +672,39 @@ onMounted(async () => {
             </div>
 
             <!-- loading state -->
-            <div v-else-if="summaryLoading" class="flex items-center gap-2 p-3 rounded-lg bg-base-content/5">
-              <Loader2 class="w-4 h-4 animate-spin text-base-content/40" />
-              <span class="text-xs text-base-content/50">analysing...</span>
+            <div v-else-if="summaryLoading" class="flex items-center gap-2.5 p-3 rounded-lg bg-primary/5 border border-primary/10">
+              <Loader2 class="w-4 h-4 animate-spin text-primary/60" />
+              <span class="text-xs text-base-content/60">analysing...</span>
             </div>
 
             <!-- error state -->
-            <div v-else-if="summaryError" class="flex items-center gap-2 p-3 rounded-lg bg-base-content/5">
-              <AlertCircle :size="14" class="text-base-content/30 shrink-0" />
+            <div v-else-if="summaryError" class="flex items-center gap-2.5 p-3 rounded-lg bg-error/5 border border-error/10">
+              <AlertCircle :size="14" class="text-error/60 shrink-0" />
               <div>
-                <p class="text-xs text-base-content/50">{{ summaryError }}</p>
-                <p class="text-[10px] text-base-content/30">navigate to an article to see a summary</p>
+                <p class="text-xs text-base-content/60">{{ summaryError }}</p>
+                <p class="text-[10px] text-base-content/40">navigate to an article to see a summary</p>
               </div>
             </div>
 
             <!-- no page state -->
-            <div v-else class="flex items-center gap-2 p-3 rounded-lg bg-base-content/5">
-              <FileText :size="14" class="text-base-content/20 shrink-0" />
-              <p class="text-xs text-base-content/40">browse a page to get a summary</p>
+            <div v-else class="flex items-center gap-2.5 p-3 rounded-lg bg-base-content/5 border border-base-content/10">
+              <FileText :size="14" class="text-base-content/30 shrink-0" />
+              <p class="text-xs text-base-content/50">browse a page to get a summary</p>
             </div>
           </div>
 
           <!-- chat ui -->
           <div class="flex-1 flex flex-col min-h-0 p-2">
-            <div class="flex-1 flex flex-col rounded-lg bg-base-content/5 p-3 min-h-0">
+            <div class="flex-1 flex flex-col rounded-lg bg-secondary/5 border border-secondary/10 p-3 min-h-0">
               <div class="flex items-center justify-between mb-2 shrink-0">
                 <div class="flex items-center gap-1.5">
-                  <MessageCircle :size="12" class="text-base-content/50" />
-                  <span class="text-[10px] font-medium text-base-content/50 uppercase tracking-wide">chat</span>
+                  <MessageCircle :size="12" class="text-secondary/70" />
+                  <span class="text-[10px] font-medium text-secondary/70 uppercase tracking-wide">chat</span>
                 </div>
                 <button 
                   v-if="chatMessages.length > 0"
                   @click="clearChat" 
-                  class="text-[10px] text-base-content/40 hover:text-base-content/60"
+                  class="text-[10px] text-base-content/40 hover:text-error/70 transition-colors"
                 >
                   clear
                 </button>
@@ -712,50 +717,50 @@ onMounted(async () => {
               >
                 <!-- empty state -->
                 <div v-if="chatMessages.length === 0 && !chatLoading" class="flex items-center justify-center h-full">
-                  <p class="text-[10px] text-base-content/30">ask about the article</p>
+                  <p class="text-[10px] text-base-content/40">ask about the article</p>
                 </div>
                 
                 <!-- messages -->
                 <div v-for="(msg, i) in chatMessages" :key="i">
                   <div v-if="msg.role === 'user'" class="flex justify-end">
-                    <div class="max-w-[85%] bg-base-content/10 rounded-xl rounded-br-sm px-2.5 py-1.5 text-xs text-base-content/80">
+                    <div class="max-w-[85%] bg-primary/10 border border-primary/20 rounded-xl rounded-br-sm px-2.5 py-1.5 text-xs text-base-content/80">
                       {{ msg.content }}
                     </div>
                   </div>
                   <div v-else class="flex justify-start">
-                    <div class="max-w-[85%] bg-base-content/5 rounded-xl rounded-bl-sm px-2.5 py-1.5 text-xs text-base-content/70 markdown-content" v-html="renderMarkdown(msg.content)">
+                    <div class="max-w-[85%] bg-secondary/10 border border-secondary/20 rounded-xl rounded-bl-sm px-2.5 py-1.5 text-xs text-base-content/75 markdown-content" v-html="renderMarkdown(msg.content)">
                     </div>
                   </div>
                 </div>
                 
                 <!-- loading -->
                 <div v-if="chatLoading" class="flex justify-start">
-                  <div class="bg-base-content/5 rounded-xl rounded-bl-sm px-3 py-2">
+                  <div class="bg-secondary/10 border border-secondary/20 rounded-xl rounded-bl-sm px-3 py-2">
                     <div class="flex gap-1">
-                      <span class="w-1 h-1 bg-base-content/30 rounded-full animate-bounce" style="animation-delay: 0ms"></span>
-                      <span class="w-1 h-1 bg-base-content/30 rounded-full animate-bounce" style="animation-delay: 150ms"></span>
-                      <span class="w-1 h-1 bg-base-content/30 rounded-full animate-bounce" style="animation-delay: 300ms"></span>
+                      <span class="w-1.5 h-1.5 bg-secondary/50 rounded-full animate-bounce" style="animation-delay: 0ms"></span>
+                      <span class="w-1.5 h-1.5 bg-secondary/50 rounded-full animate-bounce" style="animation-delay: 150ms"></span>
+                      <span class="w-1.5 h-1.5 bg-secondary/50 rounded-full animate-bounce" style="animation-delay: 300ms"></span>
                     </div>
                   </div>
                 </div>
               </div>
 
               <!-- input -->
-              <div class="flex gap-2 mt-2 shrink-0">
+              <div class="flex items-center gap-2 mt-2 shrink-0">
                 <input 
                   ref="chatInputRef"
                   v-model="chatInput"
                   @keydown.enter.prevent="sendChatMessage"
                   type="text"
                   placeholder="ask something..."
-                  class="flex-1 bg-base-content/5 border-0 rounded-lg px-2.5 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-base-content/20 placeholder:text-base-content/30"
+                  class="flex-1 bg-base-content/5 border-0 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-primary/30 placeholder:text-base-content/30"
                 />
                 <button 
                   @click="sendChatMessage"
                   :disabled="!chatInput.trim() || chatLoading"
-                  class="btn btn-circle btn-xs bg-base-content/10 hover:bg-base-content/15 border-0 disabled:opacity-30"
+                  class="flex items-center justify-center w-8 h-8 rounded-lg bg-primary/10 hover:bg-primary/20 border border-primary/20 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
                 >
-                  <Send :size="12" class="text-base-content/60" />
+                  <Send :size="14" class="text-primary" />
                 </button>
               </div>
             </div>
@@ -770,10 +775,12 @@ onMounted(async () => {
         <!-- settings tab -->
         <div v-else-if="ollamaStatus === 'ready' && activeTab === 'settings'" class="p-3 space-y-3 h-full overflow-y-auto">
           <!-- model selection -->
-          <div class="rounded-xl bg-base-content/5 p-4">
-            <div class="flex items-center gap-2 mb-3">
-              <Server :size="14" class="text-base-content/50" />
-              <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">ai model</span>
+          <div class="rounded-xl bg-base-content/5 p-4 border border-primary/10">
+            <div class="flex items-center gap-2.5 mb-3">
+              <div class="flex items-center justify-center w-6 h-6 rounded-md bg-primary/15">
+                <Server :size="12" class="text-primary" />
+              </div>
+              <span class="text-sm font-medium text-base-content/70 tracking-wide">ai model</span>
             </div>
             
             <div class="relative">
@@ -824,18 +831,17 @@ onMounted(async () => {
           </div>
 
           <!-- word lookup toggle -->
-          <div class="rounded-xl bg-base-content/5 p-4">
+          <div class="rounded-xl bg-base-content/5 p-4 border border-secondary/10">
             <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2">
-                <Sparkles :size="14" class="text-base-content/50" />
-                <div>
-                  <span class="text-sm text-base-content/70">word lookup</span>
-                  <p class="text-xs text-base-content/40">show definitions on text selection</p>
+              <div class="flex items-center gap-2.5 group relative cursor-help" title="show definitions on text selection">
+                <div class="flex items-center justify-center w-6 h-6 rounded-md bg-secondary/15">
+                  <Sparkles :size="12" class="text-secondary" />
                 </div>
+                <span class="text-sm font-medium text-base-content/70 tracking-wide">word lookup</span>
               </div>
               <input 
                 type="checkbox" 
-                class="toggle toggle-sm" 
+                class="toggle toggle-sm toggle-secondary" 
                 :checked="wordPopupEnabled"
                 @click="toggleWordPopup"
               />
@@ -843,10 +849,12 @@ onMounted(async () => {
           </div>
 
           <!-- dictionaries -->
-          <div class="rounded-xl bg-base-content/5 p-4">
-            <div class="flex items-center gap-2 mb-3">
-              <Database :size="14" class="text-base-content/50" />
-              <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">dictionaries</span>
+          <div class="rounded-xl bg-base-content/5 p-4 border border-accent/10">
+            <div class="flex items-center gap-2.5 mb-3">
+              <div class="flex items-center justify-center w-6 h-6 rounded-md bg-accent/15">
+                <Database :size="12" class="text-accent" />
+              </div>
+              <span class="text-sm font-medium text-base-content/70 tracking-wide">dictionaries</span>
             </div>
             
             <div class="space-y-1 max-h-48 overflow-y-auto">
@@ -886,27 +894,13 @@ onMounted(async () => {
             </div>
           </div>
 
-          <!-- cache -->
-          <div class="rounded-xl bg-base-content/5 p-4">
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2">
-                <Trash2 :size="14" class="text-base-content/50" />
-                <div>
-                  <span class="text-sm text-base-content/70">cache</span>
-                  <p class="text-xs text-base-content/40">clear cached summaries</p>
-                </div>
-              </div>
-              <button @click="clearCache" class="btn btn-sm btn-ghost text-error/60 hover:text-error/80 hover:bg-error/10">
-                clear
-              </button>
-            </div>
-          </div>
-
           <!-- theme -->
-          <div class="rounded-xl bg-base-content/5 p-4">
-            <div class="flex items-center gap-2 mb-3">
-              <Sparkles :size="14" class="text-base-content/50" />
-              <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">theme</span>
+          <div class="rounded-xl bg-base-content/5 p-4 border border-primary/10">
+            <div class="flex items-center gap-2.5 mb-3">
+              <div class="flex items-center justify-center w-6 h-6 rounded-md bg-primary/15">
+                <Sparkles :size="12" class="text-primary" />
+              </div>
+              <span class="text-sm font-medium text-base-content/70 tracking-wide">theme</span>
             </div>
             <div class="grid grid-cols-3 gap-2">
               <button
@@ -929,6 +923,24 @@ onMounted(async () => {
               </button>
             </div>
           </div>
+
+          <!-- cache -->
+          <div 
+            class="rounded-xl bg-base-content/5 p-4 border border-error/10 group cursor-help"
+            title="clear cached summaries"
+          >
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2.5">
+                <div class="flex items-center justify-center w-6 h-6 rounded-md bg-error/15">
+                  <Trash2 :size="12" class="text-error" />
+                </div>
+                <span class="text-sm font-medium text-base-content/70 tracking-wide">cache</span>
+              </div>
+              <button @click="clearCache" class="btn btn-sm btn-ghost text-error/70 hover:text-error hover:bg-error/10">
+                clear
+              </button>
+            </div>
+          </div>
         </div>
 
         <!-- error state -->
@@ -946,34 +958,28 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-main::-webkit-scrollbar {
-  width: 4px;
+::-webkit-scrollbar {
+  width: 3px;
+  height: 3px;
 }
 
-main::-webkit-scrollbar-track {
+::-webkit-scrollbar-track {
   background: transparent;
 }
 
-main::-webkit-scrollbar-thumb {
-  background: oklch(from var(--bc) l c h / 0.1);
-  border-radius: 2px;
+::-webkit-scrollbar-thumb {
+  background: oklch(from var(--bc) l c h / 0.08);
+  border-radius: 3px;
 }
 
-main::-webkit-scrollbar-thumb:hover {
+::-webkit-scrollbar-thumb:hover {
   background: oklch(from var(--bc) l c h / 0.15);
 }
 
-.chat-container::-webkit-scrollbar {
-  width: 3px;
-}
-
-.chat-container::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.chat-container::-webkit-scrollbar-thumb {
-  background: oklch(from var(--bc) l c h / 0.1);
-  border-radius: 2px;
+/* firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: oklch(from var(--bc) l c h / 0.08) transparent;
 }
 
 .model-dropdown {

@@ -2,6 +2,7 @@ export class OllamaService {
   static BASE_URL = 'http://127.0.0.1:11434';
   static TIMEOUT_HEALTH = 3000;
   static TIMEOUT_CHAT = 30000;
+  static TIMEOUT_CHAT_LONG = 120000;
 
   static PRIORITY = {
     word_lookup: ['llama3.2:1b', 'qwen2.5:1.5b', 'llama3.2:3b'],
@@ -51,11 +52,13 @@ export class OllamaService {
 
       if (options.format) body.format = options.format;
 
+      const timeout = options.longContext ? this.TIMEOUT_CHAT_LONG : this.TIMEOUT_CHAT;
+
       const res = await fetch(`${this.BASE_URL}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(this.TIMEOUT_CHAT)
+        signal: AbortSignal.timeout(timeout)
       });
 
       if (!res.ok) {

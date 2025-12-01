@@ -85,6 +85,8 @@ export class CacheService {
         timestamp: Date.now(),
         ttl: ttlMs
       });
+      
+      chrome.runtime.sendMessage({ type: 'SUMMARY_ADDED', emailId }).catch(() => {});
     } catch (err) {
       console.error('[CacheService.setEmailSummary]', err.message);
     }

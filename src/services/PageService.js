@@ -63,16 +63,27 @@ RULES:
     if (!model) model = await OllamaService.selectBest('page_summary');
     if (!model) throw new Error('no models available');
 
-    const contextText = pageContext?.fullContent || '';
+    let contextText = pageContext?.fullContent || '';
+
+    const MAX_CONTEXT = 50000;
+    if (contextText.length > MAX_CONTEXT) {
+      const headLen = Math.floor(MAX_CONTEXT * 0.6);
+      const tailLen = MAX_CONTEXT - headLen;
+      contextText = contextText.slice(0, headLen) + 
+        '\n\n[...content truncated for brevity...]\n\n' + 
+        contextText.slice(-tailLen);
+    }
 
     const systemPrompt = contextText 
       ? `you are an assistant helping the user understand an article.\n\nARTICLE CONTENT:\n${contextText}\n\nRULES:\n1. answer based ONLY on the article above\n2. if info isn't in the article, say so\n3. be concise (2-3 sentences unless more needed)`
       : 'you are a helpful assistant. be concise.';
 
+    const useLongTimeout = contextText.length > 2000;
+
     return OllamaService.complete(
       model,
       [{ role: 'system', content: systemPrompt }, ...messages.slice(-6)],
-      { temperature: 0.2 }
+      { temperature: 0.2, longContext: useLongTimeout }
     );
   }
 }

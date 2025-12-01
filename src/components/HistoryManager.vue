@@ -1,6 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue';
-import { gsap } from 'gsap';
+import { ref, onMounted, onUnmounted, computed } from 'vue';
 import { FileText, Clock, Zap, Loader2, ChevronRight, TrendingUp, Trash2 } from 'lucide-vue-next';
 
 const props = defineProps({
@@ -12,6 +11,7 @@ const props = defineProps({
 
 const history = ref([]);
 const loading = ref(true);
+let messageListener = null;
 
 async function openDB() {
   return new Promise((resolve, reject) => {
@@ -107,141 +107,58 @@ function openThread(emailId) {
   chrome.tabs.create({ url });
 }
 
-async function animateStats() {
-  await nextTick();
-  
-  const cards = document.querySelectorAll('.stat-card');
-  const values = document.querySelectorAll('.stat-value');
-  const bars = document.querySelectorAll('.stat-bar');
-  
-  if (cards.length === 0) return;
-  
-  gsap.from(cards, {
-    scale: 0.9,
-    opacity: 0,
-    duration: 0.4,
-    stagger: 0.1,
-    ease: 'back.out(1.4)'
-  });
-  
-  if (values.length > 0) {
-    values.forEach((el, i) => {
-      const target = parseFloat(el.textContent);
-      gsap.from(el, {
-        textContent: 0,
-        duration: 1,
-        delay: i * 0.15,
-        ease: 'power2.out',
-        snap: { textContent: target < 10 ? 0.1 : 1 },
-        onUpdate: function() {
-          if (target < 10) {
-            el.textContent = parseFloat(this.targets()[0].textContent).toFixed(1);
-          } else {
-            el.textContent = Math.round(this.targets()[0].textContent);
-          }
-        }
-      });
-    });
-  }
-  
-  if (bars.length > 0) {
-    gsap.from(bars, {
-      scaleX: 0,
-      duration: 1.2,
-      stagger: 0.15,
-      ease: 'expo.out',
-      transformOrigin: 'left center'
-    });
-    
-    gsap.to(bars, {
-      boxShadow: `0 0 20px currentColor, 0 0 30px currentColor`,
-      duration: 1.5,
-      repeat: -1,
-      yoyo: true,
-      ease: 'sine.inOut'
-    });
-  }
-}
-
 onMounted(async () => {
   history.value = await loadHistory();
-  animateStats();
   
-  const refreshInterval = setInterval(async () => {
-    history.value = await loadHistory();
-    animateStats();
-  }, 30000);
-  
-  onUnmounted(() => {
-    clearInterval(refreshInterval);
-  });
+  messageListener = (message) => {
+    if (message.type === 'SUMMARY_ADDED') {
+      loadHistory().then(data => {
+        history.value = data;
+      });
+    }
+  };
+  chrome.runtime.onMessage.addListener(messageListener);
+});
+
+onUnmounted(() => {
+  if (messageListener) {
+    chrome.runtime.onMessage.removeListener(messageListener);
+  }
 });
 
 defineExpose({
   refresh: async () => {
     history.value = await loadHistory();
-    animateStats();
   },
   stats
 });
 </script>
 
 <template>
-  <div class="space-y-4">
-    <!-- stats -->
-    <div class="grid grid-cols-3 gap-2">
-      <!-- total summaries -->
+  <div class="space-y-3">
+    <!-- stats row -->
+    <div class="flex items-center gap-2 px-1">
       <div 
-        class="stat-card bg-base-200/60 backdrop-blur-sm border border-primary/20 rounded-xl p-3 relative overflow-hidden transition-all duration-200 hover:scale-[1.02] hover:shadow-lg"
+        class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-primary/10 border border-primary/20 cursor-help"
+        title="total emails summarized"
       >
-        <div class="flex flex-col items-center text-center relative z-10">
-          <div class="w-8 h-8 rounded-lg bg-primary/15 flex items-center justify-center mb-2">
-            <FileText :size="14" :stroke-width="2.5" class="text-primary" />
-          </div>
-          <div class="stat-value text-xl font-bold font-mono tabular-nums text-primary">
-            {{ stats.total }}
-          </div>
-          <div class="text-[10px] font-medium mt-0.5 uppercase tracking-wider text-base-content/50">
-            Total
-          </div>
-        </div>
-        <div class="stat-bar absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-primary to-transparent"></div>
+        <FileText :size="12" :stroke-width="2" class="text-primary" />
+        <span class="text-sm font-semibold tabular-nums text-primary">{{ stats.total }}</span>
       </div>
-
-      <!-- time saved -->
       <div 
-        class="stat-card bg-base-200/60 backdrop-blur-sm border border-secondary/20 rounded-xl p-3 relative overflow-hidden transition-all duration-200 hover:scale-[1.02] hover:shadow-lg"
+        class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-secondary/10 border border-secondary/20 cursor-help"
+        title="estimated reading time saved"
       >
-        <div class="flex flex-col items-center text-center relative z-10">
-          <div class="w-8 h-8 rounded-lg bg-secondary/15 flex items-center justify-center mb-2">
-            <Clock :size="14" :stroke-width="2.5" class="text-secondary" />
-          </div>
-          <div class="stat-value text-xl font-bold font-mono tabular-nums text-secondary">
-            {{ stats.timeSaved >= 60 ? Math.round(stats.timeSaved / 60) + 'h' : Math.round(stats.timeSaved) + 'm' }}
-          </div>
-          <div class="text-[10px] font-medium mt-0.5 uppercase tracking-wider text-base-content/50">
-            Saved
-          </div>
-        </div>
-        <div class="stat-bar absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-secondary to-transparent"></div>
+        <Clock :size="12" :stroke-width="2" class="text-secondary" />
+        <span class="text-sm font-semibold tabular-nums text-secondary">{{ stats.timeSaved >= 60 ? Math.round(stats.timeSaved / 60) + 'h' : Math.round(stats.timeSaved) + 'm' }}</span>
       </div>
-
-      <!-- this week -->
       <div 
-        class="stat-card bg-base-200/60 backdrop-blur-sm border border-accent/20 rounded-xl p-3 relative overflow-hidden transition-all duration-200 hover:scale-[1.02] hover:shadow-lg"
+        class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-accent/10 border border-accent/20 cursor-help"
+        title="summaries this week"
       >
-        <div class="flex flex-col items-center text-center relative z-10">
-          <div class="w-8 h-8 rounded-lg bg-accent/15 flex items-center justify-center mb-2">
-            <TrendingUp :size="14" :stroke-width="2.5" class="text-accent" />
-          </div>
-          <div class="stat-value text-xl font-bold font-mono tabular-nums text-accent">
-            {{ stats.thisWeek }}
-          </div>
-          <div class="text-[10px] font-medium mt-0.5 uppercase tracking-wider text-base-content/50">
-            This Week
-          </div>
-        </div>
-        <div class="stat-bar absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-accent to-transparent"></div>
+        <TrendingUp :size="12" :stroke-width="2" class="text-accent" />
+        <span class="text-sm font-semibold tabular-nums text-accent">{{ stats.thisWeek }}</span>
+        <span class="text-[10px] text-accent/70">/wk</span>
       </div>
     </div>
 
@@ -320,11 +237,4 @@ defineExpose({
 </template>
 
 <style scoped>
-.stat-card {
-  position: relative;
-}
-
-.stat-bar {
-  position: absolute;
-}
 </style>
