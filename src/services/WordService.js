@@ -2,7 +2,21 @@ import { OllamaService } from './OllamaService.js';
 import { dictionaryService } from './DictionaryService.js';
 
 export class WordService {
+  static initialized = false;
+  
+  static async ensureInit() {
+    if (!this.initialized) {
+      try {
+        await dictionaryService.init();
+        this.initialized = true;
+      } catch (err) {
+        console.warn('[WordService] dictionary init failed:', err.message);
+      }
+    }
+  }
+  
   static async lookup(word, context = {}) {
+    await this.ensureInit();
     const word_lc = word.toLowerCase().trim();
 
     console.log('[WordService] looking up:', word_lc, 'context:', context);
