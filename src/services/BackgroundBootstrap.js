@@ -20,8 +20,8 @@ export class BackgroundBootstrap {
         return true;
       }
 
-      if (msg.type === 'PRE_SUMMARISE') {
-        this._onPageSummary(msg, respond);
+      if (msg.type === 'EXTRACT_AND_SUMMARIZE') {
+        this._onExtractAndSummarize(msg, respond);
         return true;
       }
 
@@ -66,17 +66,45 @@ export class BackgroundBootstrap {
     })();
   }
 
-  static _onPageSummary(msg, respond) {
+  static _onExtractAndSummarize(msg, respond) {
     (async () => {
       try {
-        const { content, pageType, metadata, url, forceRegenerate } = msg;
-        const summary = await PageService.summarize(content, pageType, metadata, url, forceRegenerate);
-
-        chrome.runtime.sendMessage({ type: 'PAGE_SUMMARY', summary }).catch(() => {});
-
-        respond({ success: true, cached: false });
+        const { tabId, force } = msg;
+        console.log('[BackgroundBootstrap] extract+summarise for tab', tabId);
+        
+        let extracted;
+        try {
+          const response = await chrome.tabs.sendMessage(tabId, { type: 'EXTRACT_ARTICLE' });
+          if (!response?.success) {
+            respond({ success: false, error: response?.error || 'extraction failed' });
+            return;
+          }
+          extracted = response.data;
+        } catch (err) {
+          console.log('[BackgroundBootstrap] content script not ready, will retry');
+          respond({ success: false, error: 'content script not ready - please refresh the page' });
+          return;
+        }
+        
+        if (!extracted) {
+          respond({ success: false, error: 'extraction failed' });
+          return;
+        }
+        
+        if (extracted.skip) {
+          respond({ success: false, skip: true, reason: extracted.reason });
+          return;
+        }
+        
+        console.log('[BackgroundBootstrap] extracted:', extracted.title, 'by', extracted.author, '|', extracted.wordCount, 'words');
+        
+        const summary = await PageService.summarize(extracted, force);
+        
+        console.log('[BackgroundBootstrap] summary:', summary.bullets?.length, 'bullets');
+        respond({ success: true, summary });
+        
       } catch (err) {
-        console.error('[BackgroundBootstrap._onPageSummary]', err.message);
+        console.error('[BackgroundBootstrap._onExtractAndSummarize]', err.message);
         respond({ success: false, error: err.message });
       }
     })();
@@ -134,24 +162,16 @@ export class BackgroundBootstrap {
   static _onChatMessage(msg, respond) {
     (async () => {
       try {
-        const { model, prompt } = msg;
+        const { model, messages, pageContext } = msg;
 
-        if (!model || !prompt) {
-          respond({ ok: false, error: 'missing model or prompt' });
+        if (!messages?.length) {
+          respond({ ok: false, error: 'no messages' });
           return;
         }
 
-        const result = await OllamaService.complete(
-          model,
-          [{ role: 'user', content: prompt }],
-          { temperature: 0.7 }
-        );
-
-        if (!result.ok) {
-          respond({ ok: false, error: result.error });
-        } else {
-          respond({ ok: true, content: result.content });
-        }
+        const result = await PageService.chat(messages, pageContext, model);
+        respond(result);
+        
       } catch (err) {
         console.error('[BackgroundBootstrap._onChatMessage]', err.message);
         respond({ ok: false, error: err.message });
