@@ -446,7 +446,6 @@ export class UIService {
   }
 
   static _buildSummaryHTML(theme, summaryText, actions, dates, confidence, confColor, modelName, summary, threadId, intent, intentColors) {
-    // build intent badge html if intent exists
     const intentKey = intent?.toLowerCase();
     const intentStyle = intentColors?.[intentKey] || { bg: theme.bgSecondary, text: theme.textMuted };
     const intentBadge = intent ? `
