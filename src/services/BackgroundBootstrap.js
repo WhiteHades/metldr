@@ -20,6 +20,11 @@ export class BackgroundBootstrap {
         return true;
       }
 
+      if (msg.type === 'GET_REPLY_SUGGESTIONS') {
+        this._onGetReplySuggestions(msg, respond);
+        return true;
+      }
+
       if (msg.type === 'EXTRACT_AND_SUMMARIZE') {
         this._onExtractAndSummarize(msg, respond);
         return true;
@@ -62,6 +67,28 @@ export class BackgroundBootstrap {
             confidence: 'low'
           }
         });
+      }
+    })();
+  }
+
+  static _onGetReplySuggestions(msg, respond) {
+    (async () => {
+      try {
+        const { emailId } = msg;
+        if (!emailId) {
+          respond({ success: false, error: 'no emailId' });
+          return;
+        }
+
+        const suggestions = await EmailService.getCachedReplies(emailId);
+        if (suggestions?.length > 0) {
+          respond({ success: true, suggestions });
+        } else {
+          respond({ success: false, error: 'no suggestions available' });
+        }
+      } catch (err) {
+        console.error('[BackgroundBootstrap._onGetReplySuggestions]', err.message);
+        respond({ success: false, error: err.message });
       }
     })();
   }
