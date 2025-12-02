@@ -1,15 +1,19 @@
 import { UIService } from './UIService.js';
+import { replyPanel } from './ReplyPanel.js';
 
 export class EmailExtractor {
   constructor() {
     this.lastProcessedUrl = '';
     this.debounceTimer = null;
     this.observer = null;
+    this.replyObserver = null;
     this.debounceDelay = 500;
     this.onEmailProcess = null;
     this.isProcessing = false;
     this.isRegenerating = false;
     this.processingTimeout = 30000;
+    this.lastReplyPanelCheck = 0;
+    this.replyCheckCooldown = 500;
   }
 
   setProcessCallback(callback) {
@@ -103,7 +107,6 @@ export class EmailExtractor {
     const hash = window.location.hash;
     
     // pattern #label/THREAD_ID or #inbox/THREAD_ID or #sent/THREAD_ID
-    // typically 16+ chars alphanumeric
     const hashMatch = hash.match(/#[^/]+\/([A-Za-z0-9_-]{16,})$/);
     if (hashMatch) {
       return hashMatch[1];
@@ -132,8 +135,10 @@ export class EmailExtractor {
     this.onEmailProcess = onEmailProcess;
     await this.waitForGmailUI();
     this.setupMutationObserver();
+    this.setupReplyObserver();
     this.setupUrlHooks();
     this.triggerInitialProcess();
+    replyPanel.startWatching();
   }
 
   async waitForGmailUI() {
@@ -169,6 +174,176 @@ export class EmailExtractor {
     if (mainContainer) {
       this.observer.observe(mainContainer, config);
     }
+  }
+
+  setupReplyObserver() {
+    const config = {
+      childList: true,
+      subtree: true
+    };
+
+    this.replyObserver = new MutationObserver((mutations) => {
+      const now = Date.now();
+      if (now - this.lastReplyPanelCheck < this.replyCheckCooldown) return;
+      this.lastReplyPanelCheck = now;
+
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+          if (node.nodeType === Node.ELEMENT_NODE) {
+            this._checkForReplyPanel(node);
+          }
+        }
+      }
+    });
+
+    this.replyObserver.observe(document.body, config);
+    console.log('[EmailExtractor] reply observer initialized');
+    
+    this._setupReplyButtonListener();
+  }
+
+  _setupReplyButtonListener() {
+    document.addEventListener('click', (e) => {
+      const replyTarget = e.target.closest('[data-tooltip*="Reply"], [aria-label*="Reply"], [data-tooltip*="reply"], .ams.bkH, .ams.bkI');
+      const popOutTarget = e.target.closest('[data-tooltip*="Pop out"], [data-tooltip*="pop out"], [aria-label*="Pop out"], [aria-label*="pop out"], .aB2, [command="inNewWindow"]');
+      
+      if (replyTarget || popOutTarget) {
+        console.log('[EmailExtractor] reply/popout button clicked:', replyTarget ? 'reply' : 'popout');
+        setTimeout(() => this._findAndShowReplyPanel(), 400);
+        setTimeout(() => this._findAndShowReplyPanel(), 800);
+        setTimeout(() => this._findAndShowReplyPanel(), 1500);
+        if (popOutTarget) {
+          setTimeout(() => this._findAndShowReplyPanel(), 2000);
+        }
+      }
+    }, true);
+
+    document.addEventListener('keydown', (e) => {
+      const active = document.activeElement;
+      const isTyping = active && (
+        active.tagName === 'INPUT' || 
+        active.tagName === 'TEXTAREA' || 
+        active.contentEditable === 'true' ||
+        active.closest('[contenteditable="true"]')
+      );
+      
+      if (isTyping) return;
+      
+      if (e.key === 'r' || e.key === 'a') {
+        console.log('[EmailExtractor] reply keyboard shortcut detected:', e.key);
+        setTimeout(() => this._findAndShowReplyPanel(), 400);
+        setTimeout(() => this._findAndShowReplyPanel(), 800);
+        setTimeout(() => this._findAndShowReplyPanel(), 1500);
+      }
+    }, true);
+  }
+
+  _findAndShowReplyPanel() {
+    const editableSelectors = [
+      '[g_editable="true"]',
+      '.Am.Al.editable[contenteditable="true"]',
+      '.Am.aiL.Al.editable[contenteditable="true"]',
+      '[role="textbox"][contenteditable="true"][aria-label="Message Body"]',
+    ];
+
+    for (const selector of editableSelectors) {
+      const editables = document.querySelectorAll(selector);
+      for (const editable of editables) {
+        if (!this._isVisible(editable)) continue;
+        
+        let container = editable.parentElement;
+        let attempts = 0;
+        while (container && attempts < 15) {
+          if (container.querySelector('.bAK')) {
+            const threadId = this.getCurrentThreadId();
+            if (threadId) {
+              console.log('[EmailExtractor] found compose area with toolbar, thread:', threadId);
+              replyPanel.show(container, threadId);
+              return;
+            }
+          }
+          container = container.parentElement;
+          attempts++;
+        }
+      }
+    }
+    console.log('[EmailExtractor] no visible compose area found');
+  }
+
+  _isVisible(el) {
+    if (!el) return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0 && 
+           window.getComputedStyle(el).display !== 'none' &&
+           window.getComputedStyle(el).visibility !== 'hidden';
+  }
+
+  _checkForReplyPanel(node) {
+    const composeSelectors = [
+      '.aSs',
+      '.iN',
+      '.aYF',
+      '.aoP',
+      '.M9',
+      '.nH.Hd',
+      '.AD',
+      '.ip.iq',
+      '.Am.Al.editable',
+      '[role="dialog"]',
+      '.I5',
+    ];
+
+    let composeArea = null;
+    
+    const editable = node.querySelector?.('[contenteditable="true"][role="textbox"]') ||
+                    node.querySelector?.('[contenteditable="true"][g_editable="true"]') ||
+                    node.querySelector?.('.Am.Al.editable');
+    
+    if (editable) {
+      composeArea = editable.closest('.aSs') ||
+                   editable.closest('.aoP') ||
+                   editable.closest('.iN') || 
+                   editable.closest('.aYF') || 
+                   editable.closest('.M9') ||
+                   editable.closest('.nH.Hd') ||
+                   editable.closest('[role="dialog"]') ||
+                   editable.parentElement?.parentElement;
+    }
+    
+    if (!composeArea) {
+      for (const selector of composeSelectors) {
+        if (node.matches?.(selector)) {
+          composeArea = node;
+          break;
+        }
+        const found = node.querySelector?.(selector);
+        if (found) {
+          composeArea = found;
+          break;
+        }
+      }
+    }
+
+    if (!composeArea) return;
+
+    const hasEditable = composeArea.querySelector?.('[contenteditable="true"]') ||
+                       composeArea.querySelector?.('.Am.Al.editable') ||
+                       composeArea.querySelector?.('[g_editable="true"]') ||
+                       editable;
+
+    if (!hasEditable) return;
+
+    const threadId = this.getCurrentThreadId();
+    if (!threadId) {
+      console.log('[EmailExtractor] reply detected but no thread ID available');
+      return;
+    }
+
+    console.log('[EmailExtractor] reply panel detected for thread:', threadId, 'compose area:', composeArea.className);
+
+    setTimeout(() => {
+      replyPanel.show(composeArea, threadId);
+    }, 300);
   }
 
   setupUrlHooks() {
@@ -383,9 +558,13 @@ export class EmailExtractor {
     if (this.observer) {
       this.observer.disconnect();
     }
+    if (this.replyObserver) {
+      this.replyObserver.disconnect();
+    }
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
     }
+    replyPanel.hide();
   }
 }
 
