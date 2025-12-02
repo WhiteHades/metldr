@@ -56,7 +56,6 @@ export class CacheService {
             return;
           }
 
-          // check ttl
           if (result.timestamp && result.ttl) {
             const now = Date.now();
             if (now > result.timestamp + result.ttl) {
@@ -203,7 +202,6 @@ export class CacheService {
             return;
           }
 
-          // check ttl (same as summaries: 7 days)
           if (result.timestamp && result.ttl) {
             const now = Date.now();
             if (now > result.timestamp + result.ttl) {
