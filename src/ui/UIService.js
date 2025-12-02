@@ -1,5 +1,3 @@
-// unified UI management: theme state, animation CSS injection, element creation, and theme application
-
 import { gsap } from 'gsap';
 
 export const THEME_COLORS = {
@@ -298,7 +296,6 @@ export class UIService {
       targetParent.insertBefore(loading, emailHeader.nextSibling);
     }
     
-    // ensure parent doesn't clip box shadows
     if (targetParent) {
       targetParent.style.setProperty('overflow', 'visible', 'important');
     }
@@ -334,6 +331,7 @@ export class UIService {
     const dates = summary.dates || [];
     const confidence = summary.confidence || 'medium';
     const modelName = summary.model || 'unknown';
+    const intent = summary.intent || null;
 
     const confidenceColors = {
       high: '#10b981',
@@ -341,6 +339,90 @@ export class UIService {
       low: '#ef4444'
     };
     const confColor = confidenceColors[confidence] || '#6b7280';
+
+    const intentColors = {
+      'invoice': { bg: '#10b981', text: '#ffffff' },
+      'receipt': { bg: '#059669', text: '#ffffff' },
+      'payment': { bg: '#047857', text: '#ffffff' },
+      'refund': { bg: '#34d399', text: '#064e3b' },
+      'subscription': { bg: '#6ee7b7', text: '#064e3b' },
+      
+      'meeting request': { bg: '#3b82f6', text: '#ffffff' },
+      'calendar invite': { bg: '#2563eb', text: '#ffffff' },
+      'reminder': { bg: '#60a5fa', text: '#1e3a8a' },
+      'reschedule': { bg: '#93c5fd', text: '#1e3a8a' },
+      'cancellation': { bg: '#1d4ed8', text: '#ffffff' },
+      
+      'flight booking': { bg: '#06b6d4', text: '#ffffff' },
+      'hotel reservation': { bg: '#0891b2', text: '#ffffff' },
+      'travel itinerary': { bg: '#22d3ee', text: '#164e63' },
+      'ticket': { bg: '#67e8f9', text: '#164e63' },
+      'reservation': { bg: '#0e7490', text: '#ffffff' },
+      
+      'order confirmation': { bg: '#6366f1', text: '#ffffff' },
+      'shipping update': { bg: '#818cf8', text: '#1e1b4b' },
+      'delivery notice': { bg: '#4f46e5', text: '#ffffff' },
+      'tracking': { bg: '#a5b4fc', text: '#1e1b4b' },
+      'return/exchange': { bg: '#7c3aed', text: '#ffffff' },
+      
+      'account alert': { bg: '#f43f5e', text: '#ffffff' },
+      'security alert': { bg: '#e11d48', text: '#ffffff' },
+      'password reset': { bg: '#fb7185', text: '#881337' },
+      'verification': { bg: '#fda4af', text: '#881337' },
+      'login notification': { bg: '#be123c', text: '#ffffff' },
+      
+      'task assignment': { bg: '#475569', text: '#ffffff' },
+      'project update': { bg: '#64748b', text: '#ffffff' },
+      'status report': { bg: '#94a3b8', text: '#1e293b' },
+      'feedback request': { bg: '#334155', text: '#ffffff' },
+      'approval request': { bg: '#1e293b', text: '#ffffff' },
+      
+      'personal': { bg: '#ec4899', text: '#ffffff' },
+      'introduction': { bg: '#f472b6', text: '#831843' },
+      'follow-up': { bg: '#db2777', text: '#ffffff' },
+      'thank you': { bg: '#fce7f3', text: '#9d174d' },
+      'announcement': { bg: '#be185d', text: '#ffffff' },
+      
+      'newsletter': { bg: '#8b5cf6', text: '#ffffff' },
+      'marketing': { bg: '#f97316', text: '#ffffff' },
+      'promotion': { bg: '#fb923c', text: '#7c2d12' },
+      'survey': { bg: '#fdba74', text: '#7c2d12' },
+      'invitation': { bg: '#ea580c', text: '#ffffff' },
+      
+      'support ticket': { bg: '#14b8a6', text: '#ffffff' },
+      'bug report': { bg: '#0d9488', text: '#ffffff' },
+      'feature request': { bg: '#2dd4bf', text: '#134e4a' },
+      'complaint': { bg: '#0f766e', text: '#ffffff' },
+      'resolution': { bg: '#5eead4', text: '#134e4a' },
+      
+      'contract': { bg: '#d97706', text: '#ffffff' },
+      'legal notice': { bg: '#b45309', text: '#ffffff' },
+      'policy update': { bg: '#fbbf24', text: '#78350f' },
+      'hr notice': { bg: '#f59e0b', text: '#78350f' },
+      'compliance': { bg: '#92400e', text: '#ffffff' },
+      
+      'bank statement': { bg: '#047857', text: '#ffffff' },
+      'tax document': { bg: '#065f46', text: '#ffffff' },
+      'financial report': { bg: '#10b981', text: '#ffffff' },
+      'investment update': { bg: '#34d399', text: '#064e3b' },
+      
+      'social notification': { bg: '#8b5cf6', text: '#ffffff' },
+      'connection request': { bg: '#a78bfa', text: '#2e1065' },
+      'mention': { bg: '#7c3aed', text: '#ffffff' },
+      'comment': { bg: '#c4b5fd', text: '#2e1065' },
+      
+      'satire/joke': { bg: '#fbbf24', text: '#78350f' },
+      'spam': { bg: '#991b1b', text: '#ffffff' },
+      'phishing attempt': { bg: '#7f1d1d', text: '#fef2f2' },
+      'auto-reply': { bg: '#9ca3af', text: '#1f2937' },
+      'out of office': { bg: '#6b7280', text: '#ffffff' },
+      'forwarded': { bg: '#a1a1aa', text: '#27272a' },
+      'thread reply': { bg: '#d4d4d8', text: '#3f3f46' },
+      'digest': { bg: '#71717a', text: '#ffffff' },
+      'notification': { bg: '#6366f1', text: '#ffffff' },
+      'confirmation': { bg: '#06b6d4', text: '#ffffff' },
+      'other': { bg: '#52525b', text: '#ffffff' }
+    };
 
     const summaryDiv = document.createElement('div');
     summaryDiv.className = 'metldr-summary';
@@ -358,12 +440,31 @@ export class UIService {
     `;
 
     summaryDiv.innerHTML = this._buildSummaryHTML(theme, summaryText, actions, dates, 
-                                                   confidence, confColor, modelName, summary, threadId);
+                                                   confidence, confColor, modelName, summary, threadId, intent, intentColors);
 
     return summaryDiv;
   }
 
-  static _buildSummaryHTML(theme, summaryText, actions, dates, confidence, confColor, modelName, summary, threadId) {
+  static _buildSummaryHTML(theme, summaryText, actions, dates, confidence, confColor, modelName, summary, threadId, intent, intentColors) {
+    // build intent badge html if intent exists
+    const intentKey = intent?.toLowerCase();
+    const intentStyle = intentColors?.[intentKey] || { bg: theme.bgSecondary, text: theme.textMuted };
+    const intentBadge = intent ? `
+      <!-- separator -->
+      <span style="color: ${theme.borderSubtle}; font-size: 11px; opacity: 0.5;">•</span>
+      
+      <span title="email type: ${this.escapeHtml(intent)}" style="
+        font-size: 10px;
+        color: ${intentStyle.text};
+        background: ${intentStyle.bg};
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.02em;
+        cursor: help;
+      ">${this.escapeHtml(intent)}</span>
+    ` : '';
     return `
       <div style="
         position: relative;
@@ -429,6 +530,9 @@ export class UIService {
               cursor: help;
             ">${this.formatTime(summary.time_ms)}</span>
           ` : ''}
+          
+          <!-- intent badge -->
+          ${intentBadge}
         </div>
         
         <!-- regenerate button -->
