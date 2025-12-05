@@ -6,13 +6,38 @@ import { EmailService } from './EmailService.js';
 import { PageService } from './PageService.js';
 
 export class BackgroundBootstrap {
+  static isInitialized = false;
+  static initPromise = null;
+  
   static async init() {
+    if (this.initPromise) return this.initPromise;
+    
+    this.initPromise = this._doInit();
+    return this.initPromise;
+  }
+  
+  static async _doInit() {
+    console.log('[BackgroundBootstrap] starting initialization...');
+    
     chrome.sidePanel
       .setPanelBehavior({ openPanelOnActionClick: true })
       .catch(err => console.error('[BackgroundBootstrap] side panel error:', err));
 
-    await cacheService.init();
-    await dictionaryService.init();
+    try {
+      await cacheService.init();
+      console.log('[BackgroundBootstrap] cache service ready');
+    } catch (err) {
+      console.error('[BackgroundBootstrap] cache init failed:', err.message);
+    }
+    
+    try {
+      await dictionaryService.init();
+      console.log('[BackgroundBootstrap] dictionary service ready');
+    } catch (err) {
+      console.error('[BackgroundBootstrap] dictionary init failed:', err.message);
+    }
+    
+    this.isInitialized = true;
 
     chrome.runtime.onMessage.addListener((msg, sender, respond) => {
       if (msg.type === 'SUMMARIZE_EMAIL') {
@@ -141,15 +166,31 @@ export class BackgroundBootstrap {
     (async () => {
       try {
         const { word, context } = msg;
+        
+        if (!word || typeof word !== 'string') {
+          respond({ success: false, error: 'invalid word' });
+          return;
+        }
+        
+        if (!this.isInitialized) {
+          console.log('[BackgroundBootstrap._onWordLookup] waiting for init...');
+          await this.init();
+        }
 
         const settings = await chrome.storage.local.get(['selectedLanguages', 'dictionarySource']);
         const languages = this._normalizeLanguages(settings.selectedLanguages || ['en']);
+        
+        console.log('[BackgroundBootstrap._onWordLookup] looking up:', word, 'langs:', languages);
 
         const isEnglish = /^[a-zA-Z]+$/.test(word);
         let detectedLang = 'en';
 
         if (!isEnglish) {
-          detectedLang = await WordService.detectLanguage(word, context?.fullSentence || '');
+          try {
+            detectedLang = await WordService.detectLanguage(word, context?.fullSentence || '');
+          } catch (e) {
+            detectedLang = 'en';
+          }
         }
 
         const priorityLangs = [detectedLang];
@@ -163,13 +204,15 @@ export class BackgroundBootstrap {
         const result = await WordService.lookup(word, { ...context, languages: priorityLangs });
 
         if (result) {
+          console.log('[BackgroundBootstrap._onWordLookup] found result, source:', result.source);
           respond({ success: true, result });
         } else {
+          console.log('[BackgroundBootstrap._onWordLookup] no result found');
           respond({ success: false, error: 'word not found' });
         }
       } catch (err) {
         console.error('[BackgroundBootstrap._onWordLookup]', err.message);
-        respond({ success: false, error: err.message });
+        respond({ success: false, error: err.message || 'lookup failed' });
       }
     })();
   }
@@ -192,16 +235,28 @@ export class BackgroundBootstrap {
         const { model, messages, pageContext } = msg;
 
         if (!messages?.length) {
-          respond({ ok: false, error: 'no messages' });
+          respond({ ok: false, error: 'no messages provided' });
           return;
         }
 
+        console.log('[BackgroundBootstrap._onChatMessage] processing', messages.length, 'messages, model:', model || 'auto');
+        
         const result = await PageService.chat(messages, pageContext, model);
-        respond(result);
+        
+        if (!result) {
+          console.error('[BackgroundBootstrap._onChatMessage] no result from PageService');
+          respond({ ok: false, error: 'no response from chat service' });
+          return;
+        }
+        
+        respond({
+          ...result,
+          timing: result.timing || null
+        });
         
       } catch (err) {
-        console.error('[BackgroundBootstrap._onChatMessage]', err.message);
-        respond({ ok: false, error: err.message });
+        console.error('[BackgroundBootstrap._onChatMessage] error:', err.message, err.stack);
+        respond({ ok: false, error: err.message || 'chat processing failed' });
       }
     })();
   }
