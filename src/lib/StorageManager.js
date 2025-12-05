@@ -1,7 +1,7 @@
-const CACHE_DB_NAME = 'metldr_cache';
+const CACHE_DB_NAME = 'metldr_storage';
 const CACHE_DB_VERSION = 1;
 const DICT_DB_NAME = 'metldr-dictionary';
-const DICT_DB_VERSION = 1;
+const DICT_DB_VERSION = 2;
 const DICT_BASE_URL = 'https://media.githubusercontent.com/media/WhiteHades/wikitionary-dictionary-json/master/dist';
 
 export const SUPPORTED_LANGUAGES = [
@@ -151,38 +151,73 @@ export class StorageManager {
   }
 
   async initDictionary() {
+    if (this.dictDb) {
+      console.log('[dict] already initialized, stores:', Array.from(this.dictDb.objectStoreNames));
+      return this.dictDb;
+    }
+    
+    console.log('[dict] initializing dictionary db:', DICT_DB_NAME, 'v' + DICT_DB_VERSION);
     return new Promise((resolve, reject) => {
       const request = indexedDB.open(DICT_DB_NAME, DICT_DB_VERSION);
-      request.onerror = () => reject(request.error);
+      
+      request.onerror = () => {
+        console.error('[dict] failed to open db:', request.error);
+        reject(request.error);
+      };
+      
       request.onsuccess = () => {
         this.dictDb = request.result;
+        const stores = Array.from(this.dictDb.objectStoreNames);
+        console.log('[dict] db opened successfully, stores:', stores);
+        
+        if (!stores.includes('meta')) {
+          console.warn('[dict] meta store missing - db may need upgrade');
+        }
+        
         resolve(this.dictDb);
       };
+      
       request.onupgradeneeded = (event) => {
+        console.log('[dict] upgrading db schema from v' + event.oldVersion + ' to v' + event.newVersion);
         const db = event.target.result;
+        
+        let created = 0;
         SUPPORTED_LANGUAGES.forEach(lang => {
           if (!db.objectStoreNames.contains(lang.code)) {
             db.createObjectStore(lang.code, { keyPath: 'word' });
+            created++;
           }
         });
+        
         if (!db.objectStoreNames.contains('meta')) {
           db.createObjectStore('meta', { keyPath: 'key' });
+          created++;
         }
+        
+        console.log('[dict] created', created, 'new object stores');
       };
     });
   }
 
   async dictIsLanguageDownloaded(langCode) {
-    if (!this.dictDb) await this.initDictionary();
-    return new Promise((resolve, reject) => {
-      const tx = this.dictDb.transaction(['meta'], 'readonly');
-      const store = tx.objectStore('meta');
-      const request = store.get(`lang-${langCode}`);
-      request.onsuccess = () => {
-        resolve(request.result?.downloaded === true);
-      };
-      request.onerror = () => reject(request.error);
-    });
+    try {
+      if (!this.dictDb) await this.initDictionary();
+      if (!this.dictDb.objectStoreNames.contains('meta')) {
+        return false;
+      }
+      return new Promise((resolve, reject) => {
+        const tx = this.dictDb.transaction(['meta'], 'readonly');
+        const store = tx.objectStore('meta');
+        const request = store.get(`lang-${langCode}`);
+        request.onsuccess = () => {
+          resolve(request.result?.downloaded === true);
+        };
+        request.onerror = () => reject(request.error);
+      });
+    } catch (err) {
+      console.warn('storagemanager: dictIsLanguageDownloaded failed:', err.message);
+      return false;
+    }
   }
 
   async dictMarkLanguageDownloaded(langCode) {
@@ -205,21 +240,53 @@ export class StorageManager {
     if (!lang) throw new Error(`language ${langCode} not supported`);
     if (!this.dictDb) await this.initDictionary();
 
+    if (!this.dictDb.objectStoreNames.contains(langCode)) {
+      console.log('[dict] store missing for', langCode, '- recreating db');
+      this.dictDb.close();
+      this.dictDb = null;
+      await this.initDictionary();
+      
+      if (!this.dictDb.objectStoreNames.contains(langCode)) {
+        throw new Error(`failed to create store for ${langCode}`);
+      }
+    }
+
+    console.log('[dict] starting download for:', langCode, '| base url:', lang.url);
     const letters = 'abcdefghijklmnopqrstuvwxyz'.split('');
     let totalEntries = 0;
+    let successfulLetters = 0;
 
     for (let i = 0; i < letters.length; i++) {
       const letter = letters[i];
       const url = `${lang.url}/${letter}.json`;
       try {
-        const response = await fetch(url);
+        console.log('[dict] fetching:', url);
+        const response = await fetch(url, { 
+          cache: 'no-cache',
+          headers: { 'Accept': 'application/json' }
+        });
+        
         if (!response.ok) {
-          console.warn(`failed to fetch ${url}: ${response.status}`);
+          console.warn('[dict] fetch failed:', url, '| status:', response.status, response.statusText);
           continue;
         }
+        
+        const contentType = response.headers.get('content-type');
+        if (!contentType?.includes('application/json')) {
+          console.warn('[dict] unexpected content-type:', contentType, 'for', url);
+        }
+        
         const entries = await response.json();
+        if (!Array.isArray(entries)) {
+          console.warn('[dict] unexpected response format for', url);
+          continue;
+        }
+        
+        console.log('[dict] got', entries.length, 'entries for letter', letter);
         await this.dictBatchInsert(langCode, entries);
         totalEntries += entries.length;
+        successfulLetters++;
+        
         if (onProgress) {
           onProgress({
             letter,
@@ -228,28 +295,52 @@ export class StorageManager {
           });
         }
       } catch (err) {
-        console.error(`error downloading ${letter}.json for ${lang.name}:`, err);
+        console.error('[dict] error downloading', letter + '.json for', lang.name, ':', err.message);
       }
     }
 
-    await this.dictMarkLanguageDownloaded(langCode);
+    console.log('[dict] download complete for:', langCode, '| letters:', successfulLetters + '/26 | entries:', totalEntries);
+    
+    if (totalEntries > 0) {
+      await this.dictMarkLanguageDownloaded(langCode);
+    } else {
+      console.error('[dict] no entries downloaded for', langCode, '- not marking as complete');
+    }
+    
     return totalEntries;
   }
 
   async dictBatchInsert(langCode, entries) {
     if (!this.dictDb) await this.initDictionary();
+    
+    if (!this.dictDb.objectStoreNames.contains(langCode)) {
+      console.error('[dict] store not found:', langCode, '- reinitializing db');
+      this.dictDb.close();
+      this.dictDb = null;
+      await this.initDictionary();
+      
+      if (!this.dictDb.objectStoreNames.contains(langCode)) {
+        throw new Error(`language store ${langCode} not found after reinit`);
+      }
+    }
+    
     return new Promise((resolve, reject) => {
-      const tx = this.dictDb.transaction([langCode], 'readwrite');
-      const store = tx.objectStore(langCode);
-      entries.forEach(entry => {
-        store.put({
-          word: entry.word.toLowerCase(),
-          pos: entry.pos,
-          definition: entry.definition
+      try {
+        const tx = this.dictDb.transaction([langCode], 'readwrite');
+        const store = tx.objectStore(langCode);
+        entries.forEach(entry => {
+          store.put({
+            word: entry.word.toLowerCase(),
+            pos: entry.pos,
+            definition: entry.definition
+          });
         });
-      });
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      } catch (err) {
+        console.error('[dict] batch insert error:', err.message);
+        reject(err);
+      }
     });
   }
 
@@ -275,33 +366,51 @@ export class StorageManager {
   }
 
   async dictLookup(word, langCode = 'en') {
-    if (!this.dictDb) await this.initDictionary();
-    const normalised = word.toLowerCase().trim();
-    return new Promise((resolve, reject) => {
-      const tx = this.dictDb.transaction([langCode], 'readonly');
-      const store = tx.objectStore(langCode);
-      const request = store.get(normalised);
-      request.onsuccess = () => {
-        resolve(request.result || null);
-      };
-      request.onerror = () => reject(request.error);
-    });
+    try {
+      if (!this.dictDb) await this.initDictionary();
+      if (!this.dictDb.objectStoreNames.contains(langCode)) {
+        return null;
+      }
+      const normalised = word.toLowerCase().trim();
+      return new Promise((resolve, reject) => {
+        const tx = this.dictDb.transaction([langCode], 'readonly');
+        const store = tx.objectStore(langCode);
+        const request = store.get(normalised);
+        request.onsuccess = () => {
+          resolve(request.result || null);
+        };
+        request.onerror = () => resolve(null);
+      });
+    } catch (err) {
+      console.warn('storagemanager: dictLookup failed:', err.message);
+      return null;
+    }
   }
 
   async dictGetDownloadedLanguages() {
-    if (!this.dictDb) await this.initDictionary();
-    return new Promise((resolve, reject) => {
-      const tx = this.dictDb.transaction(['meta'], 'readonly');
-      const store = tx.objectStore('meta');
-      const request = store.getAll();
-      request.onsuccess = () => {
-        const downloaded = request.result
-          .filter(m => m.key.startsWith('lang-') && m.downloaded)
-          .map(m => m.key.replace('lang-', ''));
-        resolve(downloaded);
-      };
-      request.onerror = () => reject(request.error);
-    });
+    try {
+      if (!this.dictDb) await this.initDictionary();
+      if (!this.dictDb.objectStoreNames.contains('meta')) {
+        console.log('[dict] no meta store found, returning empty list');
+        return [];
+      }
+      return new Promise((resolve, reject) => {
+        const tx = this.dictDb.transaction(['meta'], 'readonly');
+        const store = tx.objectStore('meta');
+        const request = store.getAll();
+        request.onsuccess = () => {
+          const downloaded = request.result
+            .filter(m => m.key.startsWith('lang-') && m.downloaded)
+            .map(m => m.key.replace('lang-', ''));
+          console.log('[dict] downloaded languages:', downloaded);
+          resolve(downloaded);
+        };
+        request.onerror = () => reject(request.error);
+      });
+    } catch (err) {
+      console.warn('[dict] dictGetDownloadedLanguages failed:', err.message);
+      return [];
+    }
   }
 
   async dictDeleteLanguage(langCode) {
