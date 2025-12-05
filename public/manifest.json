@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "version": "0.4.0",
+  "version": "0.5.1",
   "name": "MeTLDR",
   "description": "Local and private AI assistant powered by Ollama with offline dictionary",
   "content_security_policy": {
@@ -19,7 +19,8 @@
     {
       "matches": ["<all_urls>"],
       "js": ["content.js"],
-      "run_at": "document_idle"
+      "run_at": "document_start",
+      "world": "ISOLATED"
     }
   ],
   "permissions": [
@@ -33,6 +34,17 @@
   "host_permissions": [
     "http://localhost:11434/*",
     "http://127.0.0.1:11434/*",
+    "https://mail.google.com/*",
     "<all_urls>"
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "pageWorld.js",
+        "assets/*.js",
+        "assets/*.css"
+      ],
+      "matches": ["<all_urls>"]
+    }
   ]
 }
