@@ -2,6 +2,7 @@ import { Readability } from '@mozilla/readability';
 
 export class ArticleExtractor {
   static extract() {
+    const startTime = performance.now();
     const url = window.location.href;
     const hostname = window.location.hostname;
     
@@ -21,6 +22,7 @@ export class ArticleExtractor {
     }
     
     const wordCount = article.textContent.split(/\s+/).filter(w => w).length;
+    const extractionTime = Math.round(performance.now() - startTime);
     
     return {
       skip: false,
@@ -33,7 +35,8 @@ export class ArticleExtractor {
       url,
       domain: hostname.replace('www.', ''),
       wordCount,
-      readTime: `${Math.max(1, Math.ceil(wordCount / 200))} min`
+      readTime: `${Math.max(1, Math.ceil(wordCount / 200))} min`,
+      extractionTime
     };
   }
 }
