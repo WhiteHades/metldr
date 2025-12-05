@@ -114,11 +114,19 @@ export class UIService {
   }
 
   static init() {
-    this.injectSummaryAnimations();
-    this.injectPopupAnimations();
+    if (document.head) {
+      this.injectSummaryAnimations();
+      this.injectPopupAnimations();
+    } else {
+      document.addEventListener('DOMContentLoaded', () => {
+        this.injectSummaryAnimations();
+        this.injectPopupAnimations();
+      });
+    }
   }
 
   static injectSummaryAnimations() {
+    if (!document.head) return;
     if (document.getElementById(this.ANIMATION_STYLE_ID)) return;
 
     const style = document.createElement('style');
@@ -139,6 +147,7 @@ export class UIService {
   }
 
   static injectPopupAnimations() {
+    if (!document.head) return;
     if (document.getElementById(this.POPUP_ANIMATION_STYLE_ID)) return;
 
     const style = document.createElement('style');
@@ -436,7 +445,7 @@ export class UIService {
       transition: opacity 0.45s cubic-bezier(0.25, 0.46, 0.45, 0.94), 
                   transform 0.45s cubic-bezier(0.25, 0.46, 0.45, 0.94) !important;
       position: relative !important;
-      z-index: 10 !important;
+      z-index: 1 !important;
     `;
 
     summaryDiv.innerHTML = this._buildSummaryHTML(theme, summaryText, actions, dates, 
