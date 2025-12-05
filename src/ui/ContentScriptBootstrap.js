@@ -4,7 +4,7 @@ import { emailExtractor } from './EmailExtractor.js';
 import { ArticleExtractor } from './ArticleExtractor.js';
 
 export class ContentScriptBootstrap {
-  static async init() {
+  static async init(sdk = null) {
     const isGmail = window.location.hostname.includes('mail.google.com');
 
     UIService.init();
@@ -14,13 +14,18 @@ export class ContentScriptBootstrap {
     this.setupMessageListeners();
 
     const popupManager = new WordPopup();
-
-    if (isGmail) {
-      emailExtractor.setProcessCallback(() => emailExtractor.processCurrentEmail());
-      await emailExtractor.init(() => emailExtractor.processCurrentEmail());
-    }
-
     document.addEventListener('mouseup', (e) => popupManager.handleTextSelection(e));
+
+    if (isGmail && sdk) {
+      emailExtractor.init(sdk, () => {
+        // no callback, uses event handlers
+      });
+      console.log('metldr: gmail mode with inboxsdk');
+    } else if (isGmail) {
+      console.warn('metldr: gmail detected but no sdk available');
+    } else {
+      console.log('metldr: non-gmail mode, word popup only');
+    }
   }
 
   static setupMessageListeners() {
