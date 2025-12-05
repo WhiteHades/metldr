@@ -3,434 +3,216 @@ import { UIService } from './UIService.js';
 
 export class ReplyPanel {
   constructor() {
+    this.sdk = null;
     this.panel = null;
     this.triggerButton = null;
-    this.composeArea = null;
-    this.currentEmailId = null;
+    this.currentComposeView = null;
+    this.currentThreadId = null;
     this.suggestions = [];
     this.isVisible = false;
-    this.isTriggerVisible = false;
     this.themeUnsubscribe = null;
-    this.toolbarObserver = null;
-    this.watchInterval = null;
-    this.injectedToolbars = new WeakSet(); // track which toolbars already have our button
+    this.isLoading = false;
+    this.pollInterval = null;
+    this.isPopupMode = false;
+    
+    this.anchorElement = null;
+    this.scrollListener = null;
+    this.resizeListener = null;
+    this.isClosing = false;
+    this.lastCloseTime = 0;
   }
 
-  // start watching for compose toolbars
-  startWatching() {
-    if (this.watchInterval) return; // already watching
-    
-    console.log('[ReplyPanel] starting toolbar watcher');
-    
-    // check immediately
-    this._scanForToolbars();
-    
-    // then check every 500ms
-    this.watchInterval = setInterval(() => {
-      this._scanForToolbars();
-    }, 500);
-    
-    // also observe DOM for new toolbars
-    this.toolbarObserver = new MutationObserver(() => {
-      this._scanForToolbars();
-    });
-    this.toolbarObserver.observe(document.body, {
-      childList: true,
-      subtree: true
-    });
-  }
+  init(sdk) {
+    this.sdk = sdk;
 
-  stopWatching() {
-    if (this.watchInterval) {
-      clearInterval(this.watchInterval);
-      this.watchInterval = null;
+    if (!sdk) {
+      console.warn('metldr: no sdk provided, reply panel disabled');
+      return;
     }
-    if (this.toolbarObserver) {
-      this.toolbarObserver.disconnect();
-      this.toolbarObserver = null;
-    }
+
+    sdk.Compose.registerComposeViewHandler((composeView) => {
+      this.handleComposeView(composeView);
+    });
+
+    console.log('metldr: reply panel initialized with inboxsdk');
   }
 
-  async _scanForToolbars() {
-    // find all visible compose toolbars
-    const toolbars = document.querySelectorAll('.bAK');
+  async handleComposeView(composeView) {
+    console.log('metldr: compose view detected');
+
+    const isInline = composeView.isInlineReplyForm?.() ?? false;
+    const isPopup = !isInline;
+    console.log('metldr: compose mode:', isPopup ? 'popup' : 'inline');
+
+    let threadId = this.getThreadIdFromUrl();
+    console.log('metldr: url-based thread id:', threadId);
+
+    if (!threadId) {
+      const threadView = composeView.getThreadView?.();
+      if (threadView) {
+        threadId = await this.getThreadId(threadView);
+      }
+    }
+
+    if (!threadId && composeView.getThreadID) {
+      threadId = composeView.getThreadID();
+      console.log('metldr: sdk thread id (fallback):', threadId);
+    }
     
-    for (const toolbar of toolbars) {
-      // skip if not visible
-      if (!this._isToolbarVisible(toolbar)) continue;
+    if (!threadId) {
+      console.log('metldr: new compose, skipping suggestions');
+      return;
+    }
+
+    console.log('metldr: compose thread id:', threadId);
+
+    this.currentComposeView = composeView;
+    this.currentThreadId = threadId;
+    this.isPopupMode = isPopup;
+
+    this.addComposeButton(composeView);
+
+    const response = await this.fetchSuggestions(threadId);
+    if (response?.success && response.suggestions?.length) {
+      this.suggestions = response.suggestions;
+      console.log('metldr: suggestions ready:', this.suggestions.length);
+    } else {
+      console.log('metldr: suggestions not ready, will poll');
+      this.startPolling(threadId);
+    }
+
+    composeView.on('destroy', () => {
+      if (this.currentComposeView === composeView) {
+        this.stopPolling();
+        this.hide();
+        this.currentComposeView = null;
+        this.isPopupMode = false;
+      }
+    });
+  }
+
+  startPolling(threadId) {
+    this.stopPolling();
+    let attempts = 0;
+    const maxAttempts = 20;
+    
+    this.pollInterval = setInterval(async () => {
+      attempts++;
+      const response = await this.fetchSuggestions(threadId);
       
-      // skip if we already injected our button here
-      if (toolbar.querySelector('.metldr-reply-trigger')) continue;
+      if (response?.contextInvalidated) {
+        console.log('metldr: stopping poll (extension reloaded)');
+        this.stopPolling();
+        return;
+      }
       
-      // find the editable associated with this toolbar
-      const composeContainer = this._findComposeContainer(toolbar);
-      if (!composeContainer) continue;
-      
-      const editable = composeContainer.querySelector('[g_editable="true"]') ||
-                       composeContainer.querySelector('.Am.Al.editable[contenteditable="true"]');
-      if (!editable || !this._isVisible(editable)) continue;
-      
-      // get thread id and fetch suggestions
-      const threadId = this._getCurrentThreadId();
-      if (!threadId) continue;
-      
-      console.log('[ReplyPanel] found new toolbar, injecting button for thread:', threadId);
-      
-      // fetch suggestions and inject button
-      const response = await this._fetchSuggestions(threadId);
       if (response?.success && response.suggestions?.length) {
         this.suggestions = response.suggestions;
-        this.currentEmailId = threadId;
-        this.composeArea = composeContainer;
-        this._injectButtonIntoToolbar(toolbar);
+        console.log('metldr: suggestions ready after polling:', this.suggestions.length);
+        this.stopPolling();
+        
+        if (this.isVisible && this.panel && this.isLoading) {
+          this.updatePanelWithSuggestions();
+        }
+      } else if (attempts >= maxAttempts) {
+        console.log('metldr: gave up polling for suggestions');
+        this.stopPolling();
       }
+    }, 1000);
+  }
+
+  stopPolling() {
+    if (this.pollInterval) {
+      clearInterval(this.pollInterval);
+      this.pollInterval = null;
     }
   }
 
-  _findComposeContainer(toolbar) {
-    // walk up from toolbar to find compose container
-    let container = toolbar.parentElement;
-    let attempts = 0;
-    while (container && attempts < 10) {
-      // check if this container has an editable
-      if (container.querySelector('[g_editable="true"]') ||
-          container.querySelector('.Am.Al.editable[contenteditable="true"]')) {
-        return container;
+  async getThreadId(threadView) {
+    if (threadView.getThreadIDAsync) {
+      try {
+        return await threadView.getThreadIDAsync();
+      } catch {
+        // fallback
       }
-      container = container.parentElement;
-      attempts++;
     }
-    return null;
+    return this.getThreadIdFromUrl();
   }
 
-  _getCurrentThreadId() {
-    // try to get thread ID from URL or DOM
+  getThreadIdFromUrl() {
     const hash = window.location.hash;
-    const match = hash.match(/#(?:inbox|sent|all)\/([a-zA-Z0-9]+)/);
-    if (match) return match[1];
-    
-    // fallback: look for thread ID in DOM
-    const threadEl = document.querySelector('[data-thread-perm-id]');
-    if (threadEl) return threadEl.getAttribute('data-thread-perm-id');
-    
-    // last fallback: use a timestamp-based ID
-    return 'compose-' + Date.now();
+    const match = hash.match(/#[^/]+\/(?:[^/]+\/)?([A-Za-z0-9_-]{16,})$/);
+    return match ? match[1] : null;
   }
 
-  async show(composeArea, emailId) {
-    // this method is now mainly called by EmailExtractor as backup
-    // the main injection happens via _scanForToolbars
-    
-    if (!emailId) {
-      emailId = this._getCurrentThreadId();
-    }
-    
-    // store context
-    this.currentEmailId = emailId;
-    this.composeArea = composeArea;
+  addComposeButton(composeView) {
+    composeView.addButton({
+      title: 'metldr replies',
+      iconUrl: this.getIconDataUrl(),
+      orderHint: 100,
+      onClick: (event) => {
+        console.log('metldr: compose button clicked');
+        this.showSuggestionsPanel(composeView);
+      }
+    });
 
-    const response = await this._fetchSuggestions(emailId);
-    if (!response?.success || !response.suggestions?.length) {
-      console.log('[ReplyPanel] no suggestions available for', emailId);
-      return;
-    }
-
-    this.suggestions = response.suggestions;
-    
-    // find toolbar and inject
-    const toolbar = composeArea?.querySelector('.bAK') || this._findVisibleToolbar();
-    if (toolbar && !toolbar.querySelector('.metldr-reply-trigger')) {
-      this._injectButtonIntoToolbar(toolbar);
-    }
+    console.log('metldr: added compose button');
   }
 
-  _findVisibleToolbar() {
-    const toolbars = document.querySelectorAll('.bAK');
-    for (const tb of toolbars) {
-      if (this._isToolbarVisible(tb)) return tb;
-    }
-    return null;
+  getIconDataUrl() {
+    return 'data:image/svg+xml,' + encodeURIComponent(`
+      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5f6368" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 3l1.5 5.5L19 10l-5.5 1.5L12 17l-1.5-5.5L5 10l5.5-1.5L12 3z"/>
+        <path d="M19 15l.88 3.12L23 19l-3.12.88L19 23l-.88-3.12L15 19l3.12-.88L19 15z" opacity="0.5"/>
+      </svg>
+    `);
   }
 
-  _showFullPanel() {
-    if (!this.composeArea || !this.suggestions?.length) {
-      console.log('[ReplyPanel] cannot show panel - missing composeArea or suggestions');
+  showSuggestionsPanel(composeView) {
+    if (this.isClosing) return;
+    
+    const timeSinceClose = Date.now() - this.lastCloseTime;
+    if (timeSinceClose < 200) {
+      console.log('metldr: ignoring reopen (too soon after close)');
       return;
     }
     
-    // if panel already visible, just toggle it off
     if (this.isVisible && this.panel) {
-      this._animateOut();
+      this.animateOut();
       this.isVisible = false;
       return;
     }
+
+    this.isLoading = !this.suggestions?.length;
+    console.log('metldr: creating suggestions panel, isPopup:', this.isPopupMode, 'loading:', this.isLoading);
     
-    console.log('[ReplyPanel] showing full panel with', this.suggestions.length, 'suggestions');
+    try {
+      this.anchorElement = composeView.getElement?.() || null;
+    } catch (e) {
+      this.anchorElement = null;
+    }
     
-    // keep trigger button visible - don't remove it
-    
-    this._createPanel(this.composeArea);
-    this._positionPanel(this.composeArea);
-    this._animateIn();
-    this._subscribeToTheme();
+    this.createPanel(composeView);
+    this.updatePosition();
+    this.setupPositionListeners();
+    this.animateIn();
+    this.subscribeToTheme();
     this.isVisible = true;
+    console.log('metldr: panel shown, position:', this.panel?.style.left, this.panel?.style.top);
   }
 
-  // drag functionality removed for cleaner UX
-
-  _injectButtonIntoToolbar(toolbar) {
-    if (!toolbar || toolbar.querySelector('.metldr-reply-trigger')) {
-      return; // already has our button
-    }
+  updatePanelWithSuggestions() {
+    if (!this.panel || !this.suggestions?.length) return;
     
-    console.log('[ReplyPanel] injecting button into toolbar, suggestions:', this.suggestions.length);
-    
-    // create button
-    const btn = document.createElement('div');
-    btn.className = 'metldr-reply-trigger wG J-Z-I';
-    btn.setAttribute('data-tooltip', 'AI reply suggestions');
-    btn.setAttribute('aria-label', 'AI reply suggestions');
-    btn.setAttribute('tabindex', '1');
-    btn.setAttribute('role', 'button');
-    btn.style.cssText = 'user-select: none; margin-left: 12px;';
-    
-    btn.innerHTML = `
-      <div class="J-J5-Ji J-Z-I-Kv-H" style="user-select: none;">
-        <div class="J-J5-Ji J-Z-I-J6-H" style="user-select: none; position: relative;">
-          <div class="metldr-icon aaA aMZ" style="user-select: none;">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5f6368" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 3l1.5 5.5L19 10l-5.5 1.5L12 17l-1.5-5.5L5 10l5.5-1.5L12 3z"/>
-              <path d="M19 15l.88 3.12L23 19l-3.12.88L19 23l-.88-3.12L15 19l3.12-.88L19 15z" opacity="0.5"/>
-            </svg>
-          </div>
-          <span class="metldr-badge" style="
-            position: absolute;
-            top: -5px;
-            right: -7px;
-            min-width: 14px;
-            height: 14px;
-            padding: 0 3px;
-            background: #1a73e8;
-            color: #fff;
-            font-size: 9px;
-            font-weight: 700;
-            border-radius: 7px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.3);
-            z-index: 1;
-          ">${this.suggestions.length}</span>
-        </div>
-      </div>
-    `;
-    
-    // insert as first child of toolbar (right after formatting options button which is outside .bAK)
-    if (toolbar.firstChild) {
-      toolbar.insertBefore(btn, toolbar.firstChild);
-    } else {
-      toolbar.appendChild(btn);
-    }
-    
-    this.triggerButton = btn;
-    this.isTriggerVisible = true;
-    
-    // hover effect
-    const iconSvg = btn.querySelector('svg');
-    btn.addEventListener('mouseenter', () => {
-      if (iconSvg) iconSvg.style.stroke = '#1a73e8';
-    });
-    btn.addEventListener('mouseleave', () => {
-      if (iconSvg) iconSvg.style.stroke = '#5f6368';
-    });
-    
-    // click handler
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      console.log('[ReplyPanel] trigger button clicked');
-      // update composeArea to current visible one
-      this.composeArea = this._findComposeContainer(toolbar);
-      this._showFullPanel();
-    });
-    
-    // animate in
-    gsap.from(btn, {
-      scale: 0,
-      duration: 0.25,
-      ease: 'back.out(1.7)'
-    });
-  }
-
-  _showTriggerButton(composeArea) {
-    // legacy method - now uses _injectButtonIntoToolbar
-    const toolbar = composeArea?.querySelector('.bAK') || this._findVisibleToolbar();
-    if (toolbar) {
-      this._injectButtonIntoToolbar(toolbar);
-    } else {
-      console.log('[ReplyPanel] no toolbar found, using floating trigger');
-      this._showFloatingTrigger(composeArea);
+    this.isLoading = false;
+    const content = this.panel.querySelector('.metldr-reply-content');
+    if (content) {
+      content.innerHTML = this.buildSuggestionsHTML(UIService.currentTheme);
+      this.attachOptionListeners(content, this.currentComposeView);
     }
   }
 
-  _showFloatingTrigger(composeArea) {
-    // fallback: floating button near compose area when toolbar injection fails
-    const theme = UIService.currentTheme;
-    const rect = composeArea.getBoundingClientRect();
-    
-    this.triggerButton = document.createElement('div');
-    this.triggerButton.className = 'metldr-reply-trigger';
-    this.triggerButton.style.cssText = `
-      position: fixed;
-      z-index: 10000;
-      top: ${rect.top - 36}px;
-      left: ${rect.left}px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      width: 32px;
-      height: 32px;
-      background: ${theme.bgSecondary};
-      border: 1.5px solid ${theme.primary};
-      border-radius: 50%;
-      cursor: pointer;
-      box-shadow: 0 4px 12px ${theme.shadow};
-      transition: all 0.15s ease;
-    `;
-    
-    this.triggerButton.innerHTML = `
-      <span style="font-size: 14px;">✨</span>
-      <span style="
-        position: absolute;
-        top: -4px;
-        right: -4px;
-        min-width: 14px;
-        height: 14px;
-        padding: 0 3px;
-        background: ${theme.primary};
-        color: ${theme.bg};
-        font-size: 9px;
-        font-weight: 700;
-        border-radius: 7px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-      ">${this.suggestions.length}</span>
-    `;
-    
-    document.body.appendChild(this.triggerButton);
-    this.isTriggerVisible = true;
-    
-    this.triggerButton.addEventListener('mouseenter', () => {
-      this.triggerButton.style.background = theme.primary;
-      this.triggerButton.style.transform = 'scale(1.1)';
-    });
-    
-    this.triggerButton.addEventListener('mouseleave', () => {
-      this.triggerButton.style.background = theme.bgSecondary;
-      this.triggerButton.style.transform = 'scale(1)';
-    });
-    
-    const self = this;
-    this.triggerButton.addEventListener('click', (e) => {
-      e.stopPropagation();
-      self._showFullPanel();
-    });
-    
-    gsap.from(this.triggerButton, {
-      scale: 0,
-      duration: 0.25,
-      ease: 'back.out(1.7)'
-    });
-  }
-
-  _showGeneratingHint() {
-    const theme = UIService.currentTheme;
-    
-    const hint = document.createElement('div');
-    hint.className = 'metldr-reply-generating';
-    hint.style.cssText = `
-      position: fixed;
-      bottom: 20px;
-      right: 20px;
-      z-index: 10000;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 10px 14px;
-      background: ${theme.bgSecondary};
-      border: 1px solid ${theme.border};
-      border-radius: 8px;
-      box-shadow: 0 4px 16px ${theme.shadow};
-      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', system-ui, sans-serif;
-      font-size: 12px;
-      color: ${theme.textMuted};
-      opacity: 0;
-      transform: translateY(10px);
-    `;
-    
-    hint.innerHTML = `
-      <div style="
-        width: 6px;
-        height: 6px;
-        background: ${theme.primary};
-        border-radius: 50%;
-        animation: metldr-pulse 1.5s ease-in-out infinite;
-      "></div>
-      <span>generating reply suggestions...</span>
-      <style>
-        @keyframes metldr-pulse {
-          0%, 100% { opacity: 0.4; transform: scale(0.9); }
-          50% { opacity: 1; transform: scale(1.1); }
-        }
-      </style>
-    `;
-    
-    document.body.appendChild(hint);
-    
-    gsap.to(hint, {
-      opacity: 1,
-      y: 0,
-      duration: 0.3,
-      ease: 'power2.out'
-    });
-    
-    // auto-hide after 3 seconds
-    setTimeout(() => {
-      gsap.to(hint, {
-        opacity: 0,
-        y: 10,
-        duration: 0.2,
-        ease: 'power2.in',
-        onComplete: () => hint.remove()
-      });
-    }, 3000);
-  }
-
-  hide() {
-    if (this.panel) {
-      this._animateOut();
-    }
-    // don't remove trigger button - let toolbar watcher manage it
-    if (this.themeUnsubscribe) {
-      this.themeUnsubscribe();
-      this.themeUnsubscribe = null;
-    }
-    this.isVisible = false;
-    this.isTriggerVisible = false;
-    this.currentEmailId = null;
-    this.composeArea = null;
-  }
-
-  // close only the panel, keep trigger button visible
-  _hidePanel() {
-    if (this.panel) {
-      this._animateOut();
-    }
-    this.isVisible = false;
-  }
-
-  async _fetchSuggestions(emailId, retries = 2) {
+  async fetchSuggestions(emailId, retries = 2) {
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
         const resp = await new Promise((resolve, reject) => {
@@ -445,37 +227,48 @@ export class ReplyPanel {
             }
           });
         });
-        return resp;
-      } catch (err) {
-        // "receiving end does not exist" means background SW is asleep
-        if (attempt < retries && err.message.includes('Receiving end does not exist')) {
-          console.log('[ReplyPanel] background not ready, retrying...', attempt + 1);
-          // small delay to let SW wake up
+        
+        if (resp === undefined && attempt < retries) {
+          console.log('metldr: empty response, retrying...', attempt + 1);
           await new Promise(r => setTimeout(r, 200));
           continue;
         }
-        console.error('[ReplyPanel._fetchSuggestions]', err.message);
+        
+        return resp || { success: false };
+      } catch (err) {
+        if (err.message.includes('Extension context invalidated')) {
+          console.log('metldr: extension reloaded, stopping suggestions fetch');
+          return { success: false };
+        }
+        
+        const isRetryable = err.message.includes('Receiving end does not exist') ||
+                            err.message.includes('message port closed');
+        if (attempt < retries && isRetryable) {
+          console.log('metldr: background not ready, retrying...', attempt + 1);
+          await new Promise(r => setTimeout(r, 200));
+          continue;
+        }
+        console.error('metldr: fetch suggestions failed:', err.message);
         return { success: false };
       }
     }
     return { success: false };
   }
 
-  _createPanel(composeArea) {
+  createPanel(composeView) {
     const theme = UIService.currentTheme;
 
-    // outer container
     this.panel = document.createElement('div');
     this.panel.className = 'metldr-reply-panel';
+    
     this.panel.style.cssText = `
       position: fixed !important;
-      z-index: 2147483647 !important;
+      z-index: 999999 !important;
       opacity: 0;
-      transform: translateY(-4px);
+      transform-origin: top left;
       will-change: opacity, transform;
     `;
 
-    // main card (matches summary card style)
     const card = document.createElement('div');
     card.className = 'metldr-reply-card';
     card.style.cssText = `
@@ -487,12 +280,10 @@ export class ReplyPanel {
       font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', system-ui, sans-serif;
       min-width: 280px;
       max-width: 320px;
-      cursor: grab;
-      user-select: none;
       -webkit-font-smoothing: antialiased;
     `;
 
-    // floating status badge on border (exactly like summary box)
+    // badge
     const badge = document.createElement('div');
     badge.className = 'metldr-reply-badge';
     badge.style.cssText = `
@@ -516,7 +307,7 @@ export class ReplyPanel {
       <span style="font-size: 11px; color: ${theme.textMuted};">replies</span>
     `;
 
-    // close button (styled like regenerate button)
+    // close button
     const closeBtn = document.createElement('button');
     closeBtn.className = 'metldr-reply-close';
     closeBtn.textContent = '×';
@@ -541,15 +332,12 @@ export class ReplyPanel {
       box-shadow: 0 4px 12px ${theme.shadow}, inset 0 1px 0 ${theme.borderSubtle};
       line-height: 1;
     `;
-    
-    // close button click handler
     closeBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      e.preventDefault();
-      this._hidePanel();
+      this.hidePanel();
     });
 
-    // content area
+    // content
     const content = document.createElement('div');
     content.className = 'metldr-reply-content';
     content.style.cssText = `
@@ -558,7 +346,7 @@ export class ReplyPanel {
       overflow-y: auto;
     `;
 
-    // add styles (scrollbar + close button hover)
+    // styles
     const style = document.createElement('style');
     style.textContent = `
       .metldr-reply-content::-webkit-scrollbar { width: 4px; }
@@ -570,16 +358,10 @@ export class ReplyPanel {
         border-color: ${theme.primary} !important;
         color: ${theme.primary} !important;
         transform: scale(1.1);
-        box-shadow: 0 3px 8px ${theme.shadow};
-      }
-      .metldr-reply-close:active {
-        background: ${theme.bg} !important;
-        transform: scale(0.95);
       }
     `;
 
-    // build suggestions
-    content.innerHTML = this._buildSuggestionsHTML(theme);
+    content.innerHTML = this.buildSuggestionsHTML(theme);
 
     card.appendChild(badge);
     card.appendChild(closeBtn);
@@ -587,14 +369,45 @@ export class ReplyPanel {
     card.appendChild(content);
     this.panel.appendChild(card);
 
-    this._setupDrag(card);
-    this._attachOptionListeners(content, composeArea);
+    this.attachOptionListeners(content, composeView);
+    this.setupEventHandlers();
 
     document.body.appendChild(this.panel);
   }
 
-  _buildSuggestionsHTML(theme) {
-    // limit to 4 suggestions max
+  buildSuggestionsHTML(theme) {
+    if (this.isLoading || !this.suggestions?.length) {
+      return `
+        <div style="
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          padding: 24px 12px;
+          gap: 12px;
+        ">
+          <div style="
+            width: 24px;
+            height: 24px;
+            border: 2px solid ${theme.borderSubtle};
+            border-top-color: ${theme.primary};
+            border-radius: 50%;
+            animation: metldr-spin 0.8s linear infinite;
+          "></div>
+          <span style="
+            font-size: 12px;
+            color: ${theme.textMuted};
+          ">generating replies...</span>
+        </div>
+        <style>
+          @keyframes metldr-spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+          }
+        </style>
+      `;
+    }
+    
     const limited = this.suggestions.slice(0, 4);
     return limited.map((s, idx) => `
       <div class="metldr-reply-option" data-reply-idx="${idx}" style="
@@ -606,7 +419,7 @@ export class ReplyPanel {
         border: 0.5px solid ${theme.borderSubtle};
         border-radius: 8px;
         cursor: pointer;
-        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
       ">
         <span style="
           position: absolute;
@@ -631,321 +444,269 @@ export class ReplyPanel {
           -webkit-line-clamp: 2;
           -webkit-box-orient: vertical;
           overflow: hidden;
-        ">${UIService.escapeHtml(this._truncatePreview(s.body, 100))}</span>
+        ">${UIService.escapeHtml(this.truncatePreview(s.body, 100))}</span>
       </div>
     `).join('');
   }
 
-  _attachOptionListeners(content, composeArea) {
+  attachOptionListeners(content, composeView) {
     const options = content.querySelectorAll('.metldr-reply-option');
-    const self = this;
-    
-    // inject style for hover and selected states
-    if (!document.querySelector('#metldr-option-hover-style')) {
-      const style = document.createElement('style');
-      style.id = 'metldr-option-hover-style';
-      style.textContent = `
-        .metldr-reply-option.metldr-hover,
-        .metldr-reply-option.metldr-selected {
-          border-color: var(--metldr-primary) !important;
-          box-shadow: 0 2px 8px var(--metldr-shadow) !important;
-        }
-      `;
-      document.head.appendChild(style);
-    }
-    
+
     options.forEach(option => {
-      option.addEventListener('mouseenter', () => {
+      const handleEnter = () => {
         const t = UIService.currentTheme;
-        document.documentElement.style.setProperty('--metldr-primary', t.primary);
-        document.documentElement.style.setProperty('--metldr-shadow', t.shadow);
-        option.classList.add('metldr-hover');
-      });
-      
-      option.addEventListener('mouseleave', () => {
-        // only remove hover if not selected
-        if (!option.classList.contains('metldr-selected')) {
-          option.classList.remove('metldr-hover');
-        }
-      });
-      
+        option.style.borderColor = t.primary;
+        option.style.boxShadow = `0 2px 8px ${t.shadow}`;
+        option.style.transform = 'translateY(-1px)';
+      };
+
+      const handleLeave = () => {
+        const t = UIService.currentTheme;
+        option.style.borderColor = t.borderSubtle;
+        option.style.boxShadow = 'none';
+        option.style.transform = 'none';
+      };
+
+      option.addEventListener('mouseenter', handleEnter);
+      option.addEventListener('mouseleave', handleLeave);
+      option.addEventListener('pointerleave', handleLeave);
+
       option.addEventListener('click', (e) => {
         e.stopPropagation();
-        e.preventDefault();
-        
-        const t = UIService.currentTheme;
         const idx = parseInt(option.getAttribute('data-reply-idx'), 10);
-        const suggestion = self.suggestions[idx];
-        
+        const suggestion = this.suggestions[idx];
         if (suggestion) {
-          // clear selected from all options first
-          options.forEach(o => o.classList.remove('metldr-selected'));
-          
-          // add selected class (persists even after focus change)
-          option.classList.add('metldr-selected');
-          option.classList.add('metldr-hover');
-          
-          self._insertReply(composeArea, suggestion.body);
+          this.insertReply(composeView, suggestion.body);
         }
       });
     });
   }
 
-  _setupDrag(popup) {
-    let isDragging = false;
-    let hasMoved = false;
-    let startX, startY, startLeft, startTop;
-    const dragThreshold = 5; // pixels to move before considering it a drag
+  insertReply(composeView, text) {
+    if (!composeView) {
+      console.error('metldr: no compose view available');
+      return;
+    }
 
-    popup.addEventListener('mousedown', (e) => {
-      // don't initiate drag from close button
-      if (e.target.closest('.metldr-reply-close')) {
-        return;
-      }
-      isDragging = true;
-      hasMoved = false;
-      startX = e.clientX;
-      startY = e.clientY;
-      const rect = this.panel.getBoundingClientRect();
-      startLeft = rect.left;
-      startTop = rect.top;
-    });
+    try {
+      const htmlContent = text
+        .split('\n')
+        .map(line => `<div>${line || '<br>'}</div>`)
+        .join('');
 
-    document.addEventListener('mousemove', (e) => {
-      if (!isDragging) return;
-      
-      const dx = e.clientX - startX;
-      const dy = e.clientY - startY;
-      
-      // only start moving after threshold
-      if (Math.abs(dx) > dragThreshold || Math.abs(dy) > dragThreshold) {
-        hasMoved = true;
-        popup.style.cursor = 'grabbing';
-        this.panel.style.left = (startLeft + dx) + 'px';
-        this.panel.style.top = (startTop + dy) + 'px';
+      composeView.setBodyHTML(htmlContent);
+      console.log('metldr: inserted reply via sdk');
+    } catch (err) {
+      console.error('metldr: failed to insert reply:', err);
+      try {
+        composeView.insertTextIntoBodyAtCursor(text);
+      } catch (e) {
+        console.error('metldr: fallback insert also failed:', e);
       }
-    });
-
-    document.addEventListener('mouseup', (e) => {
-      if (isDragging) {
-        // if we moved, prevent click from propagating to suggestions
-        if (hasMoved) {
-          e.stopPropagation();
-        }
-        isDragging = false;
-        hasMoved = false;
-        popup.style.cursor = 'grab';
-      }
-    });
+    }
   }
 
-  _truncatePreview(text, maxLen = 60) {
+  // position logic mirrored from WordPopup.updatePosition()
+  updatePosition() {
+    if (!this.panel || this.isClosing) return;
+
+    try {
+      const panelRect = this.panel.getBoundingClientRect();
+      const panelWidth = panelRect.width || 320;
+      const panelHeight = panelRect.height || 240;
+      
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+      const padding = 12;
+
+      let finalX, finalY;
+
+      if (this.anchorElement) {
+        const anchorRect = this.anchorElement.getBoundingClientRect();
+        
+        // find compose body for better alignment
+        const bodyEl = this.anchorElement.querySelector('[role="textbox"], [contenteditable="true"], .editable');
+        const bodyRect = bodyEl ? bodyEl.getBoundingClientRect() : anchorRect;
+        
+        // center horizontally on the compose body
+        const anchorCenterX = bodyRect.left + (bodyRect.width / 2);
+        finalX = anchorCenterX - (panelWidth / 2);
+        
+        // try above compose first (like word popup does below word)
+        const aboveY = anchorRect.top - panelHeight - padding;
+        const belowY = anchorRect.bottom + padding;
+
+        if (aboveY >= padding) {
+          // fits above
+          finalY = aboveY;
+        } else if (belowY + panelHeight < viewportHeight - padding) {
+          // fits below
+          finalY = belowY;
+        } else if (this.isPopupMode) {
+          // popup mode: try left/right of compose dialog
+          const leftX = anchorRect.left - panelWidth - padding;
+          const rightX = anchorRect.right + padding;
+          
+          if (leftX >= padding) {
+            finalX = leftX;
+            finalY = Math.max(padding, anchorRect.top);
+          } else if (rightX + panelWidth < viewportWidth - padding) {
+            finalX = rightX;
+            finalY = Math.max(padding, anchorRect.top);
+          } else {
+            // no room on sides, overlay with offset
+            finalX = anchorRect.left + 20;
+            finalY = anchorRect.top + 20;
+          }
+        } else {
+          // inline: clamp to visible viewport
+          finalY = Math.max(padding, Math.min(aboveY, viewportHeight - panelHeight - padding));
+        }
+      } else {
+        // no anchor, center on screen
+        finalX = (viewportWidth - panelWidth) / 2;
+        finalY = (viewportHeight - panelHeight) / 2;
+      }
+
+      // viewport bounds clamping (same as WordPopup)
+      if (finalX < padding) {
+        finalX = padding;
+      } else if (finalX + panelWidth > viewportWidth - padding) {
+        finalX = viewportWidth - panelWidth - padding;
+      }
+
+      if (finalY < padding) {
+        finalY = padding;
+      } else if (finalY + panelHeight > viewportHeight - padding) {
+        finalY = viewportHeight - panelHeight - padding;
+      }
+
+      this.panel.style.position = 'fixed';
+      this.panel.style.left = finalX + 'px';
+      this.panel.style.top = finalY + 'px';
+    } catch (error) {
+      console.log('metldr: error updating panel position:', error.message);
+    }
+  }
+
+  // scroll/resize listeners (same pattern as WordPopup)
+  setupPositionListeners() {
+    this.scrollListener = () => this.updatePosition();
+    this.resizeListener = () => this.updatePosition();
+
+    window.addEventListener('scroll', this.scrollListener, { capture: true, passive: true });
+    window.addEventListener('resize', this.resizeListener);
+  }
+
+  removePositionListeners() {
+    if (this.scrollListener) {
+      window.removeEventListener('scroll', this.scrollListener, true);
+      this.scrollListener = null;
+    }
+    if (this.resizeListener) {
+      window.removeEventListener('resize', this.resizeListener);
+      this.resizeListener = null;
+    }
+  }
+
+  setupEventHandlers() {
+    // escape handler
+    this.escapeHandler = (e) => {
+      if (e.key === 'Escape') this.hidePanel();
+    };
+    document.addEventListener('keydown', this.escapeHandler);
+
+    // outside click handler
+    this.outsideClickHandler = (e) => {
+      if (!this.panel || !this.isVisible) return;
+      
+      if (!this.panel.contains(e.target)) {
+        requestAnimationFrame(() => {
+          if (this.isVisible && this.panel) this.hidePanel();
+        });
+      }
+    };
+    setTimeout(() => {
+      document.addEventListener('pointerdown', this.outsideClickHandler, true);
+    }, 150);
+  }
+
+  truncatePreview(text, maxLen = 60) {
     if (!text) return '';
     const cleaned = text.replace(/\n+/g, ' ').trim();
     return cleaned.length > maxLen ? cleaned.substring(0, maxLen - 3) + '...' : cleaned;
   }
 
-  _positionPanel(composeArea) {
-    if (!this.panel || !composeArea) return;
-
-    const composeRect = composeArea.getBoundingClientRect();
-    const panelWidth = 260;
-    const panelHeight = this.panel.offsetHeight || 180;
-
-    // position above compose area, aligned to left edge
-    let left = composeRect.left;
-    let top = composeRect.top - panelHeight - 12;
-
-    // if not enough space above, show below
-    if (top < 10) {
-      top = composeRect.bottom + 12;
+  hide() {
+    if (this.panel) this.animateOut();
+    if (this.themeUnsubscribe) {
+      this.themeUnsubscribe();
+      this.themeUnsubscribe = null;
     }
-
-    // keep within viewport horizontally
-    if (left + panelWidth > window.innerWidth - 10) {
-      left = window.innerWidth - panelWidth - 10;
-    }
-    if (left < 10) left = 10;
-
-    this.panel.style.left = `${left}px`;
-    this.panel.style.top = `${top}px`;
-    
-    // setup escape and outside click handlers
-    this._escapeHandler = (e) => {
-      if (e.key === 'Escape') {
-        this._hidePanel();
-      }
-    };
-    document.addEventListener('keydown', this._escapeHandler);
-    
-    this._outsideClickHandler = (e) => {
-      // guard: panel must exist and be visible
-      if (!this.panel || !this.isVisible) return;
-      
-      const target = e.target;
-      if (!target) return;
-      
-      // check if click is inside panel
-      const clickedPanel = this.panel.contains(target);
-      
-      // check if click is on trigger button (don't close if toggling)
-      const clickedTrigger = target.closest('.metldr-reply-trigger');
-      
-      // check if click is on any metldr element
-      const clickedMetldr = target.closest('[class*="metldr"]');
-      
-      if (!clickedPanel && !clickedTrigger) {
-        // delay slightly to allow click events to complete first
-        requestAnimationFrame(() => {
-          if (this.isVisible && this.panel) {
-            this._hidePanel();
-          }
-        });
-      }
-    };
-    
-    // use pointerdown for better cross-device support, capture phase
-    // delay attachment to avoid immediate trigger from the click that opened the panel
-    setTimeout(() => {
-      document.addEventListener('pointerdown', this._outsideClickHandler, true);
-    }, 150);
+    this.isVisible = false;
+    this.currentThreadId = null;
   }
 
-  _insertReply(composeArea, text) {
-    // always search globally first - stored composeArea may be stale after popout
-    // g_editable is the most reliable gmail attribute
-    let editableBody = null;
-    
-    // search globally for visible editable - handles popout window case
-    const globalSelectors = [
-      '[g_editable="true"]',
-      '.Am.Al.editable[contenteditable="true"]',
-      '.Am.aiL.Al.editable[contenteditable="true"]',
-      '[role="textbox"][contenteditable="true"][aria-label="Message Body"]',
-    ];
-    
-    for (const sel of globalSelectors) {
-      const els = document.querySelectorAll(sel);
-      for (const el of els) {
-        if (this._isVisible(el)) {
-          editableBody = el;
-          console.log('[ReplyPanel] found editable via global search:', sel);
-          break;
-        }
-      }
-      if (editableBody) break;
-    }
-    
-    // fallback to stored composeArea if global search failed
-    if (!editableBody && composeArea) {
-      console.log('[ReplyPanel] global search failed, trying stored composeArea');
-      editableBody = composeArea?.querySelector('[g_editable="true"]') ||
-                     composeArea?.querySelector('[contenteditable="true"][role="textbox"]') ||
-                     composeArea?.querySelector('.Am.Al.editable') ||
-                     composeArea?.querySelector('[contenteditable="true"]');
-    }
-    
-    // legacy fallback block (now simplified)
-    if (!editableBody) {
-      console.log('[ReplyPanel] all search methods failed');
-      const legacyEl = document.querySelector('[g_editable="true"]');
-      if (legacyEl && this._isVisible(legacyEl)) {
-        editableBody = legacyEl;
-      }
-    }
-
-    if (editableBody) {
-      // clear existing content and insert new text
-      editableBody.focus();
-      
-      // convert text to html with proper line breaks
-      const htmlContent = text
-        .split('\\n')
-        .map(line => `<div>${line || '<br>'}</div>`)
-        .join('');
-
-      editableBody.innerHTML = htmlContent;
-
-      // trigger input event so gmail knows content changed
-      editableBody.dispatchEvent(new Event('input', { bubbles: true }));
-      
-      console.log('[ReplyPanel] successfully inserted reply');
-    } else {
-      console.error('[ReplyPanel] could not find editable body in compose area');
-    }
+  hidePanel() {
+    if (this.panel) this.animateOut();
+    this.isVisible = false;
+    this.lastCloseTime = Date.now();
   }
 
-  _isVisible(el) {
-    if (!el) return false;
-    const rect = el.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0 && 
-           window.getComputedStyle(el).display !== 'none' &&
-           window.getComputedStyle(el).visibility !== 'hidden';
-  }
-
-  _isToolbarVisible(toolbar) {
-    if (!toolbar) return false;
-    const rect = toolbar.getBoundingClientRect();
-    // toolbar should be visible and have reasonable dimensions
-    return rect.width > 50 && rect.height > 10 && 
-           window.getComputedStyle(toolbar).display !== 'none' &&
-           window.getComputedStyle(toolbar).visibility !== 'hidden';
-  }
-
-  _animateIn() {
+  animateIn() {
     if (!this.panel) return;
-
-    gsap.to(this.panel, {
-      opacity: 1,
-      y: 0,
-      duration: 0.15,
-      ease: 'power2.out'
-    });
+    
+    gsap.fromTo(this.panel,
+      { opacity: 0, scale: 0.95 },
+      { opacity: 1, scale: 1, duration: 0.15, ease: 'power2.out' }
+    );
   }
 
-  _animateOut() {
-    if (!this.panel) return;
-
+  animateOut() {
+    if (!this.panel || this.isClosing) return;
+    
+    // prevent position updates during close (fixes jank when anchor element is destroyed)
+    this.isClosing = true;
+    this.removePositionListeners();
+    this.anchorElement = null;
+    
+    this.panel.style.pointerEvents = 'none';
+    
     gsap.to(this.panel, {
       opacity: 0,
-      y: -2,
       duration: 0.1,
       ease: 'power2.in',
-      onComplete: () => {
-        this._cleanup();
-      }
+      onComplete: () => this.cleanup()
     });
   }
 
-  _cleanup() {
+  cleanup() {
     if (this.panel) {
       this.panel.remove();
       this.panel = null;
     }
-    if (this._outsideClickHandler) {
-      document.removeEventListener('pointerdown', this._outsideClickHandler, true);
-      this._outsideClickHandler = null;
+    if (this.outsideClickHandler) {
+      document.removeEventListener('pointerdown', this.outsideClickHandler, true);
+      this.outsideClickHandler = null;
     }
-    if (this._escapeHandler) {
-      document.removeEventListener('keydown', this._escapeHandler);
-      this._escapeHandler = null;
+    if (this.escapeHandler) {
+      document.removeEventListener('keydown', this.escapeHandler);
+      this.escapeHandler = null;
     }
+    
+    this.isClosing = false;
   }
 
-  _subscribeToTheme() {
+  subscribeToTheme() {
     this.themeUnsubscribe = UIService.onChange(() => {
-      if (this.panel) {
-        this._updateTheme();
-      }
+      if (this.panel) this.updateTheme();
     });
   }
 
-  _updateTheme() {
+  updateTheme() {
     if (!this.panel) return;
-
     const theme = UIService.currentTheme;
 
-    // update card
     const card = this.panel.querySelector('.metldr-reply-card');
     if (card) {
       card.style.background = theme.bg;
@@ -953,23 +714,12 @@ export class ReplyPanel {
       card.style.boxShadow = `0 6px 24px ${theme.shadow}, inset 0 1px 0 ${theme.borderSubtle}`;
     }
 
-    // update badge
     const badge = this.panel.querySelector('.metldr-reply-badge');
     if (badge) {
       badge.style.background = theme.bgSecondary;
       badge.style.borderColor = theme.borderSubtle;
-      badge.style.boxShadow = `0 2px 8px ${theme.shadow}, inset 0 1px 0 ${theme.borderSubtle}`;
-      const dot = badge.querySelector('div');
-      if (dot) {
-        dot.style.background = theme.primary;
-        dot.style.boxShadow = `0 0 6px ${theme.primary}`;
-      }
-      const spans = badge.querySelectorAll('span');
-      if (spans[0]) spans[0].style.color = theme.primary;
-      if (spans[2]) spans[2].style.color = theme.textMuted;
     }
 
-    // update close button
     const closeBtn = this.panel.querySelector('.metldr-reply-close');
     if (closeBtn) {
       closeBtn.style.background = theme.bgSecondary;
@@ -977,36 +727,10 @@ export class ReplyPanel {
       closeBtn.style.color = theme.textMuted;
     }
 
-    // update scrollbar styles
-    const style = this.panel.querySelector('style');
-    if (style) {
-      style.textContent = `
-        .metldr-reply-content::-webkit-scrollbar { width: 4px; }
-        .metldr-reply-content::-webkit-scrollbar-track { background: transparent; }
-        .metldr-reply-content::-webkit-scrollbar-thumb { background: ${theme.border}; border-radius: 2px; }
-        .metldr-reply-content::-webkit-scrollbar-thumb:hover { background: ${theme.textMuted}; }
-      `;
-    }
-
-    // update options
     const options = this.panel.querySelectorAll('.metldr-reply-option');
     options.forEach(option => {
-      const isSelected = option.classList.contains('metldr-selected');
       option.style.background = theme.bgSecondary;
-      option.style.borderColor = isSelected ? theme.primary : theme.borderSubtle;
-      
-      // update tone span
-      const tone = option.querySelector('span:first-child');
-      if (tone) {
-        tone.style.background = `${theme.primary}15`;
-        tone.style.color = theme.primary;
-      }
-      
-      // update preview span
-      const preview = option.querySelector('span:last-child');
-      if (preview) {
-        preview.style.color = theme.text;
-      }
+      option.style.borderColor = theme.borderSubtle;
     });
   }
 }
