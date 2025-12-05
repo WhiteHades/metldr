@@ -6,9 +6,15 @@ import HistoryManager from './components/HistoryManager.vue';
 import { marked } from 'marked';
 import { 
   Sparkles, BarChart3, Settings, Loader2, ChevronDown, ChevronUp, Check, 
-  Send, Trash2, X, RefreshCw, Database, 
+  Send, Trash2, X, RefreshCw, Database,
   Zap, Server, Circle, MessageCircle, FileText, AlertCircle
 } from 'lucide-vue-next';
+
+function formatTime(ms) {
+  if (!ms && ms !== 0) return '';
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
 
 marked.setOptions({
   breaks: true,
@@ -162,20 +168,40 @@ const selectModel = async (model) => {
   }
 };
 
-async function checkOllama() {
+async function checkOllama(showChecking = true) {
+  const wasReady = ollamaStatus.value === 'ready';
+  if (showChecking && !wasReady) {
+    ollamaStatus.value = 'checking';
+  }
+  
   try {
-    await storage.initDictionary();
+    storage.initDictionary().catch(err => {
+      console.warn('metldr: dict init failed:', err.message);
+    });
     
-    const response = await sendToBackground({ type: 'CHECK_OLLAMA_HEALTH' });
+    let response = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        response = await sendToBackground({ type: 'CHECK_OLLAMA_HEALTH' });
+        if (response && response.success !== undefined) break;
+        await new Promise(r => setTimeout(r, 150 * (attempt + 1)));
+      } catch (err) {
+        console.warn('metldr: ollama check attempt', attempt + 1, 'failed:', err.message);
+        await new Promise(r => setTimeout(r, 150 * (attempt + 1)));
+      }
+    }
     
-    if (!response || !response.success) {
-      ollamaStatus.value = 'not-found';
-      return false;
+    if (!response || response.success === undefined) {
+      console.warn('metldr: no valid response from background');
+      if (!wasReady) {
+        ollamaStatus.value = 'not-found';
+      }
+      return wasReady;
     }
     
     const { connected, models } = response;
     
-    if (connected && models.length > 0) {
+    if (connected && models && models.length > 0) {
       ollamaStatus.value = 'ready';
       availableModels.value = models;
       
@@ -183,23 +209,29 @@ async function checkOllama() {
         const result = await chrome.storage.local.get(['selectedModel']);
         if (result.selectedModel && models.includes(result.selectedModel)) {
           selectedModel.value = result.selectedModel;
-        } else {
+        } else if (!selectedModel.value || !models.includes(selectedModel.value)) {
           selectedModel.value = models[0];
         }
       } catch (error) {
-        selectedModel.value = models[0];
+        if (!selectedModel.value) selectedModel.value = models[0];
       }
       
-      await fetchCurrentPageSummary();
+      if (!wasReady) {
+        await fetchCurrentPageSummary();
+      }
       return true;
     }
     
-    ollamaStatus.value = 'error';
-    return false;
+    if (!wasReady) {
+      ollamaStatus.value = 'not-found';
+    }
+    return wasReady;
   } catch (error) {
     console.error('metldr: ollama check failed:', error);
-    ollamaStatus.value = 'not-found';
-    return false;
+    if (!wasReady) {
+      ollamaStatus.value = 'not-found';
+    }
+    return wasReady;
   }
 }
 
@@ -269,9 +301,57 @@ function switchTab(tab) {
   activeTab.value = tab;
 }
 
+function onBeforeEnter(el) {
+  el.style.height = '0';
+  el.style.opacity = '0';
+}
+
+function onEnter(el, done) {
+  el.offsetHeight;
+  el.style.transition = 'height 250ms cubic-bezier(0.4, 0, 0.2, 1), opacity 200ms ease-out';
+  el.style.height = el.scrollHeight + 'px';
+  el.style.opacity = '1';
+  
+  el.addEventListener('transitionend', function handler(e) {
+    if (e.propertyName === 'height') {
+      el.removeEventListener('transitionend', handler);
+      done();
+    }
+  });
+}
+
+function onAfterEnter(el) {
+  el.style.height = 'auto';
+  el.style.transition = '';
+}
+
+function onBeforeLeave(el) {
+  el.style.height = el.scrollHeight + 'px';
+  el.style.opacity = '1';
+}
+
+function onLeave(el, done) {
+  el.offsetHeight;
+  el.style.transition = 'height 200ms cubic-bezier(0.4, 0, 0.2, 1), opacity 150ms ease-in';
+  el.style.height = '0';
+  el.style.opacity = '0';
+  
+  el.addEventListener('transitionend', function handler(e) {
+    if (e.propertyName === 'height') {
+      el.removeEventListener('transitionend', handler);
+      done();
+    }
+  });
+}
+
+function onAfterLeave(el) {
+  el.style.height = '';
+  el.style.transition = '';
+}
+
 async function retryDetection() {
   ollamaStatus.value = 'checking';
-  await checkOllama();
+  await checkOllama(false);
 }
 
 function copySetupCommands() {
@@ -325,7 +405,11 @@ async function sendChatMessage() {
     });
     
     if (response?.ok) {
-      chatMessages.value.push({ role: 'assistant', content: response.content });
+      chatMessages.value.push({ 
+        role: 'assistant', 
+        content: response.content,
+        timing: response.timing || null
+      });
     } else {
       throw new Error(response?.error || 'chat failed');
     }
@@ -395,16 +479,22 @@ async function clearCache() {
 
 async function loadDictionarySettings() {
   try {
+    console.log('[metldr] loading dictionary settings...');
     await storage.initDictionary();
     downloadedLanguages.value = await storage.dictGetDownloadedLanguages();
+    console.log('[metldr] downloaded languages:', downloadedLanguages.value);
     
     const settings = await chrome.storage.local.get(['selectedLanguages']);
     if (settings.selectedLanguages && settings.selectedLanguages.length > 0) {
       selectedLanguages.value = settings.selectedLanguages;
     }
+    console.log('[metldr] selected languages:', selectedLanguages.value);
     
     if (!downloadedLanguages.value.includes('en')) {
+      console.log('[metldr] english not downloaded, starting download...');
       startDownload('en');
+    } else {
+      console.log('[metldr] english already downloaded');
     }
   } catch (error) {
     console.error('metldr: failed to load dictionary settings:', error);
@@ -412,6 +502,7 @@ async function loadDictionarySettings() {
 }
 
 async function startDownload(langCode) {
+  console.log('[metldr] starting download for:', langCode);
   downloadProgress.value[langCode] = { progress: 0, letter: 'a', entries: 0 };
   
   try {
@@ -423,10 +514,11 @@ async function startDownload(langCode) {
       };
     });
     
+    console.log('[metldr] download completed for:', langCode);
     delete downloadProgress.value[langCode];
     downloadedLanguages.value = await storage.dictGetDownloadedLanguages();
   } catch (error) {
-    console.error('metldr: download failed for', langCode, ':', error);
+    console.error('[metldr] download failed for', langCode, ':', error);
     delete downloadProgress.value[langCode];
   }
 }
@@ -528,7 +620,7 @@ onMounted(async () => {
 
   const statusCheckInterval = setInterval(async () => {
     if (ollamaStatus.value !== 'ready') {
-      await checkOllama();
+      await checkOllama(false); 
     }
   }, 5000);
 
@@ -550,7 +642,7 @@ onMounted(async () => {
           v-for="(tab, idx) in [{key: 'summary', label: 'Summary', icon: FileText, color: 'primary'}, {key: 'stats', label: 'Stats', icon: BarChart3, color: 'secondary'}, {key: 'settings', label: 'Settings', icon: Settings, color: 'accent'}]"
           :key="tab.key"
           @click="switchTab(tab.key)"
-          class="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 text-xs font-medium rounded-lg transition-all duration-200"
+          class="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 text-[11px] font-medium rounded-lg transition-all duration-200"
           :class="[
             activeTab === tab.key 
               ? `bg-${tab.color}/15 text-${tab.color} border border-${tab.color}/20` 
@@ -559,7 +651,7 @@ onMounted(async () => {
         >
           <component 
             :is="tab.icon" 
-            :size="14" 
+            :size="13" 
             :stroke-width="2" 
             :class="activeTab === tab.key ? `text-${tab.color}` : ''"
           />
@@ -574,7 +666,7 @@ onMounted(async () => {
         <!-- checking state -->
         <div v-if="ollamaStatus === 'checking'" class="flex flex-col items-center justify-center h-full p-6">
           <Loader2 class="w-8 h-8 mb-3 animate-spin text-base-content/40" :stroke-width="2" />
-          <p class="text-sm text-base-content/50">connecting to ollama...</p>
+          <p class="text-[12px] text-base-content/50">connecting to ollama...</p>
         </div>
 
         <!-- not found state -->
@@ -585,20 +677,20 @@ onMounted(async () => {
                 <Server :size="16" class="text-error/70" />
               </div>
               <div>
-                <h2 class="text-sm font-medium text-base-content/80 mb-1">ollama not detected</h2>
-                <p class="text-xs text-base-content/50">run these commands to set up ollama:</p>
+                <h2 class="text-[13px] font-medium text-base-content/80 mb-1">ollama not detected</h2>
+                <p class="text-[11px] text-base-content/50">run these commands to set up ollama:</p>
               </div>
             </div>
             
-            <div class="bg-base-content/5 rounded-lg p-3 font-mono text-xs text-base-content/70 mb-4 overflow-x-auto">
+            <div class="bg-base-content/5 rounded-lg p-3 font-mono text-[11px] text-base-content/70 mb-4 overflow-x-auto">
               <pre class="whitespace-pre-wrap">{{ setupCommands }}</pre>
             </div>
             
             <div class="flex gap-2">
-              <button @click="copySetupCommands" class="btn btn-sm btn-ghost text-xs">
+              <button @click="copySetupCommands" class="btn btn-sm btn-ghost text-[11px]">
                 copy commands
               </button>
-              <button @click="retryDetection" class="btn btn-sm bg-base-content/10 hover:bg-base-content/15 border-0 text-xs">
+              <button @click="retryDetection" class="btn btn-sm bg-base-content/10 hover:bg-base-content/15 border-0 text-[11px]">
                 <RefreshCw :size="12" />
                 retry
               </button>
@@ -619,11 +711,11 @@ onMounted(async () => {
               >
                 <component 
                   :is="summaryCollapsed ? ChevronDown : ChevronUp" 
-                  :size="12" 
+                  :size="11" 
                   class="text-primary/60 shrink-0 transition-transform"
                 />
                 <div class="flex-1 min-w-0">
-                  <h3 class="text-xs font-medium text-base-content/80 truncate leading-tight">
+                  <h3 class="text-[12px] font-medium text-base-content/80 truncate leading-tight">
                     {{ pageSummary.title || 'untitled' }}
                   </h3>
                   <p v-if="summaryCollapsed" class="text-[10px] text-base-content/50 truncate">
@@ -639,16 +731,15 @@ onMounted(async () => {
                 </button>
               </div>
               
-              <!-- collapsible content -->
               <Transition
-                enter-active-class="transition-all duration-200 ease-out"
-                enter-from-class="opacity-0 max-h-0"
-                enter-to-class="opacity-100 max-h-96"
-                leave-active-class="transition-all duration-150 ease-in"
-                leave-from-class="opacity-100 max-h-96"
-                leave-to-class="opacity-0 max-h-0"
+                @before-enter="onBeforeEnter"
+                @enter="onEnter"
+                @after-enter="onAfterEnter"
+                @before-leave="onBeforeLeave"
+                @leave="onLeave"
+                @after-leave="onAfterLeave"
               >
-                <div v-if="!summaryCollapsed" class="overflow-hidden">
+                <div v-if="!summaryCollapsed" class="summary-content overflow-hidden">
                   <div class="px-3 pb-3 pt-1 border-t border-primary/10">
                     <!-- metadata -->
                     <p v-if="pageSummary.publication || pageSummary.author" class="text-[10px] text-base-content/50 mb-2">
@@ -657,14 +748,44 @@ onMounted(async () => {
                     
                     <!-- bullets -->
                     <ul class="space-y-1.5">
-                      <li v-for="(bullet, i) in pageSummary.bullets" :key="i" class="flex gap-2 text-xs leading-relaxed">
+                      <li v-for="(bullet, i) in pageSummary.bullets" :key="i" class="flex gap-2 text-[11px] leading-relaxed">
                         <span class="text-primary/50 shrink-0 mt-0.5">•</span>
                         <span class="text-base-content/75 markdown-content" v-html="renderMarkdown(bullet)"></span>
                       </li>
                     </ul>
                     
-                    <div class="flex items-center gap-2 pt-2 mt-2 border-t border-primary/10">
-                      <span class="text-[10px] text-base-content/40">{{ pageSummary.readTime || 'n/a' }} read</span>
+                    <div class="flex items-center justify-between pt-2 mt-2 border-t border-primary/10">
+                      <span class="text-[10px] text-base-content/50">{{ pageSummary.readTime || 'n/a' }} read</span>
+                      <div 
+                        v-if="pageSummary.timing"
+                        class="timing-badge group relative cursor-help"
+                      >
+                        <div class="flex items-center gap-1 text-[10px] text-base-content/50 hover:text-base-content/70 transition-colors">
+                          <span>{{ formatTime(pageSummary.timing.total) }}</span>
+                          <span v-if="pageSummary.timing.cached" class="text-primary/70">· cached</span>
+                        </div>
+                        <!-- hover breakdown tooltip -->
+                        <div class="timing-tooltip absolute bottom-full right-0 mb-2 px-2.5 py-2 rounded-lg bg-base-200 border border-base-content/15 shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-150 z-50 min-w-[140px]">
+                          <div class="text-[10px] font-medium text-base-content/70 mb-1.5 uppercase tracking-wide">time breakdown</div>
+                          <div class="space-y-1 text-[10px]">
+                            <div class="flex justify-between gap-3">
+                              <span class="text-base-content/60">extraction</span>
+                              <span class="text-base-content/80 font-mono">{{ formatTime(pageSummary.timing.extraction || 0) }}</span>
+                            </div>
+                            <div class="flex justify-between gap-3">
+                              <span class="text-base-content/60">llm</span>
+                              <span class="text-base-content/80 font-mono">{{ formatTime(pageSummary.timing.llm || 0) }}</span>
+                            </div>
+                            <div class="flex justify-between gap-3 pt-1 border-t border-base-content/15">
+                              <span class="text-base-content/70">total</span>
+                              <span class="text-primary font-mono font-medium">{{ formatTime(pageSummary.timing.total) }}</span>
+                            </div>
+                            <div v-if="pageSummary.timing.model" class="pt-1 text-base-content/55 truncate">
+                              {{ pageSummary.timing.model }}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -674,22 +795,22 @@ onMounted(async () => {
             <!-- loading state -->
             <div v-else-if="summaryLoading" class="flex items-center gap-2.5 p-3 rounded-lg bg-primary/5 border border-primary/10">
               <Loader2 class="w-4 h-4 animate-spin text-primary/60" />
-              <span class="text-xs text-base-content/60">analysing...</span>
+              <span class="text-[11px] text-base-content/60">analysing...</span>
             </div>
 
             <!-- error state -->
             <div v-else-if="summaryError" class="flex items-center gap-2.5 p-3 rounded-lg bg-error/5 border border-error/10">
-              <AlertCircle :size="14" class="text-error/60 shrink-0" />
+              <AlertCircle :size="13" class="text-error/60 shrink-0" />
               <div>
-                <p class="text-xs text-base-content/60">{{ summaryError }}</p>
-                <p class="text-[10px] text-base-content/40">navigate to an article to see a summary</p>
+                <p class="text-[11px] text-base-content/70">{{ summaryError }}</p>
+                <p class="text-[10px] text-base-content/50">navigate to an article to see a summary</p>
               </div>
             </div>
 
             <!-- no page state -->
             <div v-else class="flex items-center gap-2.5 p-3 rounded-lg bg-base-content/5 border border-base-content/10">
-              <FileText :size="14" class="text-base-content/30 shrink-0" />
-              <p class="text-xs text-base-content/50">browse a page to get a summary</p>
+              <FileText :size="13" class="text-base-content/40 shrink-0" />
+              <p class="text-[11px] text-base-content/55">browse a page to get a summary</p>
             </div>
           </div>
 
@@ -698,13 +819,13 @@ onMounted(async () => {
             <div class="flex-1 flex flex-col rounded-lg bg-secondary/5 border border-secondary/10 p-3 min-h-0">
               <div class="flex items-center justify-between mb-2 shrink-0">
                 <div class="flex items-center gap-1.5">
-                  <MessageCircle :size="12" class="text-secondary/70" />
+                  <MessageCircle :size="11" class="text-secondary/70" />
                   <span class="text-[10px] font-medium text-secondary/70 uppercase tracking-wide">chat</span>
                 </div>
                 <button 
                   v-if="chatMessages.length > 0"
                   @click="clearChat" 
-                  class="text-[10px] text-base-content/40 hover:text-error/70 transition-colors"
+                  class="text-[10px] text-base-content/50 hover:text-error/70 transition-colors"
                 >
                   clear
                 </button>
@@ -717,18 +838,30 @@ onMounted(async () => {
               >
                 <!-- empty state -->
                 <div v-if="chatMessages.length === 0 && !chatLoading" class="flex items-center justify-center h-full">
-                  <p class="text-[10px] text-base-content/40">ask about the article</p>
+                  <p class="text-[10px] text-base-content/50">ask about the article</p>
                 </div>
                 
                 <!-- messages -->
-                <div v-for="(msg, i) in chatMessages" :key="i">
+                <div v-for="(msg, i) in chatMessages" :key="i" class="message-wrapper">
                   <div v-if="msg.role === 'user'" class="flex justify-end">
-                    <div class="max-w-[85%] bg-primary/10 border border-primary/20 rounded-xl rounded-br-sm px-2.5 py-1.5 text-xs text-base-content/80">
+                    <div class="max-w-[85%] bg-primary/10 border border-primary/20 rounded-xl rounded-br-sm px-2.5 py-1.5 text-[11px] text-base-content/80">
                       {{ msg.content }}
                     </div>
                   </div>
-                  <div v-else class="flex justify-start">
-                    <div class="max-w-[85%] bg-secondary/10 border border-secondary/20 rounded-xl rounded-bl-sm px-2.5 py-1.5 text-xs text-base-content/75 markdown-content" v-html="renderMarkdown(msg.content)">
+                  <div v-else class="flex flex-col items-start max-w-[85%]">
+                    <div class="bg-secondary/10 border border-secondary/20 rounded-xl rounded-bl-sm px-2.5 py-1.5 text-[11px] text-base-content/75 markdown-content" v-html="renderMarkdown(msg.content)">
+                    </div>
+                    <div 
+                      v-if="msg.timing" 
+                      class="flex items-center gap-1 mt-0.5 ml-1 text-[9px] text-base-content/45 hover:text-base-content/60 transition-colors cursor-default group relative"
+                    >
+                      <span>{{ formatTime(msg.timing.total) }}</span>
+                      <div class="chat-timing-tooltip absolute left-full top-1/2 -translate-y-1/2 ml-2 px-2 py-1.5 rounded bg-base-200 border border-base-content/15 shadow-md opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-150 z-50 whitespace-nowrap">
+                        <div class="text-[9px] text-base-content/60">
+                          <span class="text-base-content/80">{{ formatTime(msg.timing.total) }}</span>
+                          <span v-if="msg.timing.model" class="text-base-content/55"> · {{ msg.timing.model }}</span>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -753,7 +886,7 @@ onMounted(async () => {
                   @keydown.enter.prevent="sendChatMessage"
                   type="text"
                   placeholder="ask something..."
-                  class="flex-1 bg-base-content/5 border-0 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-primary/30 placeholder:text-base-content/30"
+                  class="flex-1 bg-base-content/5 border-0 rounded-lg px-3 py-2 text-[11px] focus:outline-none focus:ring-1 focus:ring-primary/30 placeholder:text-base-content/30"
                 />
                 <button 
                   @click="sendChatMessage"
@@ -780,7 +913,7 @@ onMounted(async () => {
               <div class="flex items-center justify-center w-6 h-6 rounded-md bg-primary/15">
                 <Server :size="12" class="text-primary" />
               </div>
-              <span class="text-sm font-medium text-base-content/70 tracking-wide">ai model</span>
+              <span class="text-[12px] font-medium text-base-content/70 tracking-wide">ai model</span>
             </div>
             
             <div class="relative">
@@ -788,7 +921,7 @@ onMounted(async () => {
                 @click="toggleModelDropdown"
                 class="model-selector-btn w-full flex items-center justify-between px-3 py-2.5 bg-base-content/5 hover:bg-base-content/10 rounded-lg transition-colors"
               >
-                <span class="font-mono text-sm text-base-content/70">{{ selectedModel }}</span>
+                <span class="font-mono text-[12px] text-base-content/70">{{ selectedModel }}</span>
                 <ChevronDown 
                   :size="14" 
                   class="text-base-content/40 transition-transform"
@@ -818,7 +951,7 @@ onMounted(async () => {
                       v-for="model in availableModels" 
                       :key="model"
                       @click="selectModel(model)"
-                      class="w-full flex items-center justify-between px-3 py-2 text-sm font-mono hover:bg-base-content/5 transition-colors"
+                      class="w-full flex items-center justify-between px-3 py-2 text-[12px] font-mono hover:bg-base-content/5 transition-colors"
                       :class="{ 'bg-base-content/10': selectedModel === model }"
                     >
                       <span class="text-base-content/70">{{ model }}</span>
@@ -837,7 +970,7 @@ onMounted(async () => {
                 <div class="flex items-center justify-center w-6 h-6 rounded-md bg-secondary/15">
                   <Sparkles :size="12" class="text-secondary" />
                 </div>
-                <span class="text-sm font-medium text-base-content/70 tracking-wide">word lookup</span>
+                <span class="text-[12px] font-medium text-base-content/70 tracking-wide">word lookup</span>
               </div>
               <input 
                 type="checkbox" 
@@ -854,7 +987,7 @@ onMounted(async () => {
               <div class="flex items-center justify-center w-6 h-6 rounded-md bg-accent/15">
                 <Database :size="12" class="text-accent" />
               </div>
-              <span class="text-sm font-medium text-base-content/70 tracking-wide">dictionaries</span>
+              <span class="text-[12px] font-medium text-base-content/70 tracking-wide">dictionaries</span>
             </div>
             
             <div class="space-y-1 max-h-48 overflow-y-auto">
@@ -869,11 +1002,11 @@ onMounted(async () => {
                   @change="toggleLanguage(lang.code)"
                   class="checkbox checkbox-sm"
                 />
-                <span class="text-sm text-base-content/70 flex-1">{{ lang.name }}</span>
+                <span class="text-[12px] text-base-content/70 flex-1">{{ lang.name }}</span>
                 
                 <span 
                   v-if="downloadProgress[lang.code]"
-                  class="text-xs text-base-content/40"
+                  class="text-[10px] text-base-content/55"
                 >
                   {{ downloadProgress[lang.code].progress.toFixed(0) }}%
                 </span>
@@ -900,7 +1033,7 @@ onMounted(async () => {
               <div class="flex items-center justify-center w-6 h-6 rounded-md bg-primary/15">
                 <Sparkles :size="12" class="text-primary" />
               </div>
-              <span class="text-sm font-medium text-base-content/70 tracking-wide">theme</span>
+              <span class="text-[12px] font-medium text-base-content/70 tracking-wide">theme</span>
             </div>
             <div class="grid grid-cols-3 gap-2">
               <button
@@ -919,7 +1052,7 @@ onMounted(async () => {
                   <div class="w-3 h-3 rounded-full" :style="{ background: themeData.secondary }"></div>
                   <div class="w-3 h-3 rounded-full" :style="{ background: themeData.accent }"></div>
                 </div>
-                <span class="text-xs text-base-content/50">{{ themeData.name }}</span>
+                <span class="text-[10px] text-base-content/50">{{ themeData.name }}</span>
               </button>
             </div>
           </div>
@@ -934,9 +1067,9 @@ onMounted(async () => {
                 <div class="flex items-center justify-center w-6 h-6 rounded-md bg-error/15">
                   <Trash2 :size="12" class="text-error" />
                 </div>
-                <span class="text-sm font-medium text-base-content/70 tracking-wide">cache</span>
+                <span class="text-[12px] font-medium text-base-content/70 tracking-wide">cache</span>
               </div>
-              <button @click="clearCache" class="btn btn-sm btn-ghost text-error/70 hover:text-error hover:bg-error/10">
+              <button @click="clearCache" class="btn btn-sm btn-ghost text-[11px] text-error/70 hover:text-error hover:bg-error/10">
                 clear
               </button>
             </div>
@@ -946,8 +1079,8 @@ onMounted(async () => {
         <!-- error state -->
         <div v-else-if="ollamaStatus === 'error'" class="flex flex-col items-center justify-center h-full p-6">
           <X :size="32" class="mb-3 text-error/50" />
-          <p class="text-sm text-base-content/50 mb-3">connection error</p>
-          <button @click="retryDetection" class="btn btn-sm btn-ghost">
+          <p class="text-[12px] text-base-content/50 mb-3">connection error</p>
+          <button @click="retryDetection" class="btn btn-sm btn-ghost text-[11px]">
             <RefreshCw :size="12" />
             retry
           </button>
@@ -976,7 +1109,6 @@ onMounted(async () => {
   background: oklch(from var(--bc) l c h / 0.15);
 }
 
-/* firefox */
 * {
   scrollbar-width: thin;
   scrollbar-color: oklch(from var(--bc) l c h / 0.08) transparent;
@@ -1032,5 +1164,43 @@ onMounted(async () => {
 
 .btn {
   transition: all 100ms ease;
+}
+
+.timing-tooltip::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  right: 12px;
+  border: 5px solid transparent;
+  border-top-color: oklch(from var(--b2) l c h);
+}
+
+.chat-timing-tooltip::before {
+  content: '';
+  position: absolute;
+  right: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  border: 4px solid transparent;
+  border-right-color: oklch(from var(--b2) l c h);
+}
+
+.summary-content {
+  will-change: height, opacity;
+}
+
+.message-wrapper {
+  animation: messageSlideIn 200ms ease-out;
+}
+
+@keyframes messageSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 </style>
