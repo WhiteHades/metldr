@@ -1,5 +1,5 @@
 const DB_CACHE = 'metldr_cache';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 const STORE_SUMMARIES = 'summaries';
 const STORE_PAGE_CACHE = 'page_cache';
 const STORE_REPLY_SUGGESTIONS = 'reply_suggestions';
@@ -188,6 +188,11 @@ export class CacheService {
 
   async getReplySuggestions(emailId) {
     if (!this.db) await this.init();
+    
+    if (!this.db.objectStoreNames.contains(STORE_REPLY_SUGGESTIONS)) {
+      console.warn('[CacheService] reply_suggestions store not found');
+      return null;
+    }
 
     return new Promise((resolve) => {
       try {
