@@ -4,11 +4,17 @@ import { cacheService } from './CacheService.js';
 export class PageService {
 
   static async summarize(extractedData, force = false) {
-    const { title, url, content, author, publishDate, publication, wordCount, readTime } = extractedData;
+    const startTotal = performance.now();
+    const timing = { extraction: 0, llm: 0, total: 0 };
+    const { title, url, content, author, publishDate, publication, wordCount, readTime, extractionTime } = extractedData;    
+    timing.extraction = extractionTime || 0;
     
     if (!force && url) {
       const cached = await cacheService.getPageSummary(url);
-      if (cached) return cached;
+      if (cached) {
+        cached.timing = { ...cached.timing, cached: true, total: Math.round(performance.now() - startTotal) };
+        return cached;
+      }
     }
 
     let metadata = `ARTICLE METADATA:\n- Title: "${title}"\n`;
@@ -22,6 +28,7 @@ export class PageService {
     const model = await OllamaService.selectBest('page_summary');
     if (!model) throw new Error('no models available');
 
+    const llmStart = performance.now();
     const result = await OllamaService.complete(
       model,
       [
@@ -37,6 +44,7 @@ RULES:
       ],
       { temperature: 0.1 }
     );
+    timing.llm = Math.round(performance.now() - llmStart);
 
     if (!result.ok) throw new Error(result.error);
 
@@ -48,11 +56,16 @@ RULES:
       .filter(l => l.length > 10)
       .slice(0, 3);
 
+    timing.total = Math.round(performance.now() - startTotal);
+    timing.cached = false;
+    timing.model = model;
+
     const summary = {
       title, author, publishDate, publication,
       bullets: bullets.length ? bullets : ['could not generate summary'],
       readTime, fullContent, wordCount,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      timing
     };
 
     if (url) await cacheService.setPageSummary(url, summary, 3600);
@@ -60,8 +73,14 @@ RULES:
   }
 
   static async chat(messages, pageContext, model) {
+    const startTime = performance.now();
+    
     if (!model) model = await OllamaService.selectBest('page_summary');
-    if (!model) throw new Error('no models available');
+    
+    if (!model) {
+      console.error('[PageService.chat] no model available');
+      return { ok: false, error: 'no models available' };
+    }
 
     let contextText = pageContext?.fullContent || '';
 
@@ -80,10 +99,22 @@ RULES:
 
     const useLongTimeout = contextText.length > 2000;
 
-    return OllamaService.complete(
-      model,
-      [{ role: 'system', content: systemPrompt }, ...messages.slice(-6)],
-      { temperature: 0.2, longContext: useLongTimeout }
-    );
+    try {
+      const result = await OllamaService.complete(
+        model,
+        [{ role: 'system', content: systemPrompt }, ...messages.slice(-6)],
+        { temperature: 0.2, longContext: useLongTimeout }
+      );
+      
+      result.timing = {
+        total: Math.round(performance.now() - startTime),
+        model
+      };
+      
+      return result;
+    } catch (err) {
+      console.error('[PageService.chat] error:', err.message);
+      return { ok: false, error: err.message || 'chat failed' };
+    }
   }
 }
