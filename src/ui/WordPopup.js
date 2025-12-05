@@ -300,12 +300,23 @@ export class WordPopup {
   async fetchAndRenderLookup(word, content, header, lookupType, contextData = {}) {
     try {
       console.log('[popup] sending word lookup request:', word);
-      const response = await chrome.runtime.sendMessage({
-        type: 'WORD_LOOKUP',
-        word,
-        lookupType,
-        context: contextData
-      });
+      
+      let response;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        response = await chrome.runtime.sendMessage({
+          type: 'WORD_LOOKUP',
+          word,
+          lookupType,
+          context: contextData
+        });
+        
+        if (response !== undefined) break;
+        
+        if (attempt < 2) {
+          console.log('[popup] response undefined, retrying...', attempt + 1);
+          await new Promise(r => setTimeout(r, 150));
+        }
+      }
 
       console.log('[popup] received response:', response);
 
