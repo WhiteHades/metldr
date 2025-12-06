@@ -6,6 +6,14 @@ export class EmailService {
     const startTime = Date.now();
 
     try {
+      if (force && emailId) {
+        try {
+          await cacheService.deleteReplySuggestions(emailId);
+        } catch (err) {
+          console.warn('[EmailService.summarize] failed to clear reply suggestions:', err.message);
+        }
+      }
+
       if (!force && emailId) {
         const cached = await cacheService.getEmailSummary(emailId);
         if (cached) {
@@ -140,12 +148,7 @@ export class EmailService {
 
     let metadataCtx = '';
     if (metadata) {
-      metadataCtx = 'ORIGINAL EMAIL INFO:\n';
-      if (metadata.sender) metadataCtx += `From: ${metadata.sender}`;
-      if (metadata.senderEmail) metadataCtx += ` <${metadata.senderEmail}>`;
-      if (metadata.sender || metadata.senderEmail) metadataCtx += '\n';
-      if (metadata.subject) metadataCtx += `Subject: ${metadata.subject}\n`;
-      metadataCtx += '\n';
+      metadataCtx = this._buildMetadataContext(metadata);
     }
 
     const summaryCtx = summary ? `
@@ -405,14 +408,7 @@ Generate 3-5 reply options with varying tones (professional/friendly/brief/detai
 
     let metadataCtx = '';
     if (metadata) {
-      metadataCtx = 'EMAIL METADATA:\n';
-      if (metadata.sender) metadataCtx += `From: ${metadata.sender}`;
-      if (metadata.senderEmail) metadataCtx += ` <${metadata.senderEmail}>`;
-      if (metadata.sender || metadata.senderEmail) metadataCtx += '\n';
-      if (metadata.date) metadataCtx += `Sent: ${metadata.date}\n`;
-      if (metadata.subject) metadataCtx += `Subject: ${metadata.subject}\n`;
-      if (metadata.to) metadataCtx += `To: ${metadata.to}\n`;
-      metadataCtx += '\n';
+      metadataCtx = this._buildMetadataContext(metadata);
     }
 
     const systemPrompt = `You are an expert Executive Assistant who processes all types of emails. Your job is to filter noise, extract signal, and classify accurately.
@@ -538,5 +534,39 @@ Respond with JSON matching the schema. Be precise with intent classification.`;
     }
 
     return lines.join('\n') || 'no facts extracted';
+  }
+
+  static _buildMetadataContext(metadata) {
+    if (!metadata) return '';
+
+    const lines = ['EMAIL METADATA:'];
+    const fromName = metadata.from || metadata.sender || null;
+    const fromEmail = metadata.fromEmail || metadata.senderEmail || null;
+    const fromLine = [fromName, fromEmail ? `<${fromEmail}>` : null].filter(Boolean).join(' ').trim();
+    if (fromLine) lines.push(`From: ${fromLine}`);
+
+    const replyTo = metadata.replyTo || metadata['reply-to'] || null;
+    if (replyTo) lines.push(`Reply-To: ${replyTo}`);
+
+    const toList = metadata.toList || metadata.toRecipients || null;
+    const to = metadata.to || (Array.isArray(toList) ? toList.join(', ') : null);
+    if (to) lines.push(`To: ${to}`);
+
+    const ccList = metadata.ccList || metadata.ccRecipients || null;
+    const cc = metadata.cc || (Array.isArray(ccList) ? ccList.join(', ') : null);
+    if (cc) lines.push(`Cc: ${cc}`);
+
+    const bccList = metadata.bccList || metadata.bccRecipients || null;
+    const bcc = metadata.bcc || (Array.isArray(bccList) ? bccList.join(', ') : null);
+    if (bcc) lines.push(`Bcc: ${bcc}`);
+
+    if (metadata.date) lines.push(`Date: ${metadata.date}`);
+    if (metadata.subject) lines.push(`Subject: ${metadata.subject}`);
+    if (metadata.mailedBy) lines.push(`Mailed-By: ${metadata.mailedBy}`);
+    if (metadata.signedBy) lines.push(`Signed-By: ${metadata.signedBy}`);
+    if (metadata.participants?.length) lines.push(`Participants: ${metadata.participants.join(', ')}`);
+    if (metadata.emailCount) lines.push(`Message Count: ${metadata.emailCount}`);
+
+    return lines.join('\n') + '\n\n';
   }
 }
