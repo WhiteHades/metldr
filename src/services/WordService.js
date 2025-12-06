@@ -18,41 +18,70 @@ export class WordService {
   static async lookup(word, context = {}) {
     await this.ensureInit();
     const word_lc = word.toLowerCase().trim();
+    const encodedWord = encodeURIComponent(word_lc);
 
     console.log('[WordService] looking up:', word_lc, 'context:', context);
 
-    try {
-      const langs = context.languages || ['en'];
+    const langs = context.languages || ['en'];
+    const isNonEnglish = (langs[0] && langs[0] !== 'en') || /[^\x00-\x7f]/.test(word);
+
+    const tryLocal = async () => {
       for (const langCode of langs) {
         try {
-          const url = `https://api.dictionaryapi.dev/api/v2/entries/${langCode}/${word_lc}`;
-          const res = await fetch(url);
+          const hasStore = await dictionaryService.hasLanguage(langCode);
+          if (!hasStore) continue;
+          const localResult = await dictionaryService.find(word_lc, [langCode]);
+          if (localResult) {
+            console.log('[WordService] found in local dict');
+            return localResult;
+          }
+        } catch (err) {
+          console.error('[WordService] local tier error:', err.message);
+        }
+      }
+      return null;
+    };
 
-          if (res.ok) {
+    const tryApi = async () => {
+      try {
+        for (const langCode of langs) {
+          try {
+            const url = `https://api.dictionaryapi.dev/api/v2/entries/${langCode}/${encodedWord}`;
+            const res = await fetch(url);
+
+            if (!res.ok) {
+              console.log(`[WordService] api status ${res.status} for ${langCode}`);
+              continue;
+            }
+
             const data = await res.json();
             if (data?.[0]?.meanings) {
               const result = this._formatFromApi(data[0], langCode);
               console.log('[WordService] found via API');
               return result;
             }
+          } catch (err) {
+            console.log(`[WordService] api failed for ${langCode}:`, err.message);
+            continue;
           }
-        } catch (err) {
-          console.log(`[WordService] api failed for ${langCode}:`, err.message);
-          continue;
         }
+      } catch (err) {
+        console.log('[WordService] api tier error:', err.message);
       }
-    } catch (err) {
-      console.log('[WordService] api tier error:', err.message);
-    }
+      return null;
+    };
 
-    try {
-      const result = await dictionaryService.find(word_lc, context.languages);
-      if (result) {
-        console.log('[WordService] found in local dict');
-        return result;
-      }
-    } catch (err) {
-      console.error('[WordService] local tier error:', err.message);
+    // english → local then api; non english → api then local. both end with ollama
+    if (isNonEnglish) {
+      const apiHit = await tryApi();
+      if (apiHit) return apiHit;
+      const localHit = await tryLocal();
+      if (localHit) return localHit;
+    } else {
+      const localHit = await tryLocal();
+      if (localHit) return localHit;
+      const apiHit = await tryApi();
+      if (apiHit) return apiHit;
     }
 
     try {
