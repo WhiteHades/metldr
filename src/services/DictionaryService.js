@@ -1,5 +1,7 @@
+import { SUPPORTED_LANGUAGES } from '../lib/StorageManager.js';
+
 const DB_DICT = 'metldr-dictionary';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 export class DictionaryService {
   constructor() {
@@ -32,11 +34,13 @@ export class DictionaryService {
       };
 
       req.onupgradeneeded = (event) => {
-        console.log('[DictionaryService] db upgrade needed');
         const db = event.target.result;
-        if (!db.objectStoreNames.contains('meta')) {
-          db.createObjectStore('meta', { keyPath: 'key' });
-        }
+        SUPPORTED_LANGUAGES.forEach(lang => {
+          if (!db.objectStoreNames.contains(lang.code)) {
+            db.createObjectStore(lang.code, { keyPath: 'word' });
+          }
+        });
+        if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta', { keyPath: 'key' });
       };
     });
 
@@ -142,6 +146,29 @@ export class DictionaryService {
     }
 
     return this.db.objectStoreNames.contains(langCode);
+  }
+
+  async isLanguageDownloaded(langCode) {
+    if (!this.db) {
+      try {
+        await this.init();
+      } catch {
+        return false;
+      }
+    }
+    if (!this.db.objectStoreNames.contains('meta')) return false;
+
+    return new Promise((resolve) => {
+      try {
+        const tx = this.db.transaction(['meta'], 'readonly');
+        const store = tx.objectStore('meta');
+        const req = store.get(`lang-${langCode}`);
+        req.onsuccess = () => resolve(req.result?.downloaded === true);
+        req.onerror = () => resolve(false);
+      } catch {
+        resolve(false);
+      }
+    });
   }
 
   async listAvailable() {
