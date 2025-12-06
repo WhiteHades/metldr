@@ -2,6 +2,8 @@
 import { ref, onMounted, onUnmounted, nextTick, computed, watch } from 'vue';
 import { useThemeStore } from './stores/theme.js';
 import { StorageManager, SUPPORTED_LANGUAGES } from './lib/StorageManager.js';
+import { SummaryPrefs } from './lib/summaryPrefs.js';
+import { formatTime, stripThinking } from './lib/textUtils.js';
 import HistoryManager from './components/HistoryManager.vue';
 import { marked } from 'marked';
 import { 
@@ -10,26 +12,10 @@ import {
   Zap, Server, Circle, MessageCircle, FileText, AlertCircle
 } from 'lucide-vue-next';
 
-function formatTime(ms) {
-  if (!ms && ms !== 0) return '';
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
-
 marked.setOptions({
   breaks: true,
   gfm: true
 });
-
-function stripThinking(text) {
-  if (!text) return text;
-  return text
-    .replace(/<think>[\s\S]*?<\/think>/gi, '')
-    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
-    .replace(/<reason>[\s\S]*?<\/reason>/gi, '')
-    .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, '')
-    .trim();
-}
 
 function renderMarkdown(text) {
   if (!text) return '';
@@ -58,6 +44,12 @@ const summaryError = ref(null);
 const currentTabId = ref(null);
 const currentTabUrl = ref(null);
 const summaryCollapsed = ref(false);
+const summaryPrompt = ref(null);
+const summaryMode = ref('manual');
+const allowlistInput = ref(SummaryPrefs.ALLOWLIST.join('\n'));
+const denylistInput = ref(SummaryPrefs.DENYLIST.join('\n'));
+const minAutoWords = ref(SummaryPrefs.DEFAULT_PREFS.minAutoWords);
+const minPromptWords = ref(SummaryPrefs.DEFAULT_PREFS.minPromptWords);
 
 // chat state
 const chatMessages = ref([]);
@@ -123,6 +115,40 @@ async function loadTabSession(url) {
     console.warn('metldr: failed to load tab session:', err.message);
   }
   return false;
+}
+
+async function loadSummaryPrefs() {
+  try {
+    const stored = await chrome.storage.local.get(['summaryPrefs']);
+    const prefs = SummaryPrefs.buildPrefs(stored?.summaryPrefs || {});
+    summaryMode.value = prefs.mode || 'manual';
+    allowlistInput.value = prefs.allowlist.join('\n');
+    denylistInput.value = prefs.denylist.join('\n');
+    minAutoWords.value = prefs.minAutoWords;
+    minPromptWords.value = prefs.minPromptWords;
+  } catch (err) {
+    console.warn('metldr: failed to load summary prefs:', err.message);
+    summaryMode.value = SummaryPrefs.DEFAULT_PREFS.mode;
+    allowlistInput.value = SummaryPrefs.ALLOWLIST.join('\n');
+    denylistInput.value = SummaryPrefs.DENYLIST.join('\n');
+    minAutoWords.value = SummaryPrefs.DEFAULT_PREFS.minAutoWords;
+    minPromptWords.value = SummaryPrefs.DEFAULT_PREFS.minPromptWords;
+  }
+}
+
+async function saveSummaryPrefs() {
+  try {
+    const prefs = {
+      mode: summaryMode.value,
+      allowlist: SummaryPrefs.parseListInput(allowlistInput.value, SummaryPrefs.ALLOWLIST),
+      denylist: SummaryPrefs.parseListInput(denylistInput.value, SummaryPrefs.DENYLIST),
+      minAutoWords: Number.isFinite(Number(minAutoWords.value)) ? Number(minAutoWords.value) : SummaryPrefs.DEFAULT_PREFS.minAutoWords,
+      minPromptWords: Number.isFinite(Number(minPromptWords.value)) ? Number(minPromptWords.value) : SummaryPrefs.DEFAULT_PREFS.minPromptWords
+    };
+    await chrome.storage.local.set({ summaryPrefs: prefs });
+  } catch (err) {
+    console.warn('metldr: failed to save summary prefs:', err.message);
+  }
 }
 
 async function sendToBackground(message, retries = 2) {
@@ -216,8 +242,8 @@ async function checkOllama(showChecking = true) {
         if (!selectedModel.value) selectedModel.value = models[0];
       }
       
-      if (!wasReady) {
-        await fetchCurrentPageSummary();
+      if (!wasReady && summaryMode.value !== 'manual') {
+        await fetchCurrentPageSummary(false, 'auto');
       }
       return true;
     }
@@ -235,8 +261,9 @@ async function checkOllama(showChecking = true) {
   }
 }
 
-async function fetchCurrentPageSummary(force = false) {
+async function fetchCurrentPageSummary(force = false, trigger = 'auto') {
   try {
+    summaryPrompt.value = null;
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tabs.length) {
       summaryError.value = 'no active tab';
@@ -270,10 +297,17 @@ async function fetchCurrentPageSummary(force = false) {
     const response = await sendToBackground({
       type: 'EXTRACT_AND_SUMMARIZE',
       tabId: tab.id,
-      force
+      force,
+      trigger
     });
     if (!response || !response.success) {
-      if (response?.skip) {
+      if (response?.prompt) {
+        summaryPrompt.value = {
+          url: tab.url,
+          reason: response.reason || 'needs approval'
+        };
+        summaryError.value = null;
+      } else if (response?.skip) {
         summaryError.value = response.reason || 'page skipped';
       } else {
         summaryError.value = response?.error || 'summarisation failed';
@@ -293,6 +327,28 @@ async function fetchCurrentPageSummary(force = false) {
     summaryError.value = error.message || 'unknown error';
   } finally {
     summaryLoading.value = false;
+  }
+}
+
+function triggerManualSummary() {
+  fetchCurrentPageSummary(true, 'manual');
+}
+
+function acceptSummaryPrompt() {
+  if (!summaryPrompt.value) return;
+  summaryPrompt.value = null;
+  fetchCurrentPageSummary(true, 'manual');
+}
+
+function declineSummaryPrompt() {
+  summaryError.value = 'summary dismissed';
+  summaryPrompt.value = null;
+}
+
+function handleKeydown(e) {
+  if (e.ctrlKey && e.shiftKey && e.key?.toLowerCase?.() === 'l') {
+    e.preventDefault();
+    triggerManualSummary();
   }
 }
 
@@ -481,6 +537,10 @@ async function loadDictionarySettings() {
   try {
     console.log('[metldr] loading dictionary settings...');
     await storage.initDictionary();
+    const persisted = await chrome.storage.local.get(['dictDownloadProgress', 'downloadingLanguages']);
+    const persistedProgress = persisted.dictDownloadProgress || {};
+    const persistedDownloading = Array.isArray(persisted.downloadingLanguages) ? persisted.downloadingLanguages : [];
+    downloadProgress.value = { ...persistedProgress };
     downloadedLanguages.value = await storage.dictGetDownloadedLanguages();
     console.log('[metldr] downloaded languages:', downloadedLanguages.value);
     
@@ -490,6 +550,19 @@ async function loadDictionarySettings() {
     }
     console.log('[metldr] selected languages:', selectedLanguages.value);
     
+    persistedDownloading.forEach(lang => {
+      if (!downloadProgress.value[lang]) {
+        downloadProgress.value = { ...downloadProgress.value, [lang]: { progress: 0, letter: 'a', entries: 0 } };
+      }
+      startDownload(lang);
+    });
+
+    selectedLanguages.value.forEach(lang => {
+      if (!downloadedLanguages.value.includes(lang) && !downloadProgress.value[lang]) {
+        startDownload(lang);
+      }
+    });
+
     if (!downloadedLanguages.value.includes('en')) {
       console.log('[metldr] english not downloaded, starting download...');
       startDownload('en');
@@ -503,23 +576,30 @@ async function loadDictionarySettings() {
 
 async function startDownload(langCode) {
   console.log('[metldr] starting download for:', langCode);
-  downloadProgress.value[langCode] = { progress: 0, letter: 'a', entries: 0 };
+  downloadProgress.value = { ...downloadProgress.value, [langCode]: { progress: 0, letter: 'a', entries: 0 } };
   
   try {
     await storage.dictDownloadLanguage(langCode, (progressData) => {
-      downloadProgress.value[langCode] = {
+      downloadProgress.value = { ...downloadProgress.value, [langCode]: {
         progress: progressData.progress,
         letter: progressData.letter,
         entries: progressData.entriesProcessed
-      };
+      } };
     });
     
     console.log('[metldr] download completed for:', langCode);
-    delete downloadProgress.value[langCode];
+    const { [langCode]: _, ...rest } = downloadProgress.value;
+    downloadProgress.value = rest;
     downloadedLanguages.value = await storage.dictGetDownloadedLanguages();
+
+    if (!selectedLanguages.value.includes(langCode)) {
+      selectedLanguages.value.push(langCode);
+      await chrome.storage.local.set({ selectedLanguages: [...selectedLanguages.value] });
+    }
   } catch (error) {
     console.error('[metldr] download failed for', langCode, ':', error);
-    delete downloadProgress.value[langCode];
+    const { [langCode]: _, ...rest } = downloadProgress.value;
+    downloadProgress.value = rest;
   }
 }
 
@@ -543,9 +623,16 @@ async function deleteLanguageData(langCode) {
   if (!confirm(`delete ${langCode} dictionary data?`)) return;
   
   try {
+    downloadedLanguages.value = downloadedLanguages.value.filter(l => l !== langCode);
+    const { [langCode]: _, ...rest } = downloadProgress.value;
+    downloadProgress.value = rest;
+    await chrome.storage.local.set({
+      downloadingLanguages: Object.keys(rest),
+      dictDownloading: false
+    });
+
     await storage.dictDeleteLanguage(langCode);
     downloadedLanguages.value = await storage.dictGetDownloadedLanguages();
-    
     const index = selectedLanguages.value.indexOf(langCode);
     if (index !== -1) {
       selectedLanguages.value.splice(index, 1);
@@ -557,6 +644,10 @@ async function deleteLanguageData(langCode) {
   }
 }
 
+watch([summaryMode, allowlistInput, denylistInput, minAutoWords, minPromptWords], () => {
+  saveSummaryPrefs();
+});
+
 function setupTabListener() {
   chrome.tabs.onActivated.addListener(async (activeInfo) => {
     if (ollamaStatus.value === 'ready') {
@@ -566,8 +657,12 @@ function setupTabListener() {
       pageMetadata.value = null;
       chatMessages.value = [];
       summaryCollapsed.value = false;
+      summaryError.value = null;
+      summaryPrompt.value = null;
       
-      await fetchCurrentPageSummary();
+      if (summaryMode.value !== 'manual') {
+        await fetchCurrentPageSummary(false, 'auto');
+      }
     }
   });
   
@@ -580,9 +675,13 @@ function setupTabListener() {
         pageSummary.value = null;
         pageMetadata.value = null;
         chatMessages.value = [];
+        summaryPrompt.value = null;
+        summaryError.value = null;
       }
       
-      await fetchCurrentPageSummary(urlChanged);
+      if (summaryMode.value !== 'manual') {
+        await fetchCurrentPageSummary(urlChanged, 'auto');
+      }
     }
   });
 }
@@ -599,6 +698,7 @@ onMounted(async () => {
     console.error('metldr: failed to load word popup settings:', error);
   }
   
+  await loadSummaryPrefs();
   await loadDictionarySettings();
   
   try {
@@ -612,11 +712,15 @@ onMounted(async () => {
   await checkOllama();
   setupTabListener();
 
-  document.addEventListener('click', (e) => {
+  window.addEventListener('keydown', handleKeydown);
+
+  const dropdownClickHandler = (e) => {
     if (showModelDropdown.value && !e.target.closest('.model-selector-btn') && !e.target.closest('.model-dropdown')) {
       showModelDropdown.value = false;
     }
-  });
+  };
+
+  document.addEventListener('click', dropdownClickHandler);
 
   const statusCheckInterval = setInterval(async () => {
     if (ollamaStatus.value !== 'ready') {
@@ -626,6 +730,8 @@ onMounted(async () => {
 
   onUnmounted(() => {
     clearInterval(statusCheckInterval);
+    document.removeEventListener('click', dropdownClickHandler);
+    window.removeEventListener('keydown', handleKeydown);
   });
 });
 </script>
@@ -699,7 +805,21 @@ onMounted(async () => {
         </div>
 
         <!-- summary tab -->
-        <div v-else-if="ollamaStatus === 'ready' && activeTab === 'summary'" class="flex flex-col h-full">
+        <div v-else-if="ollamaStatus === 'ready' && activeTab === 'summary'" :class="['flex flex-col h-full relative', summaryPrompt ? 'pb-16' : '']">
+          
+          <div v-if="summaryPrompt" class="absolute right-2 bottom-2 max-w-xs rounded-lg border border-warning/30 bg-warning/5 px-3 py-2 text-[10px] shadow-lg z-10">
+            <div class="flex items-start gap-2">
+              <div class="flex-1 min-w-0">
+                <div class="font-medium text-base-content/70 truncate">summarise this page?</div>
+                <div class="text-base-content/50 truncate">{{ summaryPrompt.reason }}</div>
+              </div>
+              <div class="flex gap-1 shrink-0">
+                <button class="btn btn-ghost btn-2xs text-[10px]" @click="declineSummaryPrompt">no</button>
+                <button class="btn btn-2xs bg-warning/20 border-warning/40 text-[10px]" @click="acceptSummaryPrompt">yes</button>
+              </div>
+            </div>
+          </div>
+          
           <!-- collapsible summary area -->
           <div class="shrink-0 p-2 pb-0">
             <!-- summary card with collapse toggle -->
@@ -723,11 +843,16 @@ onMounted(async () => {
                   </p>
                 </div>
                 <button 
-                  @click.stop="fetchCurrentPageSummary(true)" 
-                  class="flex items-center justify-center w-6 h-6 rounded-md hover:bg-primary/10 shrink-0 transition-colors"
+                  @click.stop="pageSummary ? fetchCurrentPageSummary(true, 'manual') : triggerManualSummary()" 
+                  class="flex items-center justify-center w-7 h-7 rounded-md hover:bg-primary/10 shrink-0 transition-colors"
                   :disabled="summaryLoading"
+                  :title="pageSummary ? 'regenerate summary' : 'summarise now (Ctrl+Shift+L)'"
                 >
-                  <RefreshCw :size="12" class="text-primary/60" :class="{ 'animate-spin': summaryLoading }" />
+                  <component 
+                    :is="pageSummary ? RefreshCw : Zap" 
+                    :size="12" 
+                    :class="[pageSummary && summaryLoading ? 'animate-spin' : '', 'text-primary']" 
+                  />
                 </button>
               </div>
               
@@ -963,6 +1088,72 @@ onMounted(async () => {
             </div>
           </div>
 
+          <!-- summary preferences -->
+          <div class="rounded-xl bg-base-content/5 p-4 border border-primary/10 space-y-3">
+            <div class="flex items-center gap-2.5">
+              <div class="flex items-center justify-center w-6 h-6 rounded-md bg-primary/15">
+                <FileText :size="12" class="text-primary" />
+              </div>
+              <span class="text-[12px] font-medium text-base-content/70 tracking-wide">summaries</span>
+            </div>
+
+            <div class="flex gap-2">
+              <button
+                class="btn btn-xs flex-1"
+                :class="summaryMode === 'manual' ? 'bg-primary/15 border-primary/30 text-primary' : 'btn-ghost border-base-content/10'"
+                @click="summaryMode = 'manual'"
+              >manual</button>
+              <button
+                class="btn btn-xs flex-1"
+                :class="summaryMode === 'smart' ? 'bg-primary/15 border-primary/30 text-primary' : 'btn-ghost border-base-content/10'"
+                @click="summaryMode = 'smart'"
+              >smart (ask)</button>
+              <button
+                class="btn btn-xs flex-1"
+                :class="summaryMode === 'auto' ? 'bg-primary/15 border-primary/30 text-primary' : 'btn-ghost border-base-content/10'"
+                @click="summaryMode = 'auto'"
+              >auto (trusted)</button>
+            </div>
+
+            <div class="grid grid-cols-2 gap-2">
+              <label class="text-[11px] text-base-content/60 flex items-center gap-2">
+                <span class="w-28">auto min words</span>
+                <input type="number" min="0" class="input input-xs input-bordered w-full" v-model.number="minAutoWords" />
+              </label>
+              <label class="text-[11px] text-base-content/60 flex items-center gap-2">
+                <span class="w-28">prompt min words</span>
+                <input type="number" min="0" class="input input-xs input-bordered w-full" v-model.number="minPromptWords" />
+              </label>
+            </div>
+
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <div class="flex items-center justify-between mb-1">
+                  <span class="text-[11px] text-base-content/60">allowlist</span>
+                  <span class="text-[10px] text-base-content/40">one per line</span>
+                </div>
+                <textarea 
+                  class="textarea textarea-bordered textarea-xs w-full h-28"
+                  v-model="allowlistInput"
+                  placeholder="example.com"
+                ></textarea>
+              </div>
+              <div>
+                <div class="flex items-center justify-between mb-1">
+                  <span class="text-[11px] text-base-content/60">denylist</span>
+                  <span class="text-[10px] text-base-content/40">one per line</span>
+                </div>
+                <textarea 
+                  class="textarea textarea-bordered textarea-xs w-full h-28"
+                  v-model="denylistInput"
+                  placeholder="dashboard"
+                ></textarea>
+              </div>
+            </div>
+
+            <p class="text-[10px] text-base-content/45">manual = only on click; smart = prompt on medium-confidence pages; auto = run on trusted/high-confidence pages.</p>
+          </div>
+
           <!-- word lookup toggle -->
           <div class="rounded-xl bg-base-content/5 p-4 border border-secondary/10">
             <div class="flex items-center justify-between">
@@ -1008,13 +1199,8 @@ onMounted(async () => {
                   v-if="downloadProgress[lang.code]"
                   class="text-[10px] text-base-content/55"
                 >
-                  {{ downloadProgress[lang.code].progress.toFixed(0) }}%
+                  {{ Number(downloadProgress[lang.code].progress || 0).toFixed(0) }}%
                 </span>
-                <Check 
-                  v-else-if="downloadedLanguages.includes(lang.code)"
-                  :size="14" 
-                  class="text-base-content/30"
-                />
                 
                 <button
                   v-if="downloadedLanguages.includes(lang.code)"
