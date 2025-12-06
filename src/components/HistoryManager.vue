@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed } from 'vue';
-import { FileText, Clock, Zap, Loader2, ChevronRight, TrendingUp, Trash2 } from 'lucide-vue-next';
+import { FileText, Clock, Zap, Loader2, ChevronRight, TrendingUp, Trash2, Database } from 'lucide-vue-next';
 
 const props = defineProps({
   limit: {
@@ -15,13 +15,19 @@ let messageListener = null;
 
 async function openDB() {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open('metldr_cache', 2);
+    const request = indexedDB.open('metldr_cache', 4);
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
     request.onupgradeneeded = (event) => {
       const db = event.target.result;
       if (!db.objectStoreNames.contains('summaries')) {
         db.createObjectStore('summaries', { keyPath: 'emailId' });
+      }
+      if (!db.objectStoreNames.contains('page_cache')) {
+        db.createObjectStore('page_cache', { keyPath: 'url' });
+      }
+      if (!db.objectStoreNames.contains('reply_suggestions')) {
+        db.createObjectStore('reply_suggestions', { keyPath: 'emailId' });
       }
     };
   });
