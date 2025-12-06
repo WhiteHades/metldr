@@ -149,9 +149,6 @@ export class WordPopup {
     const settings = await chrome.storage.local.get(['wordPopupEnabled']);
     if (settings.wordPopupEnabled === false) return;
 
-    const isEnglish = /^[a-zA-Z]+$/.test(word);
-    const lookupType = isEnglish ? 'definition' : 'translation';
-
     const selection = window.getSelection();
     if (selection.rangeCount > 0) {
       this.anchorRange = selection.getRangeAt(0).cloneRange();
@@ -239,7 +236,7 @@ export class WordPopup {
       document.addEventListener('click', this.clickListener);
     }, 100);
 
-    await this.fetchAndRenderLookup(word, content, header, lookupType, contextData);
+    await this.fetchAndRenderLookup(word, content, header, 'definition', contextData);
   }
 
   createHeader() {
