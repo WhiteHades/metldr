@@ -4,10 +4,12 @@ import { dictionaryService } from './DictionaryService.js';
 import { WordService } from './WordService.js';
 import { EmailService } from './EmailService.js';
 import { PageService } from './PageService.js';
+import { SummaryPrefs } from '../lib/summaryPrefs.js';
 
 export class BackgroundBootstrap {
   static isInitialized = false;
   static initPromise = null;
+  static summaryQueue = Promise.resolve();
   
   static async init() {
     if (this.initPromise) return this.initPromise;
@@ -84,9 +86,13 @@ export class BackgroundBootstrap {
         respond({ summary });
       } catch (err) {
         console.error('[BackgroundBootstrap._onEmailSummary]', err.message);
+        const errMsg = err?.message || 'unknown error';
+        const needsOllama = /ollama/i.test(errMsg);
         respond({
+          error: errMsg,
+          needsOllama,
           summary: {
-            summary: `error: ${err.message}`,
+            summary: `error: ${errMsg}`,
             action_items: [],
             dates: [],
             confidence: 'low'
@@ -119,47 +125,9 @@ export class BackgroundBootstrap {
   }
 
   static _onExtractAndSummarize(msg, respond) {
-    (async () => {
-      try {
-        const { tabId, force } = msg;
-        console.log('[BackgroundBootstrap] extract+summarise for tab', tabId);
-        
-        let extracted;
-        try {
-          const response = await chrome.tabs.sendMessage(tabId, { type: 'EXTRACT_ARTICLE' });
-          if (!response?.success) {
-            respond({ success: false, error: response?.error || 'extraction failed' });
-            return;
-          }
-          extracted = response.data;
-        } catch (err) {
-          console.log('[BackgroundBootstrap] content script not ready, will retry');
-          respond({ success: false, error: 'content script not ready - please refresh the page' });
-          return;
-        }
-        
-        if (!extracted) {
-          respond({ success: false, error: 'extraction failed' });
-          return;
-        }
-        
-        if (extracted.skip) {
-          respond({ success: false, skip: true, reason: extracted.reason });
-          return;
-        }
-        
-        console.log('[BackgroundBootstrap] extracted:', extracted.title, 'by', extracted.author, '|', extracted.wordCount, 'words');
-        
-        const summary = await PageService.summarize(extracted, force);
-        
-        console.log('[BackgroundBootstrap] summary:', summary.bullets?.length, 'bullets');
-        respond({ success: true, summary });
-        
-      } catch (err) {
-        console.error('[BackgroundBootstrap._onExtractAndSummarize]', err.message);
-        respond({ success: false, error: err.message });
-      }
-    })();
+    const { tabId, force, trigger } = msg;
+    this._enqueueSummary(() => this._performExtractAndSummarize(tabId, force, trigger))
+      .then(result => respond(result));
   }
 
   static _onWordLookup(msg, respond) {
@@ -272,5 +240,107 @@ export class BackgroundBootstrap {
     }
 
     return langs.length > 0 ? langs : ['en'];
+  }
+
+  static _enqueueSummary(task) {
+    this.summaryQueue = this.summaryQueue.then(() => task()).catch(err => {
+      console.error('[BackgroundBootstrap] summary queue error:', err.message);
+      return { success: false, error: err.message };
+    });
+    return this.summaryQueue;
+  }
+
+  static async _performExtractAndSummarize(tabId, force, trigger = 'auto') {
+    try {
+      const prefs = await this._getSummaryPrefs();
+      let extracted;
+      try {
+        const response = await chrome.tabs.sendMessage(tabId, { type: 'EXTRACT_ARTICLE' });
+        if (!response?.success) {
+          return { success: false, error: response?.error || 'extraction failed' };
+        }
+        extracted = response.data;
+      } catch {
+        return { success: false, error: 'content script not ready - please refresh the page' };
+      }
+
+      if (!extracted) return { success: false, error: 'extraction failed' };
+      if (extracted.skip) return { success: false, skip: true, reason: extracted.reason };
+      const gating = this._classifyPage(extracted, prefs, trigger, force);
+      if (gating.action === 'skip') return { success: false, skip: true, reason: gating.reason };
+      if (gating.action === 'prompt') return { success: false, prompt: true, reason: gating.reason };
+
+      const summary = await PageService.summarize(extracted, force);
+      return { success: true, summary };
+    } catch (err) {
+      console.error('[BackgroundBootstrap._performExtractAndSummarize]', err.message);
+      return { success: false, error: err.message };
+    }
+  }
+
+  static async _getSummaryPrefs() {
+    try {
+      const stored = await chrome.storage.local.get(['summaryPrefs']);
+      return SummaryPrefs.buildPrefs(stored?.summaryPrefs || {});
+    } catch {
+      return SummaryPrefs.DEFAULT_PREFS;
+    }
+  }
+
+  static _classifyPage(extracted, prefs, trigger, force) {
+    const url = extracted?.url || '';
+    const contentType = extracted?.contentType || 'text/html';
+    const signals = extracted?.pageSignals || {};
+    const wordCount = extracted?.wordCount || 0;
+
+    if (prefs.denylist.some(d => url.includes(d))) {
+      return { action: 'skip', reason: 'denylist' };
+    }
+
+    if (!contentType.startsWith('text/')) {
+      return { action: 'skip', reason: 'non_text' };
+    }
+
+    if (trigger === 'manual' || force) {
+      if (wordCount < 80) return { action: 'skip', reason: 'too_short' };
+      return { action: 'auto', reason: 'manual_trigger' };
+    }
+
+    const nonReader =
+      signals.isSPA ||
+      signals.isDashboard ||
+      signals.isSearch ||
+      signals.isCart ||
+      signals.isFeed ||
+      signals.isSocialFeed ||
+      signals.canvasHeavy ||
+      signals.buttonToParagraphRatio > 2 ||
+      signals.linkDensity > 0.55;
+
+    if (nonReader) {
+      return { action: 'skip', reason: 'non_reader' };
+    }
+
+    if (prefs.mode === 'manual') {
+      return { action: 'wait', reason: 'manual_mode' };
+    }
+
+    const allowHit = prefs.allowlist.some(d => url.includes(d));
+    const strongArticle = (signals.hasArticleTag || signals.h1Count > 0) && signals.textDensity > 0.4 && wordCount >= prefs.minAutoWords;
+    const highConfidence = allowHit ? wordCount >= prefs.minPromptWords : strongArticle;
+
+    if (highConfidence) {
+      return { action: 'auto', reason: allowHit ? 'allowlist' : 'article_confident' };
+    }
+
+    const mediumConfidence = (signals.hasMain || signals.hasArticleTag || signals.h1Count > 0) &&
+      wordCount >= prefs.minPromptWords &&
+      signals.textDensity > 0.25;
+
+    if (prefs.mode === 'smart' && mediumConfidence) {
+      return { action: 'prompt', reason: 'medium_confidence' };
+    }
+
+    return { action: 'wait', reason: 'low_confidence' };
   }
 }
