@@ -121,6 +121,23 @@ export class ReplyPanel {
     }, 1000);
   }
 
+  refreshForThread(threadId) {
+    this.stopPolling();
+    this.suggestions = [];
+    this.isLoading = true;
+
+    if (this.isVisible && this.panel) {
+      const content = this.panel.querySelector('.metldr-reply-content');
+      if (content) {
+        content.innerHTML = this.buildSuggestionsHTML(UIService.currentTheme);
+      }
+    }
+
+    if (threadId) {
+      this.startPolling(threadId);
+    }
+  }
+
   stopPolling() {
     if (this.pollInterval) {
       clearInterval(this.pollInterval);
