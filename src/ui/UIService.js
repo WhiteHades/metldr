@@ -1,4 +1,5 @@
 import { gsap } from 'gsap';
+import { formatTime } from '../lib/textUtils.js';
 
 export const THEME_COLORS = {
   default: {
@@ -214,15 +215,7 @@ export class UIService {
   }
 
   static formatTime(ms) {
-    if (ms < 1000) {
-      return `${ms}ms`;
-    } else if (ms < 60000) {
-      return `${(ms / 1000).toFixed(1)}s`;
-    } else {
-      const minutes = Math.floor(ms / 60000);
-      const seconds = Math.floor((ms % 60000) / 1000);
-      return `${minutes}m ${seconds}s`;
-    }
+    return formatTime(ms);
   }
 
   static createLoadingIndicator(threadElement) {
@@ -336,7 +329,9 @@ export class UIService {
   static createSummaryCard(summary, threadId) {
     const theme = this.currentTheme;
     const summaryText = summary.summary || '';
-    const actions = summary.action_items || [];
+    const actions = (summary.action_items || [])
+      .map(a => (typeof a === 'string' ? a.trim() : ''))
+      .filter(a => a && a.toLowerCase() !== 'none');
     const dates = summary.dates || [];
     const confidence = summary.confidence || 'medium';
     const modelName = summary.model || 'unknown';
