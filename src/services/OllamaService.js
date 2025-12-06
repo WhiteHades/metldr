@@ -1,3 +1,5 @@
+import { stripThinking } from '../lib/textUtils.js';
+
 export class OllamaService {
   static BASE_URL = 'http://127.0.0.1:11434';
   static TIMEOUT_HEALTH = 3000;
@@ -9,16 +11,6 @@ export class OllamaService {
     page_summary: ['llama3.2:3b', 'llama3.2:1b', 'qwen2.5:1.5b'],
     email_summary: ['llama3.2:3b', 'llama3.2:1b', 'qwen2.5:3b']
   };
-
-  static stripThinking(text) {
-    if (!text) return text;
-    return text
-      .replace(/<think>[\s\S]*?<\/think>/gi, '')
-      .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
-      .replace(/<reason>[\s\S]*?<\/reason>/gi, '')
-      .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, '')
-      .trim();
-  }
 
   static async checkAvailable() {
     try {
@@ -70,7 +62,7 @@ export class OllamaService {
 
       const data = await res.json();
       const rawContent = data?.message?.content || data?.response;
-      const content = this.stripThinking(rawContent);
+      const content = stripThinking(rawContent);
 
       return { ok: true, content };
     } catch (err) {
