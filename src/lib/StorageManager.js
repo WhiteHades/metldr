@@ -1,7 +1,7 @@
 const CACHE_DB_NAME = 'metldr_storage';
 const CACHE_DB_VERSION = 1;
 const DICT_DB_NAME = 'metldr-dictionary';
-const DICT_DB_VERSION = 2;
+const DICT_DB_VERSION = 3;
 const DICT_BASE_URL = 'https://media.githubusercontent.com/media/WhiteHades/wikitionary-dictionary-json/master/dist';
 
 export const SUPPORTED_LANGUAGES = [
@@ -251,12 +251,23 @@ export class StorageManager {
       }
     }
 
-    console.log('[dict] starting download for:', langCode, '| base url:', lang.url);
+    await this._markDownloading(langCode, true);
+    const resumeState = await this._getDownloadProgress(langCode);
+    await this._setDownloadProgress(langCode, resumeState?.nextIndex || 0, resumeState?.entriesProcessed || 0);
+
+    try {
+      console.log('[dict] starting download for:', langCode, '| base url:', lang.url);
     const letters = 'abcdefghijklmnopqrstuvwxyz'.split('');
     let totalEntries = 0;
     let successfulLetters = 0;
+      let startIndex = 0;
 
-    for (let i = 0; i < letters.length; i++) {
+      if (resumeState && typeof resumeState.nextIndex === 'number') {
+        startIndex = Math.min(Math.max(resumeState.nextIndex, 0), letters.length);
+        console.log('[dict] resuming download for', langCode, 'from index', startIndex);
+      }
+
+      for (let i = startIndex; i < letters.length; i++) {
       const letter = letters[i];
       const url = `${lang.url}/${letter}.json`;
       try {
@@ -297,17 +308,77 @@ export class StorageManager {
       } catch (err) {
         console.error('[dict] error downloading', letter + '.json for', lang.name, ':', err.message);
       }
+        
+        await this._setDownloadProgress(langCode, i + 1, totalEntries);
     }
 
-    console.log('[dict] download complete for:', langCode, '| letters:', successfulLetters + '/26 | entries:', totalEntries);
-    
-    if (totalEntries > 0) {
-      await this.dictMarkLanguageDownloaded(langCode);
-    } else {
-      console.error('[dict] no entries downloaded for', langCode, '- not marking as complete');
+      console.log('[dict] download complete for:', langCode, '| letters:', successfulLetters + '/26 | entries:', totalEntries);
+      
+      if (totalEntries > 0) {
+        await this.dictMarkLanguageDownloaded(langCode);
+      } else {
+        console.error('[dict] no entries downloaded for', langCode, '- not marking as complete');
+      }
+      
+      await this._clearDownloadProgress(langCode);
+      
+      return totalEntries;
+    } finally {
+      await this._markDownloading(langCode, false);
     }
-    
-    return totalEntries;
+  }
+
+  async _getDownloadProgress(langCode) {
+    try {
+      const result = await chrome.storage.local.get(['dictDownloadProgress']);
+      const map = result.dictDownloadProgress || {};
+      return map[langCode] || null;
+    } catch (err) {
+      console.warn('storagemanager: read progress failed:', err.message);
+      return null;
+    }
+  }
+
+  async _setDownloadProgress(langCode, nextIndex, entriesProcessed) {
+    try {
+      const result = await chrome.storage.local.get(['dictDownloadProgress']);
+      const map = result.dictDownloadProgress || {};
+      map[langCode] = { nextIndex, entriesProcessed };
+      await chrome.storage.local.set({ dictDownloadProgress: map });
+    } catch (err) {
+      console.warn('storagemanager: save progress failed:', err.message);
+    }
+  }
+
+  async _clearDownloadProgress(langCode) {
+    try {
+      const result = await chrome.storage.local.get(['dictDownloadProgress']);
+      const map = result.dictDownloadProgress || {};
+      delete map[langCode];
+      await chrome.storage.local.set({ dictDownloadProgress: map });
+    } catch (err) {
+      console.warn('storagemanager: clear progress failed:', err.message);
+    }
+  }
+
+  async _markDownloading(langCode, add) {
+    try {
+      const result = await chrome.storage.local.get(['downloadingLanguages']);
+      const current = Array.isArray(result.downloadingLanguages) ? result.downloadingLanguages : [];
+      const set = new Set(current);
+      if (add) {
+        set.add(langCode);
+      } else {
+        set.delete(langCode);
+      }
+      const downloadingLanguages = Array.from(set);
+      await chrome.storage.local.set({
+        downloadingLanguages,
+        dictDownloading: downloadingLanguages.length > 0
+      });
+    } catch (err) {
+      console.warn('storagemanager: failed to mark downloading:', err.message);
+    }
   }
 
   async dictBatchInsert(langCode, entries) {
@@ -421,7 +492,11 @@ export class StorageManager {
       const metaStore = tx.objectStore('meta');
       langStore.clear();
       metaStore.delete(`lang-${langCode}`);
-      tx.oncomplete = () => resolve();
+      tx.oncomplete = async () => {
+        await this._clearDownloadProgress(langCode);
+        await this._markDownloading(langCode, false);
+        resolve();
+      };
       tx.onerror = () => reject(tx.error);
     });
   }
