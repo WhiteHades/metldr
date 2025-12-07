@@ -109,7 +109,7 @@ export class UIService {
 
   static hexToRgb(hex) {
     const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-    return result 
+    return result
       ? `${parseInt(result[1], 16)}, ${parseInt(result[2], 16)}, ${parseInt(result[3], 16)}`
       : hex;
   }
@@ -220,7 +220,7 @@ export class UIService {
 
   static createLoadingIndicator(threadElement) {
     const theme = this.currentTheme;
-    
+
     const loading = document.createElement('div');
     loading.className = 'metldr-loading';
     loading.style.cssText = `
@@ -234,7 +234,7 @@ export class UIService {
       opacity: 0;
       transform: scale(0.985);
     `;
-    
+
     loading.innerHTML = `
       <div style="
         display: flex;
@@ -272,23 +272,23 @@ export class UIService {
       console.error('metldr: could not find email header for loading indicator');
       return loading;
     }
-    
+
     let emailContainer = emailHeader.parentNode;
-    while (emailContainer && !emailContainer.classList.contains('ii') && 
-           !emailContainer.classList.contains('nH') && 
-           !emailContainer.classList.contains('adn')) {
+    while (emailContainer && !emailContainer.classList.contains('ii') &&
+      !emailContainer.classList.contains('nH') &&
+      !emailContainer.classList.contains('adn')) {
       emailContainer = emailContainer.parentNode;
       if (!emailContainer || emailContainer === document.body) {
         emailContainer = emailHeader.parentNode;
         break;
       }
     }
-    
-    const bodyElement = emailContainer.querySelector('.a3s.aiL') || 
-                       emailContainer.querySelector('.ii.gt') ||
-                       emailContainer.querySelector('[dir="ltr"]') ||
-                       emailHeader.nextElementSibling;
-    
+
+    const bodyElement = emailContainer.querySelector('.a3s.aiL') ||
+      emailContainer.querySelector('.ii.gt') ||
+      emailContainer.querySelector('[dir="ltr"]') ||
+      emailHeader.nextElementSibling;
+
     let targetParent = null;
     if (bodyElement && bodyElement.parentNode) {
       targetParent = bodyElement.parentNode;
@@ -297,20 +297,20 @@ export class UIService {
       targetParent = emailHeader.parentNode;
       targetParent.insertBefore(loading, emailHeader.nextSibling);
     }
-    
+
     if (targetParent) {
       targetParent.style.setProperty('overflow', 'visible', 'important');
     }
-    
+
     gsap.to(loading, {
       opacity: 1,
       scale: 1,
       duration: 0.4,
       ease: 'back.out(1.7)'
     });
-    
+
     const primaryRgb = this.hexToRgb(this.currentTheme.primary);
-    
+
     gsap.to(loading, {
       boxShadow: `
         0 0 8px rgba(${primaryRgb}, 0.6),
@@ -350,71 +350,71 @@ export class UIService {
       'payment': { bg: '#047857', text: '#ffffff' },
       'refund': { bg: '#34d399', text: '#064e3b' },
       'subscription': { bg: '#6ee7b7', text: '#064e3b' },
-      
+
       'meeting request': { bg: '#3b82f6', text: '#ffffff' },
       'calendar invite': { bg: '#2563eb', text: '#ffffff' },
       'reminder': { bg: '#60a5fa', text: '#1e3a8a' },
       'reschedule': { bg: '#93c5fd', text: '#1e3a8a' },
       'cancellation': { bg: '#1d4ed8', text: '#ffffff' },
-      
+
       'flight booking': { bg: '#06b6d4', text: '#ffffff' },
       'hotel reservation': { bg: '#0891b2', text: '#ffffff' },
       'travel itinerary': { bg: '#22d3ee', text: '#164e63' },
       'ticket': { bg: '#67e8f9', text: '#164e63' },
       'reservation': { bg: '#0e7490', text: '#ffffff' },
-      
+
       'order confirmation': { bg: '#6366f1', text: '#ffffff' },
       'shipping update': { bg: '#818cf8', text: '#1e1b4b' },
       'delivery notice': { bg: '#4f46e5', text: '#ffffff' },
       'tracking': { bg: '#a5b4fc', text: '#1e1b4b' },
       'return/exchange': { bg: '#7c3aed', text: '#ffffff' },
-      
+
       'account alert': { bg: '#f43f5e', text: '#ffffff' },
       'security alert': { bg: '#e11d48', text: '#ffffff' },
       'password reset': { bg: '#fb7185', text: '#881337' },
       'verification': { bg: '#fda4af', text: '#881337' },
       'login notification': { bg: '#be123c', text: '#ffffff' },
-      
+
       'task assignment': { bg: '#475569', text: '#ffffff' },
       'project update': { bg: '#64748b', text: '#ffffff' },
       'status report': { bg: '#94a3b8', text: '#1e293b' },
       'feedback request': { bg: '#334155', text: '#ffffff' },
       'approval request': { bg: '#1e293b', text: '#ffffff' },
-      
+
       'personal': { bg: '#ec4899', text: '#ffffff' },
       'introduction': { bg: '#f472b6', text: '#831843' },
       'follow-up': { bg: '#db2777', text: '#ffffff' },
       'thank you': { bg: '#fce7f3', text: '#9d174d' },
       'announcement': { bg: '#be185d', text: '#ffffff' },
-      
+
       'newsletter': { bg: '#8b5cf6', text: '#ffffff' },
       'marketing': { bg: '#f97316', text: '#ffffff' },
       'promotion': { bg: '#fb923c', text: '#7c2d12' },
       'survey': { bg: '#fdba74', text: '#7c2d12' },
       'invitation': { bg: '#ea580c', text: '#ffffff' },
-      
+
       'support ticket': { bg: '#14b8a6', text: '#ffffff' },
       'bug report': { bg: '#0d9488', text: '#ffffff' },
       'feature request': { bg: '#2dd4bf', text: '#134e4a' },
       'complaint': { bg: '#0f766e', text: '#ffffff' },
       'resolution': { bg: '#5eead4', text: '#134e4a' },
-      
+
       'contract': { bg: '#d97706', text: '#ffffff' },
       'legal notice': { bg: '#b45309', text: '#ffffff' },
       'policy update': { bg: '#fbbf24', text: '#78350f' },
       'hr notice': { bg: '#f59e0b', text: '#78350f' },
       'compliance': { bg: '#92400e', text: '#ffffff' },
-      
+
       'bank statement': { bg: '#047857', text: '#ffffff' },
       'tax document': { bg: '#065f46', text: '#ffffff' },
       'financial report': { bg: '#10b981', text: '#ffffff' },
       'investment update': { bg: '#34d399', text: '#064e3b' },
-      
+
       'social notification': { bg: '#8b5cf6', text: '#ffffff' },
       'connection request': { bg: '#a78bfa', text: '#2e1065' },
       'mention': { bg: '#7c3aed', text: '#ffffff' },
       'comment': { bg: '#c4b5fd', text: '#2e1065' },
-      
+
       'satire/joke': { bg: '#fbbf24', text: '#78350f' },
       'spam': { bg: '#991b1b', text: '#ffffff' },
       'phishing attempt': { bg: '#7f1d1d', text: '#fef2f2' },
@@ -443,8 +443,8 @@ export class UIService {
       z-index: 1 !important;
     `;
 
-    summaryDiv.innerHTML = this._buildSummaryHTML(theme, summaryText, actions, dates, 
-                                                   confidence, confColor, modelName, summary, threadId, intent, intentColors);
+    summaryDiv.innerHTML = this._buildSummaryHTML(theme, summaryText, actions, dates,
+      confidence, confColor, modelName, summary, threadId, intent, intentColors);
 
     return summaryDiv;
   }
@@ -517,7 +517,7 @@ export class UIService {
             font-size: 11px;
             color: ${theme.textMuted};
             font-weight: 500;
-            font-family: 'SF Mono', 'Courier New', monospace;
+            font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
             cursor: help;
           ">${this.escapeHtml(modelName)}</span>
           
@@ -571,7 +571,7 @@ export class UIService {
           border-radius: 16px;
           padding: 16px;
           padding-top: 20px;
-          font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', system-ui, sans-serif;
+          font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', system-ui, sans-serif;
           box-shadow: 0 8px 32px ${theme.shadow}, inset 0 1px 0 ${theme.borderSubtle};
           position: relative;
           -webkit-font-smoothing: antialiased;
@@ -678,13 +678,13 @@ export class UIService {
       console.error('metldr: could not find email header for summary');
       return;
     }
-    
+
     let emailContainer = emailHeader.parentNode;
-    
+
     while (emailContainer && !emailContainer.classList.contains('ii') &&
-           !emailContainer.classList.contains('nH') && 
-           emailContainer.tagName !== 'DIV' ||
-           (emailContainer.tagName === 'DIV' && emailContainer.children.length < 2)) {
+      !emailContainer.classList.contains('nH') &&
+      emailContainer.tagName !== 'DIV' ||
+      (emailContainer.tagName === 'DIV' && emailContainer.children.length < 2)) {
       emailContainer = emailContainer.parentNode;
       if (!emailContainer || emailContainer === document.body) {
         emailContainer = emailHeader.parentNode;
@@ -692,11 +692,11 @@ export class UIService {
       }
     }
 
-    const bodyElement = emailContainer.querySelector('.a3s.aiL') || 
-                       emailContainer.querySelector('.ii.gt') ||
-                       emailContainer.querySelector('[dir="ltr"]') ||
-                       emailHeader.nextElementSibling;
-    
+    const bodyElement = emailContainer.querySelector('.a3s.aiL') ||
+      emailContainer.querySelector('.ii.gt') ||
+      emailContainer.querySelector('[dir="ltr"]') ||
+      emailHeader.nextElementSibling;
+
     let targetParent = null;
     if (bodyElement && bodyElement.parentNode) {
       targetParent = bodyElement.parentNode;
@@ -705,19 +705,19 @@ export class UIService {
       targetParent = emailHeader.parentNode;
       targetParent.insertBefore(summaryDiv, emailHeader.nextSibling);
     }
-    
+
     if (targetParent) {
       targetParent.style.setProperty('overflow', 'visible', 'important');
     }
-    
+
     summaryDiv.style.setProperty('opacity', '0', 'important');
     summaryDiv.style.setProperty('transform', 'scale(0.985)', 'important');
-    
+
     summaryDiv.offsetHeight;
-    
+
     summaryDiv.style.setProperty('opacity', '1', 'important');
     summaryDiv.style.setProperty('transform', 'scale(1)', 'important');
-    
+
     setTimeout(() => {
       summaryDiv.style.setProperty('will-change', 'auto', 'important');
     }, 500);
