@@ -30,7 +30,7 @@ console.warn = (...args) => {
 }
 
 export default defineConfig({
-  plugins: isContentBuild ? [] : [vue(), tailwindcss(), copyInboxSDKPlugin()], 
+  plugins: isContentBuild ? [] : [vue(), tailwindcss(), copyInboxSDKPlugin()],
   css: {
     lightningcss: {
       errorRecovery: true,
@@ -48,12 +48,13 @@ export default defineConfig({
         entryFileNames: 'content.js',
         format: 'iife',
         name: 'MeTLDRContent',
+        inlineDynamicImports: true,
       },
-      inlineDynamicImports: true,
     } : {
       // main build
       input: {
         side_panel: 'index.html',
+        welcome: 'welcome.html',
         background: 'src/background/index.js',
       },
       output: {
