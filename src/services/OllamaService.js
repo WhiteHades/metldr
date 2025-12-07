@@ -3,8 +3,8 @@ import { stripThinking } from '../lib/textUtils.js';
 export class OllamaService {
   static BASE_URL = 'http://127.0.0.1:11434';
   static TIMEOUT_HEALTH = 3000;
-  static TIMEOUT_CHAT = 30000;
-  static TIMEOUT_CHAT_LONG = 120000;
+  static TIMEOUT_CHAT = 90000;
+  static TIMEOUT_CHAT_LONG = 180000;
 
   static PRIORITY = {
     word_lookup: ['llama3.2:1b', 'qwen2.5:1.5b', 'llama3.2:3b'],
