@@ -4,6 +4,7 @@ import { useThemeStore } from './stores/theme.js';
 import { StorageManager, SUPPORTED_LANGUAGES } from './lib/StorageManager.js';
 import { SummaryPrefs } from './lib/summaryPrefs.js';
 import { formatTime, stripThinking } from './lib/textUtils.js';
+import { getSetupCommands } from './utils/platformUtils.js';
 import HistoryManager from './components/HistoryManager.vue';
 import { marked } from 'marked';
 import { 
@@ -62,8 +63,7 @@ const downloadedLanguages = ref([]);
 const selectedLanguages = ref(['en']);
 const downloadProgress = ref({});
 
-const setupCommands = `curl -fsSL https://ollama.com/install.sh | sh
-OLLAMA_ORIGINS="chrome-extension://*" ollama serve`;
+const platformSetup = computed(() => getSetupCommands());
 
 const storage = new StorageManager();
 
@@ -410,8 +410,8 @@ async function retryDetection() {
   await checkOllama(false);
 }
 
-function copySetupCommands() {
-  navigator.clipboard.writeText(setupCommands);
+function copyToClipboard(text) {
+  navigator.clipboard.writeText(text);
 }
 
 async function sendChatMessage() {
@@ -531,6 +531,10 @@ async function clearCache() {
     console.error('failed to clear cache:', error);
     alert('failed to clear cache');
   }
+}
+
+function openSetupGuide() {
+  chrome.tabs.create({ url: chrome.runtime.getURL('welcome.html') });
 }
 
 async function loadDictionarySettings() {
@@ -726,7 +730,7 @@ onMounted(async () => {
     if (ollamaStatus.value !== 'ready') {
       await checkOllama(false); 
     }
-  }, 5000);
+  }, 2000);
 
   onUnmounted(() => {
     clearInterval(statusCheckInterval);
@@ -776,29 +780,78 @@ onMounted(async () => {
         </div>
 
         <!-- not found state -->
-        <div v-else-if="ollamaStatus === 'not-found'" class="p-4">
-          <div class="rounded-xl bg-base-content/5 p-4">
-            <div class="flex items-start gap-3 mb-4">
-              <div class="w-8 h-8 rounded-lg bg-error/10 flex items-center justify-center shrink-0">
-                <Server :size="16" class="text-error/70" />
+        <div v-else-if="ollamaStatus === 'not-found'" class="p-3 h-full overflow-y-auto">
+          <div class="rounded-xl bg-base-content/5 p-4 space-y-4">
+            <!-- header with pulsing indicator -->
+            <div class="flex items-start gap-3">
+              <div class="w-8 h-8 rounded-lg bg-warning/10 flex items-center justify-center shrink-0 relative">
+                <Server :size="16" class="text-warning/70" />
+                <span class="absolute -top-0.5 -right-0.5 w-2 h-2 bg-warning rounded-full animate-pulse"></span>
               </div>
               <div>
-                <h2 class="text-[13px] font-medium text-base-content/80 mb-1">ollama not detected</h2>
-                <p class="text-[11px] text-base-content/50">run these commands to set up ollama:</p>
+                <h2 class="text-[13px] font-medium text-base-content/80 mb-0.5">waiting for ollama...</h2>
+                <p class="text-[10px] text-base-content/40">auto-detecting every 2s · will connect when ready</p>
               </div>
             </div>
             
-            <div class="bg-base-content/5 rounded-lg p-3 font-mono text-[11px] text-base-content/70 mb-4 overflow-x-auto">
-              <pre class="whitespace-pre-wrap">{{ setupCommands }}</pre>
+            <!-- step 1: start ollama -->
+            <div class="rounded-lg bg-primary/5 border border-primary/10 p-3">
+              <div class="text-[11px] font-medium text-base-content/70 mb-2 flex items-center gap-2">
+                <span class="w-4 h-4 rounded-full bg-primary/20 text-primary text-[9px] font-bold flex items-center justify-center">1</span>
+                start ollama with extension support
+              </div>
+              <p class="text-[10px] text-base-content/50 mb-2">open {{ platformSetup.terminalName }} and run:</p>
+              <div class="flex items-center gap-2 bg-base-100/50 rounded-lg p-2">
+                <code class="flex-1 font-mono text-[10px] text-base-content/80 overflow-x-auto whitespace-nowrap">{{ platformSetup.serve }}</code>
+                <button @click="copyToClipboard(platformSetup.serve)" class="btn btn-xs btn-primary text-[9px] shrink-0">
+                  copy
+                </button>
+              </div>
+              <p class="text-[9px] text-base-content/40 mt-2">💡 keep this terminal open while using metldr</p>
             </div>
             
-            <div class="flex gap-2">
-              <button @click="copySetupCommands" class="btn btn-sm btn-ghost text-[11px]">
-                copy commands
-              </button>
+            <!-- step 2: pull a model (if needed) -->
+            <details class="rounded-lg bg-secondary/5 border border-secondary/10">
+              <summary class="p-3 text-[11px] font-medium text-base-content/70 cursor-pointer hover:bg-secondary/5 flex items-center gap-2">
+                <span class="w-4 h-4 rounded-full bg-secondary/20 text-secondary text-[9px] font-bold flex items-center justify-center">2</span>
+                no models? pull one first
+                <ChevronDown :size="12" class="ml-auto text-base-content/40" />
+              </summary>
+              <div class="px-3 pb-3 space-y-2">
+                <p class="text-[10px] text-base-content/50">in a new terminal, run:</p>
+                <div class="flex items-center gap-2 bg-base-100/50 rounded-lg p-2">
+                  <code class="flex-1 font-mono text-[10px] text-base-content/80">ollama pull gemma3:1b</code>
+                  <button @click="copyToClipboard('ollama pull gemma3:1b')" class="btn btn-xs btn-ghost text-[9px] shrink-0">copy</button>
+                </div>
+                <p class="text-[9px] text-base-content/40">this downloads a fast, lightweight model (~500mb)</p>
+              </div>
+            </details>
+            
+            <!-- step 3: install ollama (if needed) -->
+            <details class="rounded-lg bg-accent/5 border border-accent/10">
+              <summary class="p-3 text-[11px] font-medium text-base-content/70 cursor-pointer hover:bg-accent/5 flex items-center gap-2">
+                <span class="w-4 h-4 rounded-full bg-accent/20 text-accent text-[9px] font-bold flex items-center justify-center">?</span>
+                don't have ollama installed?
+                <ChevronDown :size="12" class="ml-auto text-base-content/40" />
+              </summary>
+              <div class="px-3 pb-3 space-y-2">
+                <p class="text-[10px] text-base-content/50">install with this command:</p>
+                <div class="flex items-center gap-2 bg-base-100/50 rounded-lg p-2">
+                  <code class="flex-1 font-mono text-[10px] text-base-content/80 overflow-x-auto">{{ platformSetup.install }}</code>
+                  <button @click="copyToClipboard(platformSetup.install)" class="btn btn-xs btn-ghost text-[9px] shrink-0">copy</button>
+                </div>
+                <p class="text-[9px] text-base-content/40">or download from <a href="https://ollama.com" target="_blank" class="text-primary/70 hover:text-primary underline">ollama.com</a></p>
+              </div>
+            </details>
+            
+            <!-- manual retry + setup guide -->
+            <div class="flex items-center justify-between pt-2 border-t border-base-content/5">
               <button @click="retryDetection" class="btn btn-sm bg-base-content/10 hover:bg-base-content/15 border-0 text-[11px]">
                 <RefreshCw :size="12" />
-                retry
+                check now
+              </button>
+              <button @click="openSetupGuide" class="text-[10px] text-base-content/40 hover:text-base-content/60">
+                full setup guide →
               </button>
             </div>
           </div>
@@ -1259,6 +1312,16 @@ onMounted(async () => {
                 clear
               </button>
             </div>
+          </div>
+
+          <!-- subtle setup guide link -->
+          <div class="pt-2 border-t border-base-content/5 mt-2">
+            <button 
+              @click="openSetupGuide" 
+              class="text-[10px] text-base-content/30 hover:text-base-content/50 transition-colors"
+            >
+              need help? view setup guide →
+            </button>
           </div>
         </div>
 
