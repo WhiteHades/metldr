@@ -155,32 +155,32 @@ export class StorageManager {
       console.log('[dict] already initialized, stores:', Array.from(this.dictDb.objectStoreNames));
       return this.dictDb;
     }
-    
+
     console.log('[dict] initializing dictionary db:', DICT_DB_NAME, 'v' + DICT_DB_VERSION);
     return new Promise((resolve, reject) => {
       const request = indexedDB.open(DICT_DB_NAME, DICT_DB_VERSION);
-      
+
       request.onerror = () => {
         console.error('[dict] failed to open db:', request.error);
         reject(request.error);
       };
-      
+
       request.onsuccess = () => {
         this.dictDb = request.result;
         const stores = Array.from(this.dictDb.objectStoreNames);
         console.log('[dict] db opened successfully, stores:', stores);
-        
+
         if (!stores.includes('meta')) {
           console.warn('[dict] meta store missing - db may need upgrade');
         }
-        
+
         resolve(this.dictDb);
       };
-      
+
       request.onupgradeneeded = (event) => {
         console.log('[dict] upgrading db schema from v' + event.oldVersion + ' to v' + event.newVersion);
         const db = event.target.result;
-        
+
         let created = 0;
         SUPPORTED_LANGUAGES.forEach(lang => {
           if (!db.objectStoreNames.contains(lang.code)) {
@@ -188,12 +188,12 @@ export class StorageManager {
             created++;
           }
         });
-        
+
         if (!db.objectStoreNames.contains('meta')) {
           db.createObjectStore('meta', { keyPath: 'key' });
           created++;
         }
-        
+
         console.log('[dict] created', created, 'new object stores');
       };
     });
@@ -245,7 +245,7 @@ export class StorageManager {
       this.dictDb.close();
       this.dictDb = null;
       await this.initDictionary();
-      
+
       if (!this.dictDb.objectStoreNames.contains(langCode)) {
         throw new Error(`failed to create store for ${langCode}`);
       }
@@ -257,9 +257,9 @@ export class StorageManager {
 
     try {
       console.log('[dict] starting download for:', langCode, '| base url:', lang.url);
-    const letters = 'abcdefghijklmnopqrstuvwxyz'.split('');
-    let totalEntries = 0;
-    let successfulLetters = 0;
+      const letters = 'abcdefghijklmnopqrstuvwxyz'.split('');
+      let totalEntries = 0;
+      let successfulLetters = 0;
       let startIndex = 0;
 
       if (resumeState && typeof resumeState.nextIndex === 'number') {
@@ -268,60 +268,61 @@ export class StorageManager {
       }
 
       for (let i = startIndex; i < letters.length; i++) {
-      const letter = letters[i];
-      const url = `${lang.url}/${letter}.json`;
-      try {
-        console.log('[dict] fetching:', url);
-        const response = await fetch(url, { 
-          cache: 'no-cache',
-          headers: { 'Accept': 'application/json' }
-        });
-        
-        if (!response.ok) {
-          console.warn('[dict] fetch failed:', url, '| status:', response.status, response.statusText);
-          continue;
-        }
-        
-        const contentType = response.headers.get('content-type');
-        if (!contentType?.includes('application/json')) {
-          console.warn('[dict] unexpected content-type:', contentType, 'for', url);
-        }
-        
-        const entries = await response.json();
-        if (!Array.isArray(entries)) {
-          console.warn('[dict] unexpected response format for', url);
-          continue;
-        }
-        
-        console.log('[dict] got', entries.length, 'entries for letter', letter);
-        await this.dictBatchInsert(langCode, entries);
-        totalEntries += entries.length;
-        successfulLetters++;
-        
-        if (onProgress) {
-          onProgress({
-            letter,
-            progress: ((i + 1) / letters.length) * 100,
-            entriesProcessed: totalEntries
+        const letter = letters[i];
+        const url = `${lang.url}/${letter}.json`;
+        try {
+          console.log('[dict] fetching:', url);
+          const response = await fetch(url, {
+            cache: 'no-cache',
+            headers: { 'Accept': 'application/json' }
           });
+
+          if (!response.ok) {
+            console.warn('[dict] fetch failed:', url, '| status:', response.status, response.statusText);
+            continue;
+          }
+
+          const contentType = response.headers.get('content-type');
+          const validTypes = ['application/json', 'application/octet-stream'];
+          if (contentType && !validTypes.some(t => contentType.includes(t))) {
+            console.warn('[dict] unexpected content-type:', contentType, 'for', url);
+          }
+
+          const entries = await response.json();
+          if (!Array.isArray(entries)) {
+            console.warn('[dict] unexpected response format for', url);
+            continue;
+          }
+
+          console.log('[dict] got', entries.length, 'entries for letter', letter);
+          await this.dictBatchInsert(langCode, entries);
+          totalEntries += entries.length;
+          successfulLetters++;
+
+          if (onProgress) {
+            onProgress({
+              letter,
+              progress: ((i + 1) / letters.length) * 100,
+              entriesProcessed: totalEntries
+            });
+          }
+        } catch (err) {
+          console.error('[dict] error downloading', letter + '.json for', lang.name, ':', err.message);
         }
-      } catch (err) {
-        console.error('[dict] error downloading', letter + '.json for', lang.name, ':', err.message);
-      }
-        
+
         await this._setDownloadProgress(langCode, i + 1, totalEntries);
-    }
+      }
 
       console.log('[dict] download complete for:', langCode, '| letters:', successfulLetters + '/26 | entries:', totalEntries);
-      
+
       if (totalEntries > 0) {
         await this.dictMarkLanguageDownloaded(langCode);
       } else {
         console.error('[dict] no entries downloaded for', langCode, '- not marking as complete');
       }
-      
+
       await this._clearDownloadProgress(langCode);
-      
+
       return totalEntries;
     } finally {
       await this._markDownloading(langCode, false);
@@ -383,18 +384,18 @@ export class StorageManager {
 
   async dictBatchInsert(langCode, entries) {
     if (!this.dictDb) await this.initDictionary();
-    
+
     if (!this.dictDb.objectStoreNames.contains(langCode)) {
       console.error('[dict] store not found:', langCode, '- reinitializing db');
       this.dictDb.close();
       this.dictDb = null;
       await this.initDictionary();
-      
+
       if (!this.dictDb.objectStoreNames.contains(langCode)) {
         throw new Error(`language store ${langCode} not found after reinit`);
       }
     }
-    
+
     return new Promise((resolve, reject) => {
       try {
         const tx = this.dictDb.transaction([langCode], 'readwrite');
