@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
-  "version": "0.5.1",
+  "version": "0.6.0",
   "name": "MeTLDR",
   "description": "Local and private AI assistant powered by Ollama with offline dictionary",
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self';"
+    "extension_pages": "script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; media-src 'self';"
   },
   "action": {
     "default_title": "metldr - click to open"
@@ -18,8 +18,12 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_start",
       "world": "ISOLATED"
     }
@@ -43,9 +47,12 @@
       "resources": [
         "pageWorld.js",
         "assets/*.js",
-        "assets/*.css"
+        "assets/*.css",
+        "welcome.html"
       ],
-      "matches": ["<all_urls>"]
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ]
 }
