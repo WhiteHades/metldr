@@ -10,20 +10,29 @@ export class BackgroundBootstrap {
   static isInitialized = false;
   static initPromise = null;
   static summaryQueue = Promise.resolve();
-  
+
   static async init() {
     if (this.initPromise) return this.initPromise;
-    
+
     this.initPromise = this._doInit();
     return this.initPromise;
   }
-  
+
   static async _doInit() {
     console.log('[BackgroundBootstrap] starting initialization...');
-    
+
     chrome.sidePanel
       .setPanelBehavior({ openPanelOnActionClick: true })
       .catch(err => console.error('[BackgroundBootstrap] side panel error:', err));
+
+    chrome.runtime.onInstalled.addListener(async (details) => {
+      if (details.reason === 'install') {
+        const result = await chrome.storage.local.get(['onboardingComplete']);
+        if (!result.onboardingComplete) {
+          chrome.tabs.create({ url: chrome.runtime.getURL('welcome.html') });
+        }
+      }
+    });
 
     try {
       await cacheService.init();
@@ -31,14 +40,14 @@ export class BackgroundBootstrap {
     } catch (err) {
       console.error('[BackgroundBootstrap] cache init failed:', err.message);
     }
-    
+
     try {
       await dictionaryService.init();
       console.log('[BackgroundBootstrap] dictionary service ready');
     } catch (err) {
       console.error('[BackgroundBootstrap] dictionary init failed:', err.message);
     }
-    
+
     this.isInitialized = true;
 
     chrome.runtime.onMessage.addListener((msg, sender, respond) => {
@@ -134,12 +143,12 @@ export class BackgroundBootstrap {
     (async () => {
       try {
         const { word, context } = msg;
-        
+
         if (!word || typeof word !== 'string') {
           respond({ success: false, error: 'invalid word' });
           return;
         }
-        
+
         if (!this.isInitialized) {
           console.log('[BackgroundBootstrap._onWordLookup] waiting for init...');
           await this.init();
@@ -147,7 +156,7 @@ export class BackgroundBootstrap {
 
         const settings = await chrome.storage.local.get(['selectedLanguages', 'dictionarySource']);
         const languages = this._normalizeLanguages(settings.selectedLanguages || ['en']);
-        
+
         console.log('[BackgroundBootstrap._onWordLookup] looking up:', word, 'langs:', languages);
 
         const isEnglish = /^[a-zA-Z]+$/.test(word);
@@ -208,20 +217,20 @@ export class BackgroundBootstrap {
         }
 
         console.log('[BackgroundBootstrap._onChatMessage] processing', messages.length, 'messages, model:', model || 'auto');
-        
+
         const result = await PageService.chat(messages, pageContext, model);
-        
+
         if (!result) {
           console.error('[BackgroundBootstrap._onChatMessage] no result from PageService');
           respond({ ok: false, error: 'no response from chat service' });
           return;
         }
-        
+
         respond({
           ...result,
           timing: result.timing || null
         });
-        
+
       } catch (err) {
         console.error('[BackgroundBootstrap._onChatMessage] error:', err.message, err.stack);
         respond({ ok: false, error: err.message || 'chat processing failed' });
