@@ -847,20 +847,56 @@ onMounted(async () => {
               </div>
             </div>
             
-            <!-- step 1: start ollama -->
+            <!-- step 1: enable extension access (permanent) -->
             <div class="rounded-lg bg-primary/5 border border-primary/10 p-3">
               <div class="text-[11px] font-medium text-base-content/70 mb-2 flex items-center gap-2">
                 <span class="w-4 h-4 rounded-full bg-primary/20 text-primary text-[9px] font-bold flex items-center justify-center">1</span>
-                start ollama with extension support
+                enable extension access
+                <span class="text-[9px] px-1.5 py-0.5 rounded bg-success/15 text-success/80">one-time</span>
               </div>
-              <p class="text-[10px] text-base-content/50 mb-2">open {{ platformSetup.terminalName }} and run:</p>
-              <div class="flex items-center gap-2 bg-base-100/50 rounded-lg p-2">
-                <code class="flex-1 font-mono text-[10px] text-base-content/80 overflow-x-auto whitespace-nowrap">{{ platformSetup.serve }}</code>
-                <button @click="copyToClipboard(platformSetup.serve)" class="btn btn-xs btn-primary text-[9px] shrink-0">
-                  copy
-                </button>
-              </div>
-              <p class="text-[9px] text-base-content/40 mt-2">💡 keep this terminal open while using metldr</p>
+              <p class="text-[10px] text-base-content/50 mb-2">run this once in {{ platformSetup.terminalName }}, then restart ollama:</p>
+              
+              <!-- windows -->
+              <template v-if="platformSetup.os === 'Windows'">
+                <div class="flex items-center gap-2 bg-base-100/50 rounded-lg p-2 mb-2">
+                  <code class="flex-1 font-mono text-[10px] text-base-content/80 overflow-x-auto whitespace-nowrap">{{ platformSetup.permanentSetup.command }}</code>
+                  <button @click="copyToClipboard(platformSetup.permanentSetup.command)" class="btn btn-xs btn-primary text-[9px] shrink-0">
+                    copy
+                  </button>
+                </div>
+                <p class="text-[9px] text-base-content/40">💡 after running, right-click ollama in system tray → quit, then relaunch</p>
+              </template>
+              
+              <!-- macOS -->
+              <template v-else-if="platformSetup.os === 'macOS'">
+                <div class="flex items-center gap-2 bg-base-100/50 rounded-lg p-2 mb-2">
+                  <code class="flex-1 font-mono text-[10px] text-base-content/80 overflow-x-auto whitespace-nowrap">{{ platformSetup.permanentSetup.command }}</code>
+                  <button @click="copyToClipboard(platformSetup.permanentSetup.command)" class="btn btn-xs btn-primary text-[9px] shrink-0">
+                    copy
+                  </button>
+                </div>
+                <p class="text-[9px] text-base-content/40">💡 then quit ollama from menu bar and relaunch it</p>
+              </template>
+              
+              <!-- linux -->
+              <template v-else>
+                <div class="space-y-1.5 mb-2">
+                  <div v-for="(cmd, i) in platformSetup.permanentSetup.commands" :key="i" class="flex items-center gap-2 bg-base-100/50 rounded-lg p-2">
+                    <code class="flex-1 font-mono text-[9px] text-base-content/80 overflow-x-auto whitespace-nowrap">{{ cmd }}</code>
+                    <button @click="copyToClipboard(cmd)" class="btn btn-2xs btn-ghost text-[8px] shrink-0">copy</button>
+                  </div>
+                </div>
+                <p class="text-[9px] text-base-content/40">💡 run these commands in order, then ollama will work automatically</p>
+              </template>
+              
+              <!-- quick test fallback (collapsible) -->
+              <details class="mt-2">
+                <summary class="text-[9px] text-base-content/40 cursor-pointer hover:text-base-content/60">⚡ quick test (temporary, this session only)</summary>
+                <div class="flex items-center gap-2 bg-base-100/50 rounded-lg p-2 mt-1.5">
+                  <code class="flex-1 font-mono text-[9px] text-base-content/70 overflow-x-auto whitespace-nowrap">{{ platformSetup.serve }}</code>
+                  <button @click="copyToClipboard(platformSetup.serve)" class="btn btn-2xs btn-ghost text-[8px] shrink-0">copy</button>
+                </div>
+              </details>
             </div>
             
             <!-- step 2: pull a model (if needed) -->
