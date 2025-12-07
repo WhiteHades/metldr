@@ -10,7 +10,7 @@ import { marked } from 'marked';
 import { 
   Sparkles, BarChart3, Settings, Loader2, ChevronDown, ChevronUp, Check, 
   Send, Trash2, X, RefreshCw, Database,
-  Zap, Server, Circle, MessageCircle, FileText, AlertCircle
+  Zap, Server, Circle, MessageCircle, FileText, AlertCircle, HelpCircle, Mail, ExternalLink
 } from 'lucide-vue-next';
 
 marked.setOptions({
@@ -58,6 +58,7 @@ const chatInput = ref('');
 const chatLoading = ref(false);
 
 const wordPopupEnabled = ref(true);
+const gmailAutoSummarize = ref(false);
 
 const downloadedLanguages = ref([]);
 const selectedLanguages = ref(['en']);
@@ -588,6 +589,20 @@ function openSetupGuide() {
   chrome.tabs.create({ url: chrome.runtime.getURL('welcome.html') });
 }
 
+function openFaqs() {
+  chrome.tabs.create({ url: chrome.runtime.getURL('welcome.html') + '#faq' });
+}
+
+async function toggleGmailAutoSummarize() {
+  gmailAutoSummarize.value = !gmailAutoSummarize.value;
+  
+  try {
+    await chrome.storage.local.set({ gmailAutoSummarize: gmailAutoSummarize.value });
+  } catch (error) {
+    console.error('metldr: failed to save gmail auto summarize setting:', error);
+  }
+}
+
 async function loadDictionarySettings() {
   try {
     console.log('[metldr] loading dictionary settings...');
@@ -745,12 +760,15 @@ onMounted(async () => {
   await themeStore.loadSavedTheme();
   
   try {
-    const settings = await chrome.storage.local.get(['wordPopupEnabled']);
+    const settings = await chrome.storage.local.get(['wordPopupEnabled', 'gmailAutoSummarize']);
     if (settings.wordPopupEnabled !== undefined) {
       wordPopupEnabled.value = settings.wordPopupEnabled;
     }
+    if (settings.gmailAutoSummarize !== undefined) {
+      gmailAutoSummarize.value = settings.gmailAutoSummarize;
+    }
   } catch (error) {
-    console.error('metldr: failed to load word popup settings:', error);
+    console.error('metldr: failed to load popup/gmail settings:', error);
   }
   
   await loadSummaryPrefs();
@@ -1326,6 +1344,27 @@ onMounted(async () => {
             </div>
           </div>
 
+          <!-- gmail settings -->
+          <div class="rounded-xl bg-base-content/5 p-4 border border-info/10">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2.5 group relative cursor-help" title="auto-summarize gmail threads without clicking the button">
+                <div class="flex items-center justify-center w-6 h-6 rounded-md bg-info/15">
+                  <Mail :size="12" class="text-info" />
+                </div>
+                <div>
+                  <span class="text-[12px] font-medium text-base-content/70 tracking-wide block">gmail auto mode</span>
+                  <span class="text-[10px] text-base-content/40">{{ gmailAutoSummarize ? 'auto-summarize threads' : 'click to summarize (recommended)' }}</span>
+                </div>
+              </div>
+              <input 
+                type="checkbox" 
+                class="toggle toggle-sm toggle-info" 
+                :checked="gmailAutoSummarize"
+                @click="toggleGmailAutoSummarize"
+              />
+            </div>
+          </div>
+
           <!-- dictionaries -->
           <div class="rounded-xl bg-base-content/5 p-4 border border-accent/10">
             <div class="flex items-center gap-2.5 mb-3">
@@ -1415,14 +1454,33 @@ onMounted(async () => {
             </div>
           </div>
 
-          <!-- subtle setup guide link -->
-          <div class="pt-2 border-t border-base-content/5 mt-2">
-            <button 
-              @click="openSetupGuide" 
-              class="text-[10px] text-base-content/30 hover:text-base-content/50 transition-colors"
-            >
-              need help? view setup guide →
-            </button>
+          <!-- help & support -->
+          <div class="rounded-xl bg-base-content/5 p-4 border border-warning/10">
+            <div class="flex items-center gap-2.5 mb-3">
+              <div class="flex items-center justify-center w-6 h-6 rounded-md bg-warning/15">
+                <HelpCircle :size="12" class="text-warning" />
+              </div>
+              <div>
+                <span class="text-[12px] font-medium text-base-content/70 tracking-wide block">need help?</span>
+                <span class="text-[10px] text-base-content/40">stuck or having problems?</span>
+              </div>
+            </div>
+            <div class="flex gap-2">
+              <button 
+                @click="openSetupGuide" 
+                class="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-warning/10 hover:bg-warning/20 border border-warning/20 text-warning text-[11px] font-medium transition-all"
+              >
+                <ExternalLink :size="11" />
+                setup guide
+              </button>
+              <button 
+                @click="openFaqs" 
+                class="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-base-content/5 hover:bg-base-content/10 border border-base-content/10 text-base-content/60 text-[11px] font-medium transition-all"
+              >
+                <HelpCircle :size="11" />
+                see FAQs
+              </button>
+            </div>
           </div>
         </div>
 
