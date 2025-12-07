@@ -1038,10 +1038,22 @@ onMounted(async () => {
               </div>
             </div>
 
-            <!-- no page state -->
-            <div v-else class="flex items-center gap-2.5 p-3 rounded-lg bg-base-content/5 border border-base-content/10">
-              <FileText :size="13" class="text-base-content/40 shrink-0" />
-              <p class="text-[11px] text-base-content/55">browse a page to get a summary</p>
+            <!-- no page state / waiting for manual trigger -->
+            <div v-else class="flex items-center justify-between gap-2.5 p-3 rounded-lg bg-base-content/5 border border-base-content/10">
+              <div class="flex items-center gap-2.5">
+                <FileText :size="13" class="text-base-content/40 shrink-0" />
+                <p class="text-[11px] text-base-content/55">browse a page to get a summary</p>
+              </div>
+              <button 
+                v-if="summaryMode === 'manual'"
+                @click="triggerManualSummary"
+                class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-primary/10 hover:bg-primary/20 border border-primary/20 text-primary text-[10px] font-medium transition-all"
+                :disabled="summaryLoading"
+                title="Summarise this page (Ctrl+Shift+L)"
+              >
+                <Zap :size="11" />
+                summarise
+              </button>
             </div>
           </div>
 
