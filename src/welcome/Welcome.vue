@@ -5,8 +5,8 @@ import { getOsType, getSetupCommands } from '../utils/platformUtils.js';
 import { gsap } from 'gsap';
 import { 
   Download, Terminal, Cpu, Sparkles, Check, Copy, 
-  ChevronRight, ExternalLink, Zap, Shield, Globe,
-  FileText, MessageCircle, Mail, Reply, BookOpen, Languages
+  ChevronRight, ChevronDown, ExternalLink, Zap, Shield, Globe,
+  FileText, MessageCircle, Mail, Reply, BookOpen, Languages, HelpCircle
 } from 'lucide-vue-next';
 
 const themeStore = useThemeStore();
@@ -54,16 +54,16 @@ const features = [
 ];
 
 const recommendedModels = [
+  { name: 'llama3.2:1b', size: '1b', desc: 'recommended default', speed: 'fast_' },
   { name: 'gemma3:1b', size: '1b', desc: 'ultra-fast, lightweight', speed: 'fast_' },
   { name: 'qwen3:1.4b', size: '1.4b', desc: 'compact & capable', speed: 'fast_' },
   { name: 'gemma3n:e2b', size: '2b', desc: 'efficient edge model', speed: 'fast' },
-  { name: 'llama3.2:1b', size: '1b', desc: 'meta\'s compact model', speed: 'fast_' },
   { name: 'deepseek-r1:1.5b', size: '1.5b', desc: 'reasoning focused', speed: 'fast' },
   { name: 'qwen3:1.7b', size: '1.7b', desc: 'balanced performance', speed: 'fast' },
   { name: 'ministral-3b', size: '3b', desc: 'mistral\'s mini model', speed: 'fast' },
   { name: 'llama3.2:3b', size: '3b', desc: 'great for most tasks', speed: 'moderate' },
   { name: 'gemma3:4b', size: '4b', desc: 'google\'s quality model', speed: 'moderate' },
-  { name: 'gemma3n:e4b', size: '4b', desc: 'edge optimized', speed: 'moderate' },
+  { name: 'gemma3n:e4b', size: '4b', desc: 'edge optimised', speed: 'moderate' },
 ];
 
 const heroRef = ref(null);
@@ -71,6 +71,50 @@ const featuresRef = ref(null);
 const stepsRef = ref(null);
 const modelsRef = ref(null);
 const ctaRef = ref(null);
+const faqRef = ref(null);
+const expandedFaq = ref(null);
+
+const faqs = [
+  {
+    question: 'what is ollama and why do i need it?',
+    answer: 'ollama is a free tool that runs ai models locally on your computer. unlike cloud-based ai, everything stays on your machine - your data never leaves your device. this means complete privacy and no subscription costs.'
+  },
+  {
+    question: 'how do i install a model?',
+    answer: 'after installing ollama, open a terminal and run a pull command like `ollama pull gemma3:1b`. this downloads the ai model to your computer. smaller models (1b-2b) are faster, while larger ones (3b-4b) are smarter but slower.'
+  },
+  {
+    question: 'why isn\'t the extension connecting?',
+    answer: 'make sure ollama is running and you\'ve completed the cors setup (step 2 above). after setting the environment variable, you need to quit and restart ollama. the extension auto-detects ollama every 2 seconds.'
+  },
+  {
+    question: 'is my data sent anywhere?',
+    answer: 'no. all processing happens locally on your computer. the extension communicates only with ollama running on localhost. no data is sent to any external servers - your browsing stays completely private.'
+  },
+  {
+    question: 'how do i summarise gmail emails?',
+    answer: 'when viewing an email thread in gmail, you\'ll see a "metldr - summarise email" button. click it to generate a summary with key points, action items, and important dates. you can enable auto-summarisation in the extension settings.'
+  },
+  {
+    question: 'can i use a different ai model?',
+    answer: 'yes! you can install any ollama-compatible model using `ollama pull [model-name]`. popular choices include llama, mistral, and qwen. the extension will detect all installed models and let you switch between them.'
+  }
+];
+
+function toggleFaq(index) {
+  expandedFaq.value = expandedFaq.value === index ? null : index;
+}
+
+function formatFaqText(text) {
+  // convert backticks to styled code
+  let formatted = text.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
+  // convert button text to styled badge
+  formatted = formatted.replace(
+    /"metldr - summarise email"/g,
+    '<span class="button-badge">metldr - summarise email</span>'
+  );
+  return formatted;
+}
 
 function copyToClipboard(text, key) {
   navigator.clipboard.writeText(text).then(() => {
@@ -130,6 +174,11 @@ onMounted(async () => {
   gsap.fromTo(ctaRef.value, 
     { opacity: 0, scale: 0.95 }, 
     { opacity: 1, scale: 1, duration: 0.5, ease: 'back.out(1.5)', delay: 0.8 }
+  );
+
+  gsap.fromTo('.faq-item', 
+    { opacity: 0, y: 15 }, 
+    { opacity: 1, y: 0, duration: 0.4, stagger: 0.08, ease: 'power2.out', delay: 1.0 }
   );
 
   gsap.to('.float-shape', {
@@ -400,6 +449,38 @@ onMounted(async () => {
           <ChevronRight :size="22" />
         </button>
         <p class="cta-hint">you can reopen this guide anytime from settings</p>
+      </section>
+      
+      <!-- faq -->
+      <section id="faq" ref="faqRef" class="faq-section">
+        <h2 class="section-title">frequently asked questions</h2>
+        
+        <div class="faq-list">
+          <div 
+            v-for="(faq, index) in faqs" 
+            :key="index"
+            class="faq-item"
+            :class="{ 'faq-expanded': expandedFaq === index }"
+          >
+            <button 
+              class="faq-question"
+              @click="toggleFaq(index)"
+            >
+              <div class="faq-icon">
+                <HelpCircle :size="18" />
+              </div>
+              <span>{{ faq.question }}</span>
+              <ChevronDown 
+                :size="18" 
+                class="faq-chevron"
+                :class="{ 'chevron-rotated': expandedFaq === index }"
+              />
+            </button>
+            <div class="faq-answer-wrapper" :class="{ 'answer-visible': expandedFaq === index }">
+              <p class="faq-answer" v-html="formatFaqText(faq.answer)"></p>
+            </div>
+          </div>
+        </div>
       </section>
       
       <footer class="footer">
@@ -717,12 +798,20 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #8b5cf6, #06b6d4);
+  background: rgba(139, 92, 246, 0.15);
+  border: 1.5px solid rgba(139, 92, 246, 0.35);
   border-radius: 12px;
   font-size: 18px;
   font-weight: 700;
-  color: #fff;
+  color: #a78bfa;
   flex-shrink: 0;
+  transition: all 0.2s ease;
+}
+
+.step:hover .step-number {
+  background: rgba(139, 92, 246, 0.25);
+  border-color: rgba(139, 92, 246, 0.5);
+  color: #c4b5fd;
 }
 
 .step-body {
@@ -944,25 +1033,28 @@ onMounted(async () => {
   align-items: center;
   gap: 14px;
   padding: 20px 48px;
-  background: linear-gradient(135deg, #8b5cf6 0%, #06b6d4 100%);
-  border: none;
+  background: rgba(139, 92, 246, 0.12);
+  border: 2px solid rgba(139, 92, 246, 0.4);
   border-radius: 18px;
-  color: #fff;
+  color: #c4b5fd;
   font-family: 'Space Grotesk', inherit;
   font-size: 20px;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-  box-shadow: 0 10px 40px rgba(139, 92, 246, 0.35);
+  box-shadow: 0 6px 24px rgba(139, 92, 246, 0.15);
 }
 
 .cta-btn:hover {
-  transform: translateY(-4px) scale(1.03);
-  box-shadow: 0 16px 50px rgba(139, 92, 246, 0.45);
+  transform: translateY(-4px) scale(1.02);
+  background: rgba(139, 92, 246, 0.2);
+  border-color: rgba(139, 92, 246, 0.6);
+  color: #ddd6fe;
+  box-shadow: 0 12px 40px rgba(139, 92, 246, 0.25);
 }
 
 .cta-btn svg {
-  transition: transform 0.2s;
+  transition: transform 0.2s ease;
 }
 
 .cta-btn:hover svg {
@@ -1060,6 +1152,136 @@ onMounted(async () => {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 3px; }
 
+.faq-section {
+  margin-bottom: 60px;
+}
+
+.faq-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.faq-item {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 16px;
+  overflow: hidden;
+  transition: all 0.3s ease;
+}
+
+.faq-item:hover {
+  border-color: rgba(139, 92, 246, 0.3);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.faq-expanded {
+  border-color: rgba(139, 92, 246, 0.4);
+  background: rgba(139, 92, 246, 0.05);
+}
+
+.faq-question {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 20px;
+  background: none;
+  border: none;
+  color: #e4e4e7;
+  font-family: 'Space Grotesk', inherit;
+  font-size: 15px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.faq-question:hover {
+  color: #ffffff;
+}
+
+.faq-question span {
+  flex: 1;
+}
+
+.faq-icon {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(139, 92, 246, 0.15);
+  border-radius: 10px;
+  color: #a78bfa;
+  flex-shrink: 0;
+  transition: all 0.3s ease;
+}
+
+.faq-expanded .faq-icon {
+  background: rgba(139, 92, 246, 0.25);
+  color: #c4b5fd;
+}
+
+.faq-chevron {
+  color: #71717a;
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  flex-shrink: 0;
+}
+
+.chevron-rotated {
+  transform: rotate(180deg);
+  color: #a78bfa;
+}
+
+.faq-answer-wrapper {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.4s cubic-bezier(0.4, 0, 0.2, 1), 
+              padding 0.3s ease,
+              opacity 0.3s ease;
+  opacity: 0;
+}
+
+.answer-visible {
+  max-height: 300px;
+  opacity: 1;
+}
+
+.faq-answer {
+  padding: 0 20px 20px 70px;
+  font-size: 14px;
+  color: #a1a1aa;
+  line-height: 1.7;
+}
+
+.inline-code {
+  background: rgba(139, 92, 246, 0.15);
+  color: #c4b5fd;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Consolas, monospace;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid rgba(139, 92, 246, 0.25);
+}
+
+.button-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  background: rgba(139, 92, 246, 0.12);
+  border: 1.5px solid rgba(139, 92, 246, 0.3);
+  border-radius: 8px;
+  color: #a78bfa;
+  font-family: 'Space Grotesk', inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
 /* responsive */
 @media (max-width: 900px) {
   .features-grid { grid-template-columns: repeat(2, 1fr); }
@@ -1072,5 +1294,8 @@ onMounted(async () => {
   .copy-btn { width: 100%; height: 48px; }
   .features-grid { grid-template-columns: 1fr; }
   .models-grid { grid-template-columns: repeat(2, 1fr); }
+  .faq-answer { padding-left: 20px; }
+  .faq-question { padding: 14px 16px; font-size: 14px; gap: 10px; }
+  .faq-icon { width: 32px; height: 32px; }
 }
 </style>
