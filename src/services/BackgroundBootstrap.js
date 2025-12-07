@@ -81,6 +81,11 @@ export class BackgroundBootstrap {
         return true;
       }
 
+      if (msg.type === 'CHECK_CACHED_SUMMARY') {
+        this._onCheckCachedSummary(msg, respond);
+        return true;
+      }
+
       return false;
     });
 
@@ -234,6 +239,23 @@ export class BackgroundBootstrap {
       } catch (err) {
         console.error('[BackgroundBootstrap._onChatMessage] error:', err.message, err.stack);
         respond({ ok: false, error: err.message || 'chat processing failed' });
+      }
+    })();
+  }
+
+  static _onCheckCachedSummary(msg, respond) {
+    (async () => {
+      try {
+        const { emailId } = msg;
+        if (!emailId) {
+          respond({ hasCached: false });
+          return;
+        }
+        const cached = await cacheService.getEmailSummary(emailId);
+        respond({ hasCached: !!cached, summary: cached || null });
+      } catch (err) {
+        console.error('[BackgroundBootstrap._onCheckCachedSummary]', err.message);
+        respond({ hasCached: false });
       }
     })();
   }
