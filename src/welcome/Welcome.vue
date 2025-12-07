@@ -263,22 +263,89 @@ onMounted(async () => {
             <div class="step-body">
               <div class="step-header">
                 <Terminal :size="20" />
-                <h3>start with extension support</h3>
-                <span class="os-badge">{{ platformSetup.terminalName.toLowerCase() }}</span>
+                <h3>enable extension access</h3>
+                <span class="os-badge">{{ platformSetup.os.toLowerCase() }}</span>
+                <span class="os-badge" style="background: rgba(34, 197, 94, 0.15); color: #4ade80;">one-time setup</span>
               </div>
-              <p>run this to allow chrome extensions to connect.</p>
+              <p>{{ platformSetup.permanentSetup.note }}</p>
               
-              <div class="command-box">
-                <code>{{ platformSetup.serve }}</code>
-                <button 
-                  @click="copyToClipboard(platformSetup.serve, 'serve')"
-                  class="copy-btn"
-                  :class="{ copied: copiedStates['serve'] }"
-                >
-                  <Check v-if="copiedStates['serve']" :size="16" />
-                  <Copy v-else :size="16" />
-                </button>
-              </div>
+              <!-- windows  -->
+              <template v-if="detectedOs === 'windows'">
+                <p class="step-subtitle">{{ platformSetup.permanentSetup.commandNote }}</p>
+                <div class="command-box">
+                  <code>{{ platformSetup.permanentSetup.command }}</code>
+                  <button 
+                    @click="copyToClipboard(platformSetup.permanentSetup.command, 'permanent')"
+                    class="copy-btn"
+                    :class="{ copied: copiedStates['permanent'] }"
+                  >
+                    <Check v-if="copiedStates['permanent']" :size="16" />
+                    <Copy v-else :size="16" />
+                  </button>
+                </div>
+                <p class="step-note">after running this, right-click ollama in the system tray → quit, then relaunch it.</p>
+                
+                <details class="alt-method">
+                  <summary>
+                    <span>alternative: set via windows settings</span>
+                  </summary>
+                  <ol class="manual-steps">
+                    <li v-for="(step, i) in platformSetup.permanentSetup.steps" :key="i">{{ step }}</li>
+                  </ol>
+                </details>
+              </template>
+              
+              <!-- macOS -->
+              <template v-else-if="detectedOs === 'macos'">
+                <p class="step-subtitle">{{ platformSetup.permanentSetup.commandNote }}</p>
+                <div class="command-box">
+                  <code>{{ platformSetup.permanentSetup.command }}</code>
+                  <button 
+                    @click="copyToClipboard(platformSetup.permanentSetup.command, 'permanent')"
+                    class="copy-btn"
+                    :class="{ copied: copiedStates['permanent'] }"
+                  >
+                    <Check v-if="copiedStates['permanent']" :size="16" />
+                    <Copy v-else :size="16" />
+                  </button>
+                </div>
+                <p class="step-note">then quit ollama from the menu bar (click the llama icon → quit) and relaunch it.</p>
+              </template>
+              
+              <!-- linux -->
+              <template v-else>
+                <p class="step-subtitle">{{ platformSetup.permanentSetup.commandNote }}</p>
+                <div v-for="(cmd, i) in platformSetup.permanentSetup.commands" :key="i" class="command-box" style="margin-bottom: 8px;">
+                  <code>{{ cmd }}</code>
+                  <button 
+                    @click="copyToClipboard(cmd, `linux-${i}`)"
+                    class="copy-btn"
+                    :class="{ copied: copiedStates[`linux-${i}`] }"
+                  >
+                    <Check v-if="copiedStates[`linux-${i}`]" :size="16" />
+                    <Copy v-else :size="16" />
+                  </button>
+                </div>
+              </template>
+              
+              <!-- quick test fallback -->
+              <details class="alt-method">
+                <summary>
+                  <span>⚡ quick test (temporary, this session only)</span>
+                </summary>
+                <p class="alt-desc">if you just want to test quickly, run this in a terminal. note: you'll need to run it again each time.</p>
+                <div class="command-box">
+                  <code>{{ platformSetup.serve }}</code>
+                  <button 
+                    @click="copyToClipboard(platformSetup.serve, 'serve')"
+                    class="copy-btn"
+                    :class="{ copied: copiedStates['serve'] }"
+                  >
+                    <Check v-if="copiedStates['serve']" :size="16" />
+                    <Copy v-else :size="16" />
+                  </button>
+                </div>
+              </details>
             </div>
           </div>
           
@@ -918,6 +985,74 @@ onMounted(async () => {
 .footer p {
   font-size: 13px;
   color: #52525b;
+}
+
+.step-subtitle {
+  font-size: 13px;
+  color: #a1a1aa;
+  margin-bottom: 10px;
+  font-weight: 500;
+}
+
+.step-note {
+  font-size: 12px;
+  color: #71717a;
+  margin-top: 8px;
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  background: rgba(34, 197, 94, 0.08);
+  border: 1px solid rgba(34, 197, 94, 0.15);
+  border-radius: 10px;
+}
+
+.alt-method {
+  margin-top: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.alt-method summary {
+  padding: 12px 16px;
+  font-size: 13px;
+  color: #a1a1aa;
+  cursor: pointer;
+  transition: all 0.2s;
+  list-style: none;
+}
+
+.alt-method summary::-webkit-details-marker {
+  display: none;
+}
+
+.alt-method summary:hover {
+  color: #e4e4e7;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.alt-method[open] summary {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.manual-steps {
+  padding: 16px 16px 16px 32px;
+  font-size: 12px;
+  color: #a1a1aa;
+  line-height: 1.8;
+}
+
+.manual-steps li {
+  margin-bottom: 6px;
+}
+
+.alt-desc {
+  padding: 12px 16px 4px;
+  font-size: 12px;
+  color: #71717a;
+}
+
+.alt-method .command-box {
+  margin: 12px 16px 16px;
 }
 
 /* scrollbar */
