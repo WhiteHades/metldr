@@ -54,8 +54,9 @@ export class EmailExtractor {
       return;
     }
 
-
     const existingSummary = document.querySelector('.metldr-summary');
+    const existingButton = document.querySelector('.metldr-summarise-container');
+
     if (existingSummary) {
       const existingThreadId = existingSummary.getAttribute('data-metldr-thread');
       if (existingThreadId === threadId) {
@@ -63,6 +64,88 @@ export class EmailExtractor {
         return;
       }
       existingSummary.remove();
+    }
+
+    if (existingButton) {
+      const existingThreadId = existingButton.getAttribute('data-metldr-thread');
+      if (existingThreadId === threadId) {
+        console.log('metldr: summarise button already exists for this thread');
+        return;
+      }
+      existingButton.remove();
+    }
+
+    let gmailAutoMode = false;
+    try {
+      const result = await chrome.storage.local.get(['gmailAutoSummarize']);
+      gmailAutoMode = result.gmailAutoSummarize === true;
+    } catch (err) {
+      console.warn('metldr: failed to get gmail auto mode setting:', err.message);
+    }
+
+    let hasCached = false;
+    try {
+      const cacheResult = await new Promise((resolve) => {
+        chrome.runtime.sendMessage({ type: 'CHECK_CACHED_SUMMARY', emailId: threadId }, (resp) => {
+          if (chrome.runtime.lastError) {
+            resolve({ hasCached: false });
+          } else {
+            resolve(resp || { hasCached: false });
+          }
+        });
+      });
+      hasCached = cacheResult.hasCached === true;
+
+      if (hasCached && cacheResult.summary) {
+        console.log('metldr: cached summary found, showing directly');
+        this.isProcessing = true;
+        const timeoutId = setTimeout(() => {
+          this.isProcessing = false;
+        }, this.processingTimeout);
+
+        try {
+          await this.processThread(threadView, threadId);
+        } finally {
+          clearTimeout(timeoutId);
+          this.isProcessing = false;
+        }
+        return;
+      }
+    } catch (err) {
+      console.warn('metldr: failed to check cached summary:', err.message);
+    }
+
+    if (!gmailAutoMode) {
+      console.log('metldr: manual mode, showing summarise button');
+      const threadElement = threadView.getElement?.();
+      const header = this.findInjectionPoint(threadElement);
+
+      if (header) {
+        const buttonContainer = UIService.createSummariseButton(threadId, async () => {
+          buttonContainer.classList.add('removing');
+
+          await new Promise(r => setTimeout(r, 200));
+          buttonContainer.remove();
+
+          const loading = UIService.createLoadingIndicator();
+          UIService.injectLoading(header, loading);
+
+          this.isProcessing = true;
+          const timeoutId = setTimeout(() => {
+            this.isProcessing = false;
+          }, this.processingTimeout);
+
+          try {
+            await this.processThread(threadView, threadId, loading);
+          } finally {
+            clearTimeout(timeoutId);
+            this.isProcessing = false;
+          }
+        });
+
+        UIService.injectSummariseButton(header, buttonContainer);
+      }
+      return;
     }
 
     this.isProcessing = true;
@@ -79,7 +162,8 @@ export class EmailExtractor {
     }
   }
 
-  async processThread(threadView, threadId) {
+
+  async processThread(threadView, threadId, existingLoading = null) {
     console.log('metldr: processing thread:', threadId);
 
     const requestToken = `${threadId}-${Date.now()}`;
@@ -90,6 +174,7 @@ export class EmailExtractor {
 
     if (!messages || messages.length === 0) {
       console.log('metldr: no messages in thread');
+      if (existingLoading) existingLoading.remove();
       return;
     }
 
@@ -134,7 +219,7 @@ export class EmailExtractor {
           const senderStr = sender.name ?
             `${sender.name} <${sender.emailAddress}>` :
             sender.emailAddress;
-          participants.add(senderStr);
+          if (senderStr) participants.add(senderStr);
         }
 
         if (!replyTo && typeof msgView.getReplyTo === 'function') {
@@ -186,6 +271,7 @@ export class EmailExtractor {
 
     if (!fullText || fullText.length < 50) {
       console.log('metldr: email text too short, skipping');
+      if (existingLoading) existingLoading.remove();
       return;
     }
 
@@ -213,14 +299,18 @@ export class EmailExtractor {
 
     const threadElement = threadView.getElement?.();
 
-    let loadingDiv = null;
-    const loadingTimer = setTimeout(() => {
-      loadingDiv = UIService.createLoadingIndicator(threadElement);
-      const header = this.findInjectionPoint(threadElement);
-      if (header) {
-        UIService.injectLoading(header, loadingDiv);
-      }
-    }, 100);
+    let loadingDiv = existingLoading;
+    let loadingTimer = null;
+
+    if (!existingLoading) {
+      loadingTimer = setTimeout(() => {
+        loadingDiv = UIService.createLoadingIndicator(threadElement);
+        const header = this.findInjectionPoint(threadElement);
+        if (header) {
+          UIService.injectLoading(header, loadingDiv);
+        }
+      }, 100);
+    }
 
     console.log('metldr: requesting summary from background...');
     const summary = await this.getSummaryFromBackground(fullText, threadId, metadata);
@@ -237,7 +327,7 @@ export class EmailExtractor {
       return;
     }
 
-    clearTimeout(loadingTimer);
+    if (loadingTimer) clearTimeout(loadingTimer);
     if (loadingDiv) loadingDiv.remove();
 
     if (summary) {
