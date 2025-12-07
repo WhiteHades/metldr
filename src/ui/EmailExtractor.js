@@ -36,7 +36,7 @@ export class EmailExtractor {
 
   async handleThreadView(threadView) {
     let threadId = this.getThreadIdFromUrl();
-    
+
     if (!threadId && threadView.getThreadIDAsync) {
       try {
         threadId = await threadView.getThreadIDAsync();
@@ -54,7 +54,7 @@ export class EmailExtractor {
       return;
     }
 
-  
+
     const existingSummary = document.querySelector('.metldr-summary');
     if (existingSummary) {
       const existingThreadId = existingSummary.getAttribute('data-metldr-thread');
@@ -131,8 +131,8 @@ export class EmailExtractor {
           if (!fromName && sender.name) fromName = sender.name;
           if (!fromEmail && sender.emailAddress) fromEmail = sender.emailAddress;
 
-          const senderStr = sender.name ? 
-            `${sender.name} <${sender.emailAddress}>` : 
+          const senderStr = sender.name ?
+            `${sender.name} <${sender.emailAddress}>` :
             sender.emailAddress;
           participants.add(senderStr);
         }
@@ -158,11 +158,16 @@ export class EmailExtractor {
           } catch { /* ignore */ }
         }
 
-        const recipients = msgView.getRecipients?.();
-        if (recipients) {
-          addContacts(recipients.to, toRecipients);
-          addContacts(recipients.cc, ccRecipients);
-          addContacts(recipients.bcc, bccRecipients);
+        if (typeof msgView.getRecipientsFull === 'function') {
+          try {
+            const recipients = await msgView.getRecipientsFull();
+            addContacts(recipients, toRecipients);
+          } catch { /* ignore */ }
+        } else if (typeof msgView.getRecipientEmailAddresses === 'function') {
+          try {
+            const emails = msgView.getRecipientEmailAddresses();
+            emails?.forEach(email => toRecipients.add(email));
+          } catch { /* ignore */ }
         }
 
         if (body && body.length > 20) {
@@ -248,16 +253,16 @@ export class EmailExtractor {
 
   findInjectionPoint(threadElement) {
     if (threadElement) {
-      const header = threadElement.querySelector('.gH') || 
-                     threadElement.querySelector('.gE') ||
-                     threadElement.querySelector('[data-thread-perm-id]');
+      const header = threadElement.querySelector('.gH') ||
+        threadElement.querySelector('.gE') ||
+        threadElement.querySelector('[data-thread-perm-id]');
       if (header) return header;
     }
 
-    return document.querySelector('.gH') || 
-           document.querySelector('.gE') ||
-           document.querySelector('[data-thread-perm-id]') ||
-           document.querySelector('div[role="main"]');
+    return document.querySelector('.gH') ||
+      document.querySelector('.gE') ||
+      document.querySelector('[data-thread-perm-id]') ||
+      document.querySelector('div[role="main"]');
   }
 
   getThreadIdFromUrl() {
