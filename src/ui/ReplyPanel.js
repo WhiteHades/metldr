@@ -14,7 +14,7 @@ export class ReplyPanel {
     this.isLoading = false;
     this.pollInterval = null;
     this.isPopupMode = false;
-    
+
     this.anchorElement = null;
     this.scrollListener = null;
     this.resizeListener = null;
@@ -58,7 +58,7 @@ export class ReplyPanel {
       threadId = composeView.getThreadID();
       console.log('metldr: sdk thread id (fallback):', threadId);
     }
-    
+
     if (!threadId) {
       console.log('metldr: new compose, skipping suggestions');
       return;
@@ -95,22 +95,22 @@ export class ReplyPanel {
     this.stopPolling();
     let attempts = 0;
     const maxAttempts = 20;
-    
+
     this.pollInterval = setInterval(async () => {
       attempts++;
       const response = await this.fetchSuggestions(threadId);
-      
+
       if (response?.contextInvalidated) {
         console.log('metldr: stopping poll (extension reloaded)');
         this.stopPolling();
         return;
       }
-      
+
       if (response?.success && response.suggestions?.length) {
         this.suggestions = response.suggestions;
         console.log('metldr: suggestions ready after polling:', this.suggestions.length);
         this.stopPolling();
-        
+
         if (this.isVisible && this.panel && this.isLoading) {
           this.updatePanelWithSuggestions();
         }
@@ -187,13 +187,13 @@ export class ReplyPanel {
 
   showSuggestionsPanel(composeView) {
     if (this.isClosing) return;
-    
+
     const timeSinceClose = Date.now() - this.lastCloseTime;
     if (timeSinceClose < 200) {
       console.log('metldr: ignoring reopen (too soon after close)');
       return;
     }
-    
+
     if (this.isVisible && this.panel) {
       this.animateOut();
       this.isVisible = false;
@@ -202,13 +202,13 @@ export class ReplyPanel {
 
     this.isLoading = !this.suggestions?.length;
     console.log('metldr: creating suggestions panel, isPopup:', this.isPopupMode, 'loading:', this.isLoading);
-    
+
     try {
       this.anchorElement = composeView.getElement?.() || null;
     } catch (e) {
       this.anchorElement = null;
     }
-    
+
     this.createPanel(composeView);
     this.updatePosition();
     this.setupPositionListeners();
@@ -220,7 +220,7 @@ export class ReplyPanel {
 
   updatePanelWithSuggestions() {
     if (!this.panel || !this.suggestions?.length) return;
-    
+
     this.isLoading = false;
     const content = this.panel.querySelector('.metldr-reply-content');
     if (content) {
@@ -244,22 +244,22 @@ export class ReplyPanel {
             }
           });
         });
-        
+
         if (resp === undefined && attempt < retries) {
           console.log('metldr: empty response, retrying...', attempt + 1);
           await new Promise(r => setTimeout(r, 200));
           continue;
         }
-        
+
         return resp || { success: false };
       } catch (err) {
         if (err.message.includes('Extension context invalidated')) {
           console.log('metldr: extension reloaded, stopping suggestions fetch');
           return { success: false };
         }
-        
+
         const isRetryable = err.message.includes('Receiving end does not exist') ||
-                            err.message.includes('message port closed');
+          err.message.includes('message port closed');
         if (attempt < retries && isRetryable) {
           console.log('metldr: background not ready, retrying...', attempt + 1);
           await new Promise(r => setTimeout(r, 200));
@@ -277,7 +277,7 @@ export class ReplyPanel {
 
     this.panel = document.createElement('div');
     this.panel.className = 'metldr-reply-panel';
-    
+
     this.panel.style.cssText = `
       position: fixed !important;
       z-index: 999999 !important;
@@ -294,7 +294,7 @@ export class ReplyPanel {
       border: 0.5px solid ${theme.border};
       border-radius: 14px;
       box-shadow: 0 8px 32px ${theme.shadow}, inset 0 1px 0 ${theme.borderSubtle};
-      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', system-ui, sans-serif;
+      font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', system-ui, sans-serif;
       min-width: 280px;
       max-width: 320px;
       -webkit-font-smoothing: antialiased;
@@ -424,7 +424,7 @@ export class ReplyPanel {
         </style>
       `;
     }
-    
+
     const limited = this.suggestions.slice(0, 4);
     return limited.map((s, idx) => `
       <div class="metldr-reply-option" data-reply-idx="${idx}" style="
@@ -531,7 +531,7 @@ export class ReplyPanel {
       const panelRect = this.panel.getBoundingClientRect();
       const panelWidth = panelRect.width || 320;
       const panelHeight = panelRect.height || 240;
-      
+
       const viewportWidth = window.innerWidth;
       const viewportHeight = window.innerHeight;
       const padding = 12;
@@ -540,15 +540,15 @@ export class ReplyPanel {
 
       if (this.anchorElement) {
         const anchorRect = this.anchorElement.getBoundingClientRect();
-        
+
         // find compose body for better alignment
         const bodyEl = this.anchorElement.querySelector('[role="textbox"], [contenteditable="true"], .editable');
         const bodyRect = bodyEl ? bodyEl.getBoundingClientRect() : anchorRect;
-        
+
         // center horizontally on the compose body
         const anchorCenterX = bodyRect.left + (bodyRect.width / 2);
         finalX = anchorCenterX - (panelWidth / 2);
-        
+
         // try above compose first (like word popup does below word)
         const aboveY = anchorRect.top - panelHeight - padding;
         const belowY = anchorRect.bottom + padding;
@@ -563,7 +563,7 @@ export class ReplyPanel {
           // popup mode: try left/right of compose dialog
           const leftX = anchorRect.left - panelWidth - padding;
           const rightX = anchorRect.right + padding;
-          
+
           if (leftX >= padding) {
             finalX = leftX;
             finalY = Math.max(padding, anchorRect.top);
@@ -636,7 +636,7 @@ export class ReplyPanel {
     // outside click handler
     this.outsideClickHandler = (e) => {
       if (!this.panel || !this.isVisible) return;
-      
+
       if (!this.panel.contains(e.target)) {
         requestAnimationFrame(() => {
           if (this.isVisible && this.panel) this.hidePanel();
@@ -672,7 +672,7 @@ export class ReplyPanel {
 
   animateIn() {
     if (!this.panel) return;
-    
+
     gsap.fromTo(this.panel,
       { opacity: 0, scale: 0.95 },
       { opacity: 1, scale: 1, duration: 0.15, ease: 'power2.out' }
@@ -681,14 +681,14 @@ export class ReplyPanel {
 
   animateOut() {
     if (!this.panel || this.isClosing) return;
-    
+
     // prevent position updates during close (fixes jank when anchor element is destroyed)
     this.isClosing = true;
     this.removePositionListeners();
     this.anchorElement = null;
-    
+
     this.panel.style.pointerEvents = 'none';
-    
+
     gsap.to(this.panel, {
       opacity: 0,
       duration: 0.1,
@@ -710,7 +710,7 @@ export class ReplyPanel {
       document.removeEventListener('keydown', this.escapeHandler);
       this.escapeHandler = null;
     }
-    
+
     this.isClosing = false;
   }
 
