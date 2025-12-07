@@ -176,13 +176,64 @@ const updateDropdownPosition = (buttonElement, posRef) => {
   };
 };
 
-const toggleModelDropdown = () => {
+const toggleModelDropdown = async () => {
   if (!showModelDropdown.value) {
     const btn = document.querySelector('.model-selector-btn');
     updateDropdownPosition(btn, modelDropdownPos);
+    await refreshModels();
   }
   showModelDropdown.value = !showModelDropdown.value;
 };
+
+async function refreshModels() {
+  try {
+    const response = await sendToBackground({ type: 'CHECK_OLLAMA_HEALTH' });
+    if (response?.connected && response?.models) {
+      const newModels = response.models;
+      const oldModels = availableModels.value;
+      
+      const modelsChanged = newModels.length !== oldModels.length ||
+        newModels.some((m, i) => m !== oldModels[i]);
+      
+      if (modelsChanged) {
+        availableModels.value = newModels;
+        
+        if (selectedModel.value && !newModels.includes(selectedModel.value)) {
+          console.log('metldr: selected model removed, switching to first available');
+          if (newModels.length > 0) {
+            await selectModel(newModels[0]);
+          } else {
+            selectedModel.value = '';
+          }
+        }
+        
+        if (!selectedModel.value && newModels.length > 0) {
+          await selectModel(newModels[0]);
+        }
+      }
+      
+      if (ollamaStatus.value !== 'ready' && newModels.length > 0) {
+        ollamaStatus.value = 'ready';
+      }
+      
+      return true;
+    } else if (response?.connected && (!response?.models || response.models.length === 0)) {
+      availableModels.value = [];
+      selectedModel.value = '';
+      return true;
+    } else if (!response?.connected) {
+      ollamaStatus.value = 'not-found';
+      return false;
+    }
+    return false;
+  } catch (error) {
+    console.warn('metldr: failed to refresh models:', error.message);
+    if (ollamaStatus.value === 'ready') {
+      ollamaStatus.value = 'not-found';
+    }
+    return false;
+  }
+}
 
 const selectModel = async (model) => {
   selectedModel.value = model;
@@ -729,8 +780,10 @@ onMounted(async () => {
   const statusCheckInterval = setInterval(async () => {
     if (ollamaStatus.value !== 'ready') {
       await checkOllama(false); 
+    } else {
+      await refreshModels();
     }
-  }, 2000);
+  }, 3000);
 
   onUnmounted(() => {
     clearInterval(statusCheckInterval);
