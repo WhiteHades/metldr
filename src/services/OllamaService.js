@@ -18,15 +18,21 @@ export class OllamaService {
         signal: AbortSignal.timeout(this.TIMEOUT_HEALTH)
       });
 
-      if (!res.ok) return { available: false, models: [] };
+      if (!res.ok) {
+        console.warn('[OllamaService.checkAvailable] bad status:', res.status);
+        return { available: false, models: [], reason: `status ${res.status}` };
+      }
 
       const data = await res.json();
       const models = data.models?.map(m => m.name) || [];
 
+      console.log('[OllamaService.checkAvailable] connected, models:', models.length);
       return { available: true, models };
     } catch (err) {
-      console.error('[OllamaService.checkAvailable]', err.message);
-      return { available: false, models: [] };
+      const isCors = err.message === 'Failed to fetch' || err.name === 'TypeError';
+      const reason = isCors ? 'cors_blocked' : err.message;
+      console.error('[OllamaService.checkAvailable]', err.message, isCors ? '(likely CORS - restart ollama with OLLAMA_ORIGINS)' : '');
+      return { available: false, models: [], reason };
     }
   }
 
