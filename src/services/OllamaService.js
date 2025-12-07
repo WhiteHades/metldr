@@ -8,8 +8,8 @@ export class OllamaService {
 
   static PRIORITY = {
     word_lookup: ['llama3.2:1b', 'qwen2.5:1.5b', 'llama3.2:3b'],
-    page_summary: ['llama3.2:3b', 'llama3.2:1b', 'qwen2.5:1.5b'],
-    email_summary: ['llama3.2:3b', 'llama3.2:1b', 'qwen2.5:3b']
+    page_summary: ['llama3.2:1b', 'llama3.2:3b', 'qwen3:1.7b'],
+    email_summary: ['llama3.2:1b', 'llama3.2:3b', 'qwen3:1.7b']
   };
 
   static async checkAvailable() {
