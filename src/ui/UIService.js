@@ -929,7 +929,183 @@ export class UIService {
       tag.style.setProperty('color', theme.accent, 'important');
     });
   }
+
+  static createSummariseButton(threadId, onClick) {
+    const theme = this.currentTheme;
+
+    const container = document.createElement('div');
+    container.className = 'metldr-summarise-container';
+    container.setAttribute('data-metldr-thread', threadId);
+    container.style.cssText = `
+      position: relative;
+      margin: 16px 0;
+      display: flex;
+      justify-content: center;
+      opacity: 0;
+      transform: translateY(6px);
+      transition: opacity 0.3s ease, transform 0.3s ease;
+    `;
+
+    const button = document.createElement('button');
+    button.className = 'metldr-summarise-btn';
+    button.innerHTML = `
+      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>
+        <path d="M20 3v4"/>
+        <path d="M22 5h-4"/>
+        <path d="M4 17v2"/>
+        <path d="M5 18H3"/>
+      </svg>
+      <span>metldr - summarise email</span>
+    `;
+
+    button.style.setProperty('background', theme.bgSecondary, 'important');
+    button.style.setProperty('border', `1.5px solid ${theme.border}`, 'important');
+    button.style.setProperty('color', theme.primary, 'important');
+    button.style.setProperty('box-shadow', `0 2px 8px ${theme.shadow}`, 'important');
+
+    button.style.cssText += `
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 10px 18px;
+      border-radius: 10px;
+      font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', system-ui, sans-serif;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+      cursor: pointer;
+      transition: all 0.2s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      will-change: transform, box-shadow;
+      backface-visibility: hidden;
+      transform: translateZ(0);
+    `;
+
+    const updateTheme = (newTheme) => {
+      button.style.setProperty('background', newTheme.bgSecondary, 'important');
+      button.style.setProperty('border', `1.5px solid ${newTheme.border}`, 'important');
+      button.style.setProperty('color', newTheme.primary, 'important');
+      button.style.setProperty('box-shadow', `0 2px 8px ${newTheme.shadow}`, 'important');
+    };
+
+    const unsubscribe = this.onChange((_, newTheme) => updateTheme(newTheme));
+
+    // store cleanup function on container
+    container._themeUnsubscribe = unsubscribe;
+
+    let isHovered = false;
+
+    button.addEventListener('mouseenter', () => {
+      isHovered = true;
+      const t = this.currentTheme;
+      button.style.setProperty('transform', 'translateY(-2px) translateZ(0)', 'important');
+      button.style.setProperty('box-shadow', `0 6px 16px ${t.shadow}`, 'important');
+      button.style.setProperty('border-color', t.primary, 'important');
+      button.style.setProperty('background', t.bg, 'important');
+    });
+
+    button.addEventListener('mouseleave', () => {
+      isHovered = false;
+      const t = this.currentTheme;
+      button.style.setProperty('transform', 'translateY(0) translateZ(0)', 'important');
+      button.style.setProperty('box-shadow', `0 2px 8px ${t.shadow}`, 'important');
+      button.style.setProperty('border-color', t.border, 'important');
+      button.style.setProperty('background', t.bgSecondary, 'important');
+    });
+
+    button.addEventListener('mousedown', () => {
+      const t = this.currentTheme;
+      button.style.setProperty('transform', 'translateY(0) scale(0.98) translateZ(0)', 'important');
+      button.style.setProperty('box-shadow', `0 1px 4px ${t.shadow}`, 'important');
+    });
+
+    button.addEventListener('mouseup', () => {
+      if (isHovered) {
+        const t = this.currentTheme;
+        button.style.setProperty('transform', 'translateY(-2px) translateZ(0)', 'important');
+        button.style.setProperty('box-shadow', `0 6px 16px ${t.shadow}`, 'important');
+      }
+    });
+
+    const styleId = 'metldr-summarise-btn-styles';
+    if (!document.getElementById(styleId)) {
+      const style = document.createElement('style');
+      style.id = styleId;
+      style.textContent = `
+        .metldr-summarise-container.removing {
+          opacity: 0 !important;
+          transform: translateY(-6px) scale(0.95) translateZ(0) !important;
+          transition: opacity 0.25s ease, transform 0.25s ease !important;
+        }
+      `;
+      document.head.appendChild(style);
+    }
+
+    button.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      container.classList.add('removing');
+      setTimeout(() => {
+        if (container._themeUnsubscribe) container._themeUnsubscribe();
+        if (onClick) onClick();
+      }, 200);
+    });
+
+    container.appendChild(button);
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        container.style.opacity = '1';
+        container.style.transform = 'translateY(0)';
+      });
+    });
+
+    return container;
+  }
+
+  static injectSummariseButton(emailHeader, buttonContainer) {
+    if (!emailHeader) {
+      console.error('metldr: could not find email header for summarise button');
+      return;
+    }
+
+    let emailContainer = emailHeader.parentNode;
+    while (emailContainer && !emailContainer.classList.contains('ii') &&
+      !emailContainer.classList.contains('nH') &&
+      !emailContainer.classList.contains('adn')) {
+      emailContainer = emailContainer.parentNode;
+      if (!emailContainer || emailContainer === document.body) {
+        emailContainer = emailHeader.parentNode;
+        break;
+      }
+    }
+
+    const bodyElement = emailContainer.querySelector('.a3s.aiL') ||
+      emailContainer.querySelector('.ii.gt') ||
+      emailContainer.querySelector('[dir="ltr"]') ||
+      emailHeader.nextElementSibling;
+
+    let targetParent = null;
+    if (bodyElement && bodyElement.parentNode) {
+      targetParent = bodyElement.parentNode;
+      targetParent.insertBefore(buttonContainer, bodyElement);
+    } else {
+      targetParent = emailHeader.parentNode;
+      targetParent.insertBefore(buttonContainer, emailHeader.nextSibling);
+    }
+
+    if (targetParent) {
+      targetParent.style.setProperty('overflow', 'visible', 'important');
+    }
+
+    return buttonContainer;
+  }
 }
 
 export const uiService = UIService;
 export const themeManager = UIService;
+
