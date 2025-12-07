@@ -17,7 +17,7 @@ export class EmailService {
       if (!force && emailId) {
         const cached = await cacheService.getEmailSummary(emailId);
         if (cached) {
-          const elapsed = Date.now() - startTime;          
+          const elapsed = Date.now() - startTime;
           this._maybeGenerateReplies(emailId, emailContent, cached, metadata);
           return { ...cached, time_ms: elapsed, cached: true };
         }
@@ -96,7 +96,7 @@ export class EmailService {
         : emailContent;
 
       const suggestions = await this._generateReplies(snippet, summary, metadata, model);
-      
+
       if (suggestions?.length > 0 && emailId) {
         await cacheService.setReplySuggestions(emailId, suggestions);
       }
@@ -147,8 +147,15 @@ export class EmailService {
     };
 
     let metadataCtx = '';
+    let senderName = null;
+    let recipientName = null;
     if (metadata) {
       metadataCtx = this._buildMetadataContext(metadata);
+      senderName = metadata.sender || metadata.from?.replace(/<.*>/, '').trim() || null;
+      const toField = metadata.to || (metadata.toList?.[0]) || null;
+      if (toField) {
+        recipientName = typeof toField === 'string' ? toField.replace(/<.*>/, '').trim() : null;
+      }
     }
 
     const summaryCtx = summary ? `
@@ -159,26 +166,36 @@ SUMMARY OF EMAIL:
 - Urgency: ${summary.urgency || 'normal'}
 ` : '';
 
+    const replyContextHint = senderName
+      ? `\nIMPORTANT: You are generating replies that will be sent TO "${senderName}" (the original sender). Address the reply to them, NOT to ${recipientName || 'the recipient'}.\n`
+      : '';
+
     const systemPrompt = `You are an expert email assistant. Generate diverse reply options that the user can quickly select and send.
+
+CRITICAL CONTEXT:
+- You are generating replies on behalf of the EMAIL RECIPIENT (the person in the "To:" field)
+- The replies will be sent TO the original SENDER (the person in the "From:" field)
+- If you use a greeting (e.g., "Hi [Name]"), use the SENDER's name, NOT the recipient's name
+- Think of it this way: if "From: Alice" and "To: Bob", you are helping Bob write a reply to Alice
 
 RULES:
 1. Generate 3-5 distinct reply options with different tones/lengths
 2. Always include: one brief/professional, one friendly, one detailed (if appropriate)
-3. Match the formality level of the original email
-4. Keep "short" replies to 1-2 sentences max
-5. For "medium" replies, use 1 short paragraph
-6. For "long" replies, be thorough but concise (2-3 paragraphs max)
-7. Do NOT include email headers/subject lines
-8. Greetings/sign-offs should be minimal or omitted for short replies
-9. Make replies context-aware based on email content and action items
-10. For confirmation-type emails, include a quick "Got it" option
-11. For questions, provide helpful and direct answers
-12. Each reply should be immediately sendable with minimal editing
+3. ADDRESS REPLIES TO THE SENDER (From field), never to the recipient (To field)
+4. Match the formality level of the original email
+5. Keep "short" replies to 1-2 sentences max
+6. For "medium" replies, use 1 short paragraph
+7. For "long" replies, be thorough but concise (2-3 paragraphs max)
+8. Do NOT include email headers/subject lines
+9. Greetings/sign-offs should be minimal or omitted for short replies
+10. Make replies context-aware based on email content and action items
+11. For confirmation-type emails, include a quick "Got it" option
+12. For questions, provide helpful and direct answers
+13. Each reply should be immediately sendable with minimal editing
 
 OUTPUT: JSON only. No explanations.`;
 
-    const userPrompt = `Generate reply suggestions for this email.
-
+    const userPrompt = `Generate reply suggestions for this email.${replyContextHint}
 ${metadataCtx}${summaryCtx}
 ---
 ORIGINAL EMAIL:
@@ -296,8 +313,8 @@ Generate 3-5 reply options with varying tones (professional/friendly/brief/detai
           const ctx = text.substring(Math.max(0, m.index - 40), m.index + when.length + 10).toLowerCase();
           const label = /depart|departure|flight|outbound/.test(ctx) ? 'departure'
             : /arriv/.test(ctx) ? 'arrival'
-            : /check[- ]?in/.test(ctx) ? 'check-in'
-            : 'date';
+              : /check[- ]?in/.test(ctx) ? 'check-in'
+                : 'date';
 
           facts.dates.push({ label, when });
           seenDates.add(when);
@@ -478,8 +495,8 @@ Respond with JSON matching the schema. Be precise with intent classification.`;
         summary: parsed.summary || 'no summary generated',
         action_items: actionItems,
         dates: mainDate ? [mainDate] : [],
-        key_facts: { 
-          booking_reference: bookingRef, 
+        key_facts: {
+          booking_reference: bookingRef,
           amount,
           sender_org: parsed.key_details?.sender_org || null
         },
