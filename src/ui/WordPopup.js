@@ -184,7 +184,7 @@ export class WordPopup {
       min-width: 240px;
       max-width: 360px;
       box-shadow: 0 8px 24px ${UIService.currentTheme.shadow}, 0 4px 12px ${UIService.currentTheme.shadow}, inset 0 1px 0 ${UIService.currentTheme.borderSubtle};
-      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', system-ui, sans-serif;
+      font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', system-ui, sans-serif;
       will-change: opacity, transform;
       pointer-events: auto;
     `;
@@ -297,7 +297,7 @@ export class WordPopup {
   async fetchAndRenderLookup(word, content, header, lookupType, contextData = {}) {
     try {
       console.log('[popup] sending word lookup request:', word);
-      
+
       let response;
       for (let attempt = 0; attempt < 3; attempt++) {
         response = await chrome.runtime.sendMessage({
@@ -306,9 +306,9 @@ export class WordPopup {
           lookupType,
           context: contextData
         });
-        
+
         if (response !== undefined) break;
-        
+
         if (attempt < 2) {
           console.log('[popup] response undefined, retrying...', attempt + 1);
           await new Promise(r => setTimeout(r, 150));
