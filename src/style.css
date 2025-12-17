@@ -1,8 +1,7 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,100..700;1,100..700&display=swap");
 @import "tailwindcss";
 
-/* shadcn-vue compatible theme system */
 @theme {
-  /* Colors - using oklch for better color interpolation */
   --color-background: oklch(0.1 0.01 265);
   --color-foreground: oklch(0.9 0.02 265);
 
@@ -88,7 +87,7 @@
 
 :root {
   font-family:
-    "Space Grotesk",
+    "IBM Plex Sans",
     -apple-system,
     BlinkMacSystemFont,
     "SF Pro Display",
@@ -228,7 +227,6 @@ li {
     0 16px 24px oklch(0 0 0 / 0.06);
 }
 
-/* smooth transitions */
 * {
   transition-property:
     background-color, border-color, color, fill, stroke, opacity, box-shadow,

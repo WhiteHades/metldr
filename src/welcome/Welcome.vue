@@ -501,7 +501,7 @@ onMounted(async () => {
   min-height: 100vh;
   background: #08080c;
   color: #e4e4e7;
-  font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
   position: relative;
   overflow-x: hidden;
 }
@@ -1037,7 +1037,7 @@ onMounted(async () => {
   border: 2px solid rgba(139, 92, 246, 0.4);
   border-radius: 18px;
   color: #c4b5fd;
-  font-family: 'Space Grotesk', inherit;
+  font-family: 'IBM Plex Sans', inherit;
   font-size: 20px;
   font-weight: 600;
   cursor: pointer;
@@ -1189,7 +1189,7 @@ onMounted(async () => {
   background: none;
   border: none;
   color: #e4e4e7;
-  font-family: 'Space Grotesk', inherit;
+  font-family: 'IBM Plex Sans', inherit;
   font-size: 15px;
   font-weight: 500;
   text-align: left;
@@ -1275,7 +1275,7 @@ onMounted(async () => {
   border: 1.5px solid rgba(139, 92, 246, 0.3);
   border-radius: 8px;
   color: #a78bfa;
-  font-family: 'Space Grotesk', inherit;
+  font-family: 'IBM Plex Sans', inherit;
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.01em;

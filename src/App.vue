@@ -77,9 +77,12 @@ const wordPopupEnabled = ref<boolean>(true)
 const downloadedLanguages = ref<string[]>([])
 const selectedLanguages = ref<string[]>(['en'])
 const downloadProgress = ref<Record<string, DownloadProgressItem>>({})
+const copiedSetup = ref<boolean>(false)
 
-const setupCommands = `curl -fsSL https://ollama.com/install.sh | sh
-OLLAMA_ORIGINS="chrome-extension://*" ollama serve`
+const isWindows = typeof navigator !== 'undefined' && navigator.platform?.toLowerCase().includes('win')
+const setupCommands = isWindows
+  ? `ollama serve`
+  : `OLLAMA_ORIGINS="chrome-extension://*" ollama serve`
 
 const storage = new StorageManager()
 
@@ -434,7 +437,14 @@ async function retryDetection(): Promise<void> {
 }
 
 function copySetupCommands() {
-  navigator.clipboard.writeText(setupCommands);
+  navigator.clipboard.writeText(setupCommands).then(() => {
+    copiedSetup.value = true;
+    setTimeout(() => { copiedSetup.value = false; }, 2000);
+  });
+}
+
+function openWelcomePage() {
+  chrome.tabs.create({ url: chrome.runtime.getURL('welcome.html') });
 }
 
 async function sendChatMessage(): Promise<void> {
@@ -713,28 +723,24 @@ function setupStorageListener(): void {
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return
     
-    // Sync summary mode
     if (changes.summaryPrefs?.newValue) {
-      const prefs = changes.summaryPrefs.newValue
+      const prefs = changes.summaryPrefs.newValue as { mode?: string; allowlist?: string[]; denylist?: string[]; minAutoWords?: number }
       summaryMode.value = prefs.mode === 'auto' ? 'auto' : 'manual'
       if (prefs.allowlist) allowlistInput.value = prefs.allowlist.join('\n')
       if (prefs.denylist) denylistInput.value = prefs.denylist.join('\n')
       if (prefs.minAutoWords) minAutoWords.value = prefs.minAutoWords
     }
     
-    // Sync word popup toggle
     if (changes.wordPopupEnabled !== undefined) {
-      wordPopupEnabled.value = changes.wordPopupEnabled.newValue ?? true
+      wordPopupEnabled.value = (changes.wordPopupEnabled.newValue as boolean) ?? true
     }
     
-    // Sync selected model
     if (changes.selectedModel?.newValue) {
-      selectedModel.value = changes.selectedModel.newValue
+      selectedModel.value = changes.selectedModel.newValue as string
     }
     
-    // Sync selected languages
     if (changes.selectedLanguages?.newValue) {
-      selectedLanguages.value = changes.selectedLanguages.newValue
+      selectedLanguages.value = changes.selectedLanguages.newValue as string[]
     }
   })
 }
@@ -830,31 +836,67 @@ onMounted(async () => {
           <p class="text-[12px] text-foreground/70">connecting to ollama...</p>
         </div>
 
-        <!-- not found state -->
-        <div v-else-if="ollamaStatus === 'not-found'" class="p-4">
-          <div class="rounded-xl bg-card p-4 border border-border">
-            <div class="flex items-start gap-3 mb-4">
-              <div class="w-8 h-8 rounded-lg bg-destructive/20 flex items-center justify-center shrink-0">
-                <Server :size="16" class="text-destructive" />
+        <!-- not found state - assume user has ollama, show how to start -->
+        <div v-else-if="ollamaStatus === 'not-found'" class="p-4 h-full overflow-y-auto">
+          <div class="rounded-xl bg-linear-to-br from-primary/10 via-card to-secondary/5 p-5 border border-primary/20 shadow-lg">
+            <!-- header -->
+            <div class="flex items-center gap-3 mb-5">
+              <div class="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center shrink-0 ring-2 ring-primary/10">
+                <Zap :size="20" class="text-primary" />
               </div>
               <div>
-                <h2 class="text-[13px] font-medium text-foreground mb-1">ollama not detected</h2>
-                <p class="text-[11px] text-foreground/70">run these commands to set up ollama:</p>
+                <h2 class="text-[15px] font-semibold text-foreground">start ollama</h2>
+                <p class="text-[11px] text-foreground/60">run this command to connect</p>
               </div>
             </div>
             
-            <div class="bg-muted rounded-lg p-3 font-mono text-[11px] text-foreground mb-4 overflow-x-auto">
-              <pre class="whitespace-pre-wrap">{{ setupCommands }}</pre>
+            <!-- main command -->
+            <div class="bg-background/80 backdrop-blur-sm rounded-lg p-4 border border-border mb-4">
+              <div class="flex items-center justify-between mb-2">
+                <span class="text-[10px] font-medium text-foreground/50 uppercase tracking-wide">
+                  {{ isWindows ? 'powershell' : 'terminal' }}
+                </span>
+                <button 
+                  @click="copySetupCommands" 
+                  class="text-[10px] text-primary hover:text-primary/80 transition-colors flex items-center gap-1"
+                >
+                  <Check v-if="copiedSetup" :size="10" />
+                  <span>{{ copiedSetup ? 'copied!' : 'copy' }}</span>
+                </button>
+              </div>
+              <pre class="font-mono text-[12px] text-foreground whitespace-pre-wrap leading-relaxed">{{ setupCommands }}</pre>
             </div>
             
-            <div class="flex gap-2">
-              <button @click="copySetupCommands" class="px-3 py-1.5 rounded-md text-[11px] text-foreground/70 hover:bg-muted hover:text-foreground transition-colors">
-                copy commands
-              </button>
-              <button @click="retryDetection" class="px-3 py-1.5 rounded-md text-[11px] bg-primary text-primary-foreground hover:bg-primary/90 transition-colors flex items-center gap-1.5">
-                <RefreshCw :size="12" />
-                retry
-              </button>
+            <!-- auto-retry indicator -->
+            <div class="flex items-center gap-2 mb-4 px-1">
+              <div class="relative flex items-center justify-center">
+                <Circle :size="8" class="text-primary animate-pulse" fill="currentColor" />
+                <div class="absolute inset-0 rounded-full bg-primary/30 animate-ping"></div>
+              </div>
+              <span class="text-[10px] text-foreground/60">auto-detecting ollama...</span>
+            </div>
+            
+            <!-- retry button -->
+            <Button 
+              @click="retryDetection" 
+              variant="outline"
+              class="w-full mb-4 h-9 text-[12px] border-primary/30 hover:bg-primary/10 hover:border-primary/50"
+            >
+              <RefreshCw :size="13" class="mr-2" />
+              check connection now
+            </Button>
+            
+            <!-- fallback section -->
+            <div class="pt-4 border-t border-border/50">
+              <p class="text-[11px] text-foreground/50 text-center">
+                don't have ollama installed?
+                <button 
+                  @click="openWelcomePage" 
+                  class="text-primary hover:text-primary/80 hover:underline transition-colors font-medium ml-1"
+                >
+                  view setup guide →
+                </button>
+              </p>
             </div>
           </div>
         </div>
