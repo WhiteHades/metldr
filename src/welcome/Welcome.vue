@@ -4,15 +4,25 @@ import { useThemeStore } from '../stores/theme';
 import { getOsType, getSetupCommands } from '../utils/platformUtils';
 import { gsap } from 'gsap';
 import { 
-  Download, Terminal, Cpu, Sparkles, Check, Copy, 
+  Download, Cpu, Sparkles, Check, Copy, 
   ChevronRight, ChevronDown, ExternalLink, Zap, Shield, Globe,
-  FileText, MessageCircle, Mail, Reply, BookOpen, Languages, HelpCircle
+  FileText, MessageCircle, Mail, Reply, BookOpen, Languages, HelpCircle,
+  Command, AppWindow, Terminal
 } from 'lucide-vue-next';
 import { Button } from '../components/ui';
 
 const themeStore = useThemeStore();
 const detectedOs = ref(getOsType());
 const platformSetup = computed(() => getSetupCommands());
+
+const osIcon = computed(() => {
+  switch (detectedOs.value) {
+    case 'macos': return Command;
+    case 'windows': return AppWindow;
+    default: return Terminal;
+  }
+});
+
 const copiedStates = ref({});
 
 const features = [
@@ -312,7 +322,7 @@ onMounted(async () => {
             <div class="step-number">2</div>
             <div class="step-body">
               <div class="step-header">
-                <Terminal :size="20" />
+                <component :is="osIcon" :size="20" />
                 <h3>enable extension access</h3>
                 <span class="os-badge">{{ platformSetup.os.toLowerCase() }}</span>
                 <span class="os-badge" style="background: rgba(34, 197, 94, 0.15); color: #4ade80;">one-time setup</span>
