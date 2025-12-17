@@ -1,8 +1,8 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import tailwindcss from '@tailwindcss/vite'
-import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
-import { resolve, dirname } from 'node:path'
+import { copyFileSync, existsSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 const isContentBuild = process.env.BUILD_TARGET === 'content'
 
@@ -21,7 +21,7 @@ const copyInboxSDKPlugin = () => ({
 })
 
 const originalConsoleWarn = console.warn
-console.warn = (...args) => {
+console.warn = (...args: unknown[]) => {
   const message = args.join(' ')
   if (message.includes('@property') || message.includes('Unknown at rule')) {
     return
@@ -31,6 +31,11 @@ console.warn = (...args) => {
 
 export default defineConfig({
   plugins: isContentBuild ? [] : [vue(), tailwindcss(), copyInboxSDKPlugin()],
+  resolve: {
+    alias: {
+      '@': resolve(__dirname, './src')
+    }
+  },
   css: {
     lightningcss: {
       errorRecovery: true,
@@ -43,7 +48,7 @@ export default defineConfig({
     outDir: 'dist',
     emptyOutDir: !isContentBuild,
     rollupOptions: isContentBuild ? {
-      input: 'src/content/main.js',
+      input: 'src/content/main.ts',
       output: {
         entryFileNames: 'content.js',
         format: 'iife',
@@ -51,11 +56,10 @@ export default defineConfig({
         inlineDynamicImports: true,
       },
     } : {
-      // main build
       input: {
         side_panel: 'index.html',
         welcome: 'welcome.html',
-        background: 'src/background/index.js',
+        background: 'src/background/index.ts',
       },
       output: {
         entryFileNames: '[name].js',

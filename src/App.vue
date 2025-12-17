@@ -1,81 +1,95 @@
-<script setup>
-import { ref, onMounted, onUnmounted, nextTick, computed, watch } from 'vue';
-import { useThemeStore } from './stores/theme.js';
-import { StorageManager, SUPPORTED_LANGUAGES } from './lib/StorageManager.js';
-import { SummaryPrefs } from './lib/summaryPrefs.js';
-import { formatTime, stripThinking } from './lib/textUtils.js';
-import { getSetupCommands } from './utils/platformUtils.js';
-import HistoryManager from './components/HistoryManager.vue';
-import { marked } from 'marked';
+<script setup lang="ts">
+import { ref, onMounted, onUnmounted, nextTick, computed, watch } from 'vue'
+import { useThemeStore } from '@/stores/theme'
+import { StorageManager, SUPPORTED_LANGUAGES } from '@/lib/StorageManager'
+import { SummaryPrefs } from '@/lib/summaryPrefs'
+import { formatTime, stripThinking } from '@/lib/textUtils'
+import HistoryManager from '@/components/HistoryManager.vue'
+import { Button, Toggle, ScrollArea, ScrollBar, Checkbox, Textarea, Input } from '@/components/ui'
+import { marked } from 'marked'
 import { 
   Sparkles, BarChart3, Settings, Loader2, ChevronDown, ChevronUp, Check, 
   Send, Trash2, X, RefreshCw, Database,
-  Zap, Server, Circle, MessageCircle, FileText, AlertCircle, HelpCircle, Mail, ExternalLink
-} from 'lucide-vue-next';
+  Zap, Server, Circle, MessageCircle, FileText, AlertCircle
+} from 'lucide-vue-next'
+import type {
+  AppPageSummary,
+  AppChatMessage,
+  SummaryPromptData,
+  DropdownPos,
+  DownloadProgressItem,
+  OllamaHealthResponse,
+  AppSummaryResponse,
+  AppChatResponse
+} from '@/types'
 
 marked.setOptions({
   breaks: true,
   gfm: true
 });
 
-function renderMarkdown(text) {
-  if (!text) return '';
-  const cleaned = stripThinking(text);
-  return marked.parseInline(cleaned);
+function renderMarkdown(text: string): string {
+  if (!text) return ''
+  const cleaned = stripThinking(text)
+  return marked.parseInline(cleaned) as string
 }
 
-const themeStore = useThemeStore();
+const themeStore = useThemeStore()
 
-const activeTab = ref('summary');
-const ollamaStatus = ref('checking');
-const availableModels = ref([]);
-const selectedModel = ref('');
-const historyRef = ref(null);
-const showModelDropdown = ref(false);
+const activeTab = ref<string>('summary')
+const ollamaStatus = ref<'checking' | 'ready' | 'not-found' | 'error'>('checking')
+const availableModels = ref<string[]>([])
+const selectedModel = ref<string>('')
+const historyRef = ref<InstanceType<typeof HistoryManager> | null>(null)
+const showModelDropdown = ref<boolean>(false)
 
-const modelDropdownPos = ref({ top: 0, left: 0, width: 0 });
-const chatContainer = ref(null);
-const chatInputRef = ref(null);
+const modelDropdownPos = ref<DropdownPos>({ top: 0, left: 0, width: 0 })
+const chatContainer = ref<HTMLDivElement | null>(null)
+const chatInputRef = ref<HTMLInputElement | null>(null)
 
 // page summary state
-const pageSummary = ref(null);
-const pageMetadata = ref(null);
-const summaryLoading = ref(false);
-const summaryError = ref(null);
-const currentTabId = ref(null);
-const currentTabUrl = ref(null);
-const summaryCollapsed = ref(false);
-const summaryPrompt = ref(null);
-const summaryMode = ref('manual');
-const allowlistInput = ref(SummaryPrefs.ALLOWLIST.join('\n'));
-const denylistInput = ref(SummaryPrefs.DENYLIST.join('\n'));
-const minAutoWords = ref(SummaryPrefs.DEFAULT_PREFS.minAutoWords);
-const minPromptWords = ref(SummaryPrefs.DEFAULT_PREFS.minPromptWords);
+const pageSummary = ref<AppPageSummary | null>(null)
+const pageMetadata = ref<{ title: string; url: string } | null>(null)
+const summaryLoading = ref<boolean>(false)
+const summaryError = ref<string | null>(null)
+const currentTabId = ref<number | null>(null)
+const currentTabUrl = ref<string | null>(null)
+const isEmailClient = computed(() => {
+  if (!currentTabUrl.value) return false
+  return currentTabUrl.value.includes('mail.google.com') || 
+         currentTabUrl.value.includes('outlook.') || 
+         currentTabUrl.value.includes('mail.yahoo.com')
+})
+const summaryCollapsed = ref<boolean>(false)
+const summaryPrompt = ref<SummaryPromptData | null>(null)
+const summaryMode = ref<'manual' | 'auto'>('manual')
+const allowlistInput = ref<string>(SummaryPrefs.ALLOWLIST.join('\n'))
+const denylistInput = ref<string>(SummaryPrefs.DENYLIST.join('\n'))
+const minAutoWords = ref<number>(SummaryPrefs.DEFAULT_PREFS.minAutoWords)
 
 // chat state
-const chatMessages = ref([]);
-const chatInput = ref('');
-const chatLoading = ref(false);
+const chatMessages = ref<AppChatMessage[]>([])
+const chatInput = ref<string>('')
+const chatLoading = ref<boolean>(false)
 
-const wordPopupEnabled = ref(true);
-const gmailAutoSummarize = ref(false);
+const wordPopupEnabled = ref<boolean>(true)
 
-const downloadedLanguages = ref([]);
-const selectedLanguages = ref(['en']);
-const downloadProgress = ref({});
+const downloadedLanguages = ref<string[]>([])
+const selectedLanguages = ref<string[]>(['en'])
+const downloadProgress = ref<Record<string, DownloadProgressItem>>({})
 
-const platformSetup = computed(() => getSetupCommands());
+const setupCommands = `curl -fsSL https://ollama.com/install.sh | sh
+OLLAMA_ORIGINS="chrome-extension://*" ollama serve`
 
-const storage = new StorageManager();
+const storage = new StorageManager()
 
-function getTabStorageKey(url) {
-  if (!url) return null;
-  // normalise url to remove query params for consistency
+function getTabStorageKey(url: string | null): string | null {
+  if (!url) return null
   try {
-    const u = new URL(url);
-    return `tab_session_${u.origin}${u.pathname}`;
+    const u = new URL(url)
+    return `tab_session_${u.origin}${u.pathname}`
   } catch {
-    return `tab_session_${url}`;
+    return `tab_session_${url}`
   }
 }
 
@@ -92,293 +106,244 @@ async function saveTabSession() {
     };
     await chrome.storage.local.set({ [key]: session });
   } catch (err) {
-    console.warn('metldr: failed to save tab session:', err.message);
+    console.warn('metldr: failed to save tab session:', (err as Error).message)
   }
 }
 
-async function loadTabSession(url) {
-  const key = getTabStorageKey(url);
-  if (!key) return false;
+async function loadTabSession(url: string): Promise<boolean> {
+  const key = getTabStorageKey(url)
+  if (!key) return false
   
   try {
-    const result = await chrome.storage.local.get([key]);
-    const session = result[key];
+    const result = await chrome.storage.local.get([key])
+    const session = result[key] as { timestamp: number; chatMessages: AppChatMessage[]; pageSummary: AppPageSummary | null; summaryCollapsed: boolean } | undefined
     
-    // check if session exists and is not too old 24 hours
     if (session && (Date.now() - session.timestamp) < 86400000) {
-      const msgs = session.chatMessages;
-      chatMessages.value = Array.isArray(msgs) ? msgs : [];
-      pageSummary.value = session.pageSummary || null;
-      summaryCollapsed.value = session.summaryCollapsed || false;
-      return true;
+      chatMessages.value = Array.isArray(session.chatMessages) ? session.chatMessages : []
+      pageSummary.value = session.pageSummary || null
+      summaryCollapsed.value = session.summaryCollapsed || false
+      return true
     }
   } catch (err) {
-    console.warn('metldr: failed to load tab session:', err.message);
+    console.warn('metldr: failed to load tab session:', (err as Error).message)
   }
-  return false;
+  return false
 }
 
-async function loadSummaryPrefs() {
+async function loadSummaryPrefs(): Promise<void> {
   try {
-    const stored = await chrome.storage.local.get(['summaryPrefs']);
-    const prefs = SummaryPrefs.buildPrefs(stored?.summaryPrefs || {});
-    summaryMode.value = prefs.mode || 'manual';
-    allowlistInput.value = prefs.allowlist.join('\n');
-    denylistInput.value = prefs.denylist.join('\n');
-    minAutoWords.value = prefs.minAutoWords;
-    minPromptWords.value = prefs.minPromptWords;
+    const stored = await chrome.storage.local.get(['summaryPrefs'])
+    const prefs = SummaryPrefs.buildPrefs(stored?.summaryPrefs || {})
+    summaryMode.value = prefs.mode === 'auto' ? 'auto' : 'manual'
+    allowlistInput.value = prefs.allowlist.join('\n')
+    denylistInput.value = prefs.denylist.join('\n')
+    minAutoWords.value = prefs.minAutoWords
   } catch (err) {
-    console.warn('metldr: failed to load summary prefs:', err.message);
-    summaryMode.value = SummaryPrefs.DEFAULT_PREFS.mode;
-    allowlistInput.value = SummaryPrefs.ALLOWLIST.join('\n');
-    denylistInput.value = SummaryPrefs.DENYLIST.join('\n');
-    minAutoWords.value = SummaryPrefs.DEFAULT_PREFS.minAutoWords;
-    minPromptWords.value = SummaryPrefs.DEFAULT_PREFS.minPromptWords;
+    console.warn('metldr: failed to load summary prefs:', (err as Error).message)
+    summaryMode.value = 'manual'
+    allowlistInput.value = SummaryPrefs.ALLOWLIST.join('\n')
+    denylistInput.value = SummaryPrefs.DENYLIST.join('\n')
+    minAutoWords.value = SummaryPrefs.DEFAULT_PREFS.minAutoWords
   }
 }
 
-async function saveSummaryPrefs() {
+async function saveSummaryPrefs(): Promise<void> {
   try {
     const prefs = {
       mode: summaryMode.value,
       allowlist: SummaryPrefs.parseListInput(allowlistInput.value, SummaryPrefs.ALLOWLIST),
       denylist: SummaryPrefs.parseListInput(denylistInput.value, SummaryPrefs.DENYLIST),
       minAutoWords: Number.isFinite(Number(minAutoWords.value)) ? Number(minAutoWords.value) : SummaryPrefs.DEFAULT_PREFS.minAutoWords,
-      minPromptWords: Number.isFinite(Number(minPromptWords.value)) ? Number(minPromptWords.value) : SummaryPrefs.DEFAULT_PREFS.minPromptWords
-    };
-    await chrome.storage.local.set({ summaryPrefs: prefs });
+      minPromptWords: SummaryPrefs.DEFAULT_PREFS.minPromptWords
+    }
+    await chrome.storage.local.set({ summaryPrefs: prefs })
   } catch (err) {
-    console.warn('metldr: failed to save summary prefs:', err.message);
+    console.warn('metldr: failed to save summary prefs:', (err as Error).message)
   }
 }
 
-async function sendToBackground(message, retries = 2) {
+async function sendToBackground(message: Record<string, unknown>, retries = 2): Promise<unknown> {
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const response = await chrome.runtime.sendMessage(message);
-      return response;
+      const response = await chrome.runtime.sendMessage(message)
+      return response
     } catch (error) {
-      if (error.message?.includes('Receiving end does not exist') && attempt < retries) {
-        await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)));
-        continue;
+      if ((error as Error).message?.includes('Receiving end does not exist') && attempt < retries) {
+        await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)))
+        continue
       }
-      throw error;
+      throw error
     }
   }
 }
 
-const updateDropdownPosition = (buttonElement, posRef) => {
-  if (!buttonElement) return;
-  const rect = buttonElement.getBoundingClientRect();
+function updateDropdownPosition(buttonElement: Element | null, posRef: { value: DropdownPos }): void {
+  if (!buttonElement) return
+  const rect = buttonElement.getBoundingClientRect()
   posRef.value = {
     top: rect.bottom + 8,
     left: rect.left,
     width: rect.width,
-  };
-};
-
-const toggleModelDropdown = async () => {
-  if (!showModelDropdown.value) {
-    const btn = document.querySelector('.model-selector-btn');
-    updateDropdownPosition(btn, modelDropdownPos);
-    await refreshModels();
-  }
-  showModelDropdown.value = !showModelDropdown.value;
-};
-
-async function refreshModels() {
-  try {
-    const response = await sendToBackground({ type: 'CHECK_OLLAMA_HEALTH' });
-    if (response?.connected && response?.models) {
-      const newModels = response.models;
-      const oldModels = availableModels.value;
-      
-      const modelsChanged = newModels.length !== oldModels.length ||
-        newModels.some((m, i) => m !== oldModels[i]);
-      
-      if (modelsChanged) {
-        availableModels.value = newModels;
-        
-        if (selectedModel.value && !newModels.includes(selectedModel.value)) {
-          console.log('metldr: selected model removed, switching to first available');
-          if (newModels.length > 0) {
-            await selectModel(newModels[0]);
-          } else {
-            selectedModel.value = '';
-          }
-        }
-        
-        if (!selectedModel.value && newModels.length > 0) {
-          await selectModel(newModels[0]);
-        }
-      }
-      
-      if (ollamaStatus.value !== 'ready' && newModels.length > 0) {
-        ollamaStatus.value = 'ready';
-      }
-      
-      return true;
-    } else if (response?.connected && (!response?.models || response.models.length === 0)) {
-      availableModels.value = [];
-      selectedModel.value = '';
-      return true;
-    } else if (!response?.connected) {
-      ollamaStatus.value = 'not-found';
-      return false;
-    }
-    return false;
-  } catch (error) {
-    console.warn('metldr: failed to refresh models:', error.message);
-    if (ollamaStatus.value === 'ready') {
-      ollamaStatus.value = 'not-found';
-    }
-    return false;
   }
 }
 
-const selectModel = async (model) => {
-  selectedModel.value = model;
-  showModelDropdown.value = false;
-  try {
-    await chrome.storage.local.set({ selectedModel: model });
-  } catch (error) {
-    console.error('metldr: failed to save model selection:', error);
+function toggleModelDropdown(): void {
+  if (!showModelDropdown.value) {
+    const btn = document.querySelector('.model-selector-btn')
+    updateDropdownPosition(btn, modelDropdownPos)
   }
-};
+  showModelDropdown.value = !showModelDropdown.value
+}
 
-async function checkOllama(showChecking = true) {
-  const wasReady = ollamaStatus.value === 'ready';
+async function selectModel(model: string): Promise<void> {
+  selectedModel.value = model
+  showModelDropdown.value = false
+  try {
+    await chrome.storage.local.set({ selectedModel: model })
+  } catch (error) {
+    console.error('metldr: failed to save model selection:', error)
+  }
+}
+
+async function checkOllama(showChecking = true): Promise<boolean> {
+  const wasReady = ollamaStatus.value === 'ready'
   if (showChecking && !wasReady) {
-    ollamaStatus.value = 'checking';
+    ollamaStatus.value = 'checking'
   }
   
   try {
-    storage.initDictionary().catch(err => {
-      console.warn('metldr: dict init failed:', err.message);
-    });
+    storage.initDictionary().catch((err: Error) => {
+      console.warn('metldr: dict init failed:', err.message)
+    })
     
-    let response = null;
+    let response: OllamaHealthResponse | null = null
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        response = await sendToBackground({ type: 'CHECK_OLLAMA_HEALTH' });
-        if (response && response.success !== undefined) break;
-        await new Promise(r => setTimeout(r, 150 * (attempt + 1)));
+        response = await sendToBackground({ type: 'CHECK_OLLAMA_HEALTH' }) as OllamaHealthResponse
+        if (response && response.success !== undefined) break
+        await new Promise(r => setTimeout(r, 150 * (attempt + 1)))
       } catch (err) {
-        console.warn('metldr: ollama check attempt', attempt + 1, 'failed:', err.message);
-        await new Promise(r => setTimeout(r, 150 * (attempt + 1)));
+        console.warn('metldr: ollama check attempt', attempt + 1, 'failed:', (err as Error).message)
+        await new Promise(r => setTimeout(r, 150 * (attempt + 1)))
       }
     }
     
     if (!response || response.success === undefined) {
-      console.warn('metldr: no valid response from background');
+      console.warn('metldr: no valid response from background')
       if (!wasReady) {
-        ollamaStatus.value = 'not-found';
+        ollamaStatus.value = 'not-found'
       }
-      return wasReady;
+      return wasReady
     }
     
-    const { connected, models } = response;
+    const { connected, models } = response
     
     if (connected && models && models.length > 0) {
-      ollamaStatus.value = 'ready';
-      availableModels.value = models;
+      ollamaStatus.value = 'ready'
+      availableModels.value = models
       
       try {
-        const result = await chrome.storage.local.get(['selectedModel']);
-        if (result.selectedModel && models.includes(result.selectedModel)) {
-          selectedModel.value = result.selectedModel;
+        const result = await chrome.storage.local.get(['selectedModel'])
+        const storedModel = result.selectedModel as string | undefined
+        if (storedModel && models.includes(storedModel)) {
+          selectedModel.value = storedModel
         } else if (!selectedModel.value || !models.includes(selectedModel.value)) {
-          selectedModel.value = models[0];
+          selectedModel.value = models[0]
         }
-      } catch (error) {
-        if (!selectedModel.value) selectedModel.value = models[0];
+      } catch {
+        if (!selectedModel.value) selectedModel.value = models[0]
       }
       
-      if (!wasReady && summaryMode.value !== 'manual') {
-        await fetchCurrentPageSummary(false, 'auto');
+      if (!wasReady && summaryMode.value === 'auto') {
+        await fetchCurrentPageSummary(false, 'auto')
       }
-      return true;
+      return true
     }
     
     if (!wasReady) {
-      ollamaStatus.value = 'not-found';
+      ollamaStatus.value = 'not-found'
     }
-    return wasReady;
-  } catch (error) {
-    console.error('metldr: ollama check failed:', error);
+    return wasReady
+  } catch {
+    console.error('metldr: ollama check failed')
     if (!wasReady) {
-      ollamaStatus.value = 'not-found';
+      ollamaStatus.value = 'not-found'
     }
-    return wasReady;
+    return wasReady
   }
 }
 
-async function fetchCurrentPageSummary(force = false, trigger = 'auto') {
+async function fetchCurrentPageSummary(force = false, trigger = 'auto'): Promise<void> {
   try {
-    summaryPrompt.value = null;
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    summaryPrompt.value = null
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
     if (!tabs.length) {
-      summaryError.value = 'no active tab';
-      return;
+      summaryError.value = 'no active tab'
+      return
     }
     
-    const tab = tabs[0];
-    currentTabId.value = tab.id;
-    currentTabUrl.value = tab.url;
+    const tab = tabs[0]
+    currentTabId.value = tab.id ?? null
+    currentTabUrl.value = tab.url ?? null
     
     if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('edge://') || tab.url.startsWith('about:')) {
-      summaryError.value = 'system page';
-      return;
+      summaryError.value = 'system page'
+      return
     }
     
     if (!force) {
-      const hasSession = await loadTabSession(tab.url);
+      const hasSession = await loadTabSession(tab.url)
       if (hasSession && pageSummary.value) {
-        pageMetadata.value = { title: pageSummary.value.title, url: tab.url };
-        return;
+        pageMetadata.value = { title: pageSummary.value.title || 'untitled', url: tab.url }
+        return
       }
     }
     
     if (force) {
-      chatMessages.value = [];
+      chatMessages.value = []
     }
     
-    summaryLoading.value = true;
-    summaryError.value = null;
+    console.log('[App] fetchCurrentPageSummary:', { force, trigger, tabId: tab.id, tabUrl: tab.url })
+    
+    summaryLoading.value = true
+    summaryError.value = null
     
     const response = await sendToBackground({
       type: 'EXTRACT_AND_SUMMARIZE',
       tabId: tab.id,
       force,
       trigger
-    });
+    }) as AppSummaryResponse | null
+    
+    console.log('[App] EXTRACT_AND_SUMMARIZE response:', response)
+    
     if (!response || !response.success) {
       if (response?.prompt) {
         summaryPrompt.value = {
           url: tab.url,
           reason: response.reason || 'needs approval'
-        };
-        summaryError.value = null;
+        }
+        summaryError.value = null
       } else if (response?.skip) {
-        summaryError.value = response.reason || 'page skipped';
+        summaryError.value = response.reason || 'page skipped'
       } else {
-        summaryError.value = response?.error || 'summarisation failed';
+        summaryError.value = response?.error || 'summarisation failed'
       }
-      summaryLoading.value = false;
-      return;
+      summaryLoading.value = false
+      return
     }
     
-    pageSummary.value = response.summary;
-    pageMetadata.value = { title: response.summary.title, url: tab.url };
-    summaryError.value = null;
+    pageSummary.value = response.summary || null
+    pageMetadata.value = { title: response.summary?.title || 'untitled', url: tab.url }
+    summaryError.value = null
     
-    await saveTabSession();
+    await saveTabSession()
     
   } catch (error) {
-    console.error('metldr: page summary failed:', error);
-    summaryError.value = error.message || 'unknown error';
+    console.error('metldr: page summary failed:', error)
+    summaryError.value = (error as Error).message || 'unknown error'
   } finally {
-    summaryLoading.value = false;
+    summaryLoading.value = false
   }
 }
 
@@ -397,108 +362,112 @@ function declineSummaryPrompt() {
   summaryPrompt.value = null;
 }
 
-function handleKeydown(e) {
+function handleKeydown(e: KeyboardEvent): void {
   if (e.ctrlKey && e.shiftKey && e.key?.toLowerCase?.() === 'l') {
-    e.preventDefault();
-    triggerManualSummary();
+    e.preventDefault()
+    triggerManualSummary()
   }
 }
 
-function switchTab(tab) {
-  if (activeTab.value === tab) return;
-  activeTab.value = tab;
+function switchTab(tab: string): void {
+  if (activeTab.value === tab) return
+  activeTab.value = tab
 }
 
-function onBeforeEnter(el) {
-  el.style.height = '0';
-  el.style.opacity = '0';
+function onBeforeEnter(el: Element): void {
+  const htmlEl = el as HTMLElement
+  htmlEl.style.height = '0'
+  htmlEl.style.opacity = '0'
 }
 
-function onEnter(el, done) {
-  el.offsetHeight;
-  el.style.transition = 'height 250ms cubic-bezier(0.4, 0, 0.2, 1), opacity 200ms ease-out';
-  el.style.height = el.scrollHeight + 'px';
-  el.style.opacity = '1';
+function onEnter(el: Element, done: () => void): void {
+  const htmlEl = el as HTMLElement
+  htmlEl.offsetHeight
+  htmlEl.style.transition = 'height 250ms cubic-bezier(0.4, 0, 0.2, 1), opacity 200ms ease-out'
+  htmlEl.style.height = htmlEl.scrollHeight + 'px'
+  htmlEl.style.opacity = '1'
   
-  el.addEventListener('transitionend', function handler(e) {
+  htmlEl.addEventListener('transitionend', function handler(e: TransitionEvent) {
     if (e.propertyName === 'height') {
-      el.removeEventListener('transitionend', handler);
-      done();
+      htmlEl.removeEventListener('transitionend', handler)
+      done()
     }
-  });
+  })
 }
 
-function onAfterEnter(el) {
-  el.style.height = 'auto';
-  el.style.transition = '';
+function onAfterEnter(el: Element): void {
+  const htmlEl = el as HTMLElement
+  htmlEl.style.height = 'auto'
+  htmlEl.style.transition = ''
 }
 
-function onBeforeLeave(el) {
-  el.style.height = el.scrollHeight + 'px';
-  el.style.opacity = '1';
+function onBeforeLeave(el: Element): void {
+  const htmlEl = el as HTMLElement
+  htmlEl.style.height = htmlEl.scrollHeight + 'px'
+  htmlEl.style.opacity = '1'
 }
 
-function onLeave(el, done) {
-  el.offsetHeight;
-  el.style.transition = 'height 200ms cubic-bezier(0.4, 0, 0.2, 1), opacity 150ms ease-in';
-  el.style.height = '0';
-  el.style.opacity = '0';
+function onLeave(el: Element, done: () => void): void {
+  const htmlEl = el as HTMLElement
+  htmlEl.offsetHeight
+  htmlEl.style.transition = 'height 200ms cubic-bezier(0.4, 0, 0.2, 1), opacity 150ms ease-in'
+  htmlEl.style.height = '0'
+  htmlEl.style.opacity = '0'
   
-  el.addEventListener('transitionend', function handler(e) {
+  htmlEl.addEventListener('transitionend', function handler(e: TransitionEvent) {
     if (e.propertyName === 'height') {
-      el.removeEventListener('transitionend', handler);
-      done();
+      htmlEl.removeEventListener('transitionend', handler)
+      done()
     }
-  });
+  })
 }
 
-function onAfterLeave(el) {
-  el.style.height = '';
-  el.style.transition = '';
+function onAfterLeave(el: Element): void {
+  const htmlEl = el as HTMLElement
+  htmlEl.style.height = ''
+  htmlEl.style.transition = ''
 }
 
-async function retryDetection() {
-  ollamaStatus.value = 'checking';
-  await checkOllama(false);
+async function retryDetection(): Promise<void> {
+  ollamaStatus.value = 'checking'
+  await checkOllama(false)
 }
 
-function copyToClipboard(text) {
-  navigator.clipboard.writeText(text);
+function copySetupCommands() {
+  navigator.clipboard.writeText(setupCommands);
 }
 
-async function sendChatMessage() {
-  if (!chatInput.value.trim() || chatLoading.value) return;
+async function sendChatMessage(): Promise<void> {
+  if (!chatInput.value.trim() || chatLoading.value) return
   
-  const userMessage = chatInput.value.trim();
-  chatInput.value = '';
+  const userMessage = chatInput.value.trim()
+  chatInput.value = ''
   
   if (!Array.isArray(chatMessages.value)) {
-    chatMessages.value = [];
+    chatMessages.value = []
   }
   
-  chatMessages.value.push({ role: 'user', content: userMessage });
+  chatMessages.value.push({ role: 'user', content: userMessage })
   
-  await nextTick();
+  await nextTick()
   if (chatContainer.value) {
-    chatContainer.value.scrollTop = chatContainer.value.scrollHeight;
+    chatContainer.value.scrollTop = chatContainer.value.scrollHeight
   }
   
   if (chatInputRef.value) {
-    chatInputRef.value.focus();
+    chatInputRef.value.focus()
   }
   
-  chatLoading.value = true;
+  chatLoading.value = true
   
   try {
-    const model = selectedModel.value || availableModels.value[0];
+    const model = selectedModel.value || availableModels.value[0]
     
-    // last 6 messages for context
     const recentMessages = chatMessages.value.slice(-6).map(m => ({
       role: m.role,
       content: m.content
-    }));
+    }))
     
-    // full page context
     const response = await sendToBackground({
       type: 'CHAT_MESSAGE',
       model,
@@ -510,34 +479,34 @@ async function sendChatMessage() {
         content: pageSummary.value.content,
         fullContent: pageSummary.value.fullContent
       } : null
-    });
+    }) as AppChatResponse | null
     
-    if (response?.ok) {
+    if (response?.ok && response.content) {
       chatMessages.value.push({ 
         role: 'assistant', 
         content: response.content,
-        timing: response.timing || null
-      });
+        timing: response.timing
+      })
     } else {
-      throw new Error(response?.error || 'chat failed');
+      throw new Error(response?.error || 'chat failed')
     }
   } catch (error) {
-    console.warn('metldr: chat error:', error.message);
+    console.warn('metldr: chat error:', (error as Error).message)
     chatMessages.value.push({
       role: 'assistant',
       content: 'sorry, something went wrong. try again.'
-    });
+    })
   } finally {
-    await nextTick();
+    await nextTick()
     if (chatContainer.value) {
-      chatContainer.value.scrollTop = chatContainer.value.scrollHeight;
+      chatContainer.value.scrollTop = chatContainer.value.scrollHeight
     }
-    chatLoading.value = false;
+    chatLoading.value = false
     
-    await saveTabSession();
+    await saveTabSession()
     
     if (chatInputRef.value) {
-      chatInputRef.value.focus();
+      chatInputRef.value.focus()
     }
   }
 }
@@ -552,21 +521,23 @@ function clearChat() {
   });
 }
 
-async function toggleWordPopup() {
-  wordPopupEnabled.value = !wordPopupEnabled.value;
+async function toggleWordPopup(newValue?: boolean) {
+  wordPopupEnabled.value = newValue ?? !wordPopupEnabled.value
   
   try {
-    await chrome.storage.local.set({ wordPopupEnabled: wordPopupEnabled.value });
+    await chrome.storage.local.set({ wordPopupEnabled: wordPopupEnabled.value })
     
-    const tabs = await chrome.tabs.query({});
+    const tabs = await chrome.tabs.query({})
     tabs.forEach(tab => {
-      chrome.tabs.sendMessage(tab.id, {
-        type: 'WORD_POPUP_TOGGLED',
-        enabled: wordPopupEnabled.value
-      }).catch(() => {});
-    });
+      if (tab.id !== undefined) {
+        chrome.tabs.sendMessage(tab.id, {
+          type: 'WORD_POPUP_TOGGLED',
+          enabled: wordPopupEnabled.value
+        }).catch(() => {})
+      }
+    })
   } catch (error) {
-    console.error('metldr: failed to save word popup setting:', error);
+    console.error('metldr: failed to save word popup setting:', error)
   }
 }
 
@@ -585,124 +556,106 @@ async function clearCache() {
   }
 }
 
-function openSetupGuide() {
-  chrome.tabs.create({ url: chrome.runtime.getURL('welcome.html') });
-}
-
-function openFaqs() {
-  chrome.tabs.create({ url: chrome.runtime.getURL('welcome.html') + '#faq' });
-}
-
-async function toggleGmailAutoSummarize() {
-  gmailAutoSummarize.value = !gmailAutoSummarize.value;
-  
+async function loadDictionarySettings(): Promise<void> {
   try {
-    await chrome.storage.local.set({ gmailAutoSummarize: gmailAutoSummarize.value });
-  } catch (error) {
-    console.error('metldr: failed to save gmail auto summarize setting:', error);
-  }
-}
-
-async function loadDictionarySettings() {
-  try {
-    console.log('[metldr] loading dictionary settings...');
-    await storage.initDictionary();
-    const persisted = await chrome.storage.local.get(['dictDownloadProgress', 'downloadingLanguages']);
-    const persistedProgress = persisted.dictDownloadProgress || {};
-    const persistedDownloading = Array.isArray(persisted.downloadingLanguages) ? persisted.downloadingLanguages : [];
-    downloadProgress.value = { ...persistedProgress };
-    downloadedLanguages.value = await storage.dictGetDownloadedLanguages();
-    console.log('[metldr] downloaded languages:', downloadedLanguages.value);
+    console.log('[metldr] loading dictionary settings...')
+    await storage.initDictionary()
+    const persisted = await chrome.storage.local.get(['dictDownloadProgress', 'downloadingLanguages'])
+    const persistedProgress = (persisted.dictDownloadProgress || {}) as Record<string, DownloadProgressItem>
+    const persistedDownloading = Array.isArray(persisted.downloadingLanguages) ? persisted.downloadingLanguages as string[] : []
+    downloadProgress.value = { ...persistedProgress }
+    downloadedLanguages.value = await storage.dictGetDownloadedLanguages() as string[]
+    console.log('[metldr] downloaded languages:', downloadedLanguages.value)
     
-    const settings = await chrome.storage.local.get(['selectedLanguages']);
-    if (settings.selectedLanguages && settings.selectedLanguages.length > 0) {
-      selectedLanguages.value = settings.selectedLanguages;
+    const settings = await chrome.storage.local.get(['selectedLanguages'])
+    if (settings.selectedLanguages && Array.isArray(settings.selectedLanguages) && settings.selectedLanguages.length > 0) {
+      selectedLanguages.value = settings.selectedLanguages as string[]
     }
-    console.log('[metldr] selected languages:', selectedLanguages.value);
+    console.log('[metldr] selected languages:', selectedLanguages.value)
     
-    persistedDownloading.forEach(lang => {
+    persistedDownloading.forEach((lang: string) => {
       if (!downloadProgress.value[lang]) {
-        downloadProgress.value = { ...downloadProgress.value, [lang]: { progress: 0, letter: 'a', entries: 0 } };
+        downloadProgress.value = { ...downloadProgress.value, [lang]: { progress: 0, letter: 'a', entries: 0 } }
       }
-      startDownload(lang);
-    });
+      startDownload(lang)
+    })
 
-    selectedLanguages.value.forEach(lang => {
+    selectedLanguages.value.forEach((lang: string) => {
       if (!downloadedLanguages.value.includes(lang) && !downloadProgress.value[lang]) {
-        startDownload(lang);
+        startDownload(lang)
       }
-    });
+    })
 
     if (!downloadedLanguages.value.includes('en')) {
-      console.log('[metldr] english not downloaded, starting download...');
-      startDownload('en');
+      console.log('[metldr] english not downloaded, starting download...')
+      startDownload('en')
     } else {
-      console.log('[metldr] english already downloaded');
+      console.log('[metldr] english already downloaded')
     }
   } catch (error) {
-    console.error('metldr: failed to load dictionary settings:', error);
+    console.error('metldr: failed to load dictionary settings:', error)
   }
 }
 
-async function startDownload(langCode) {
-  console.log('[metldr] starting download for:', langCode);
-  downloadProgress.value = { ...downloadProgress.value, [langCode]: { progress: 0, letter: 'a', entries: 0 } };
+async function startDownload(langCode: string): Promise<void> {
+  console.log('[metldr] starting download for:', langCode)
+  downloadProgress.value = { ...downloadProgress.value, [langCode]: { progress: 0, letter: 'a', entries: 0 } }
   
   try {
-    await storage.dictDownloadLanguage(langCode, (progressData) => {
+    await storage.dictDownloadLanguage(langCode, (progressData: { progress: number; letter: string; entriesProcessed: number }) => {
       downloadProgress.value = { ...downloadProgress.value, [langCode]: {
         progress: progressData.progress,
         letter: progressData.letter,
         entries: progressData.entriesProcessed
-      } };
-    });
+      } }
+    })
     
-    console.log('[metldr] download completed for:', langCode);
-    const { [langCode]: _, ...rest } = downloadProgress.value;
-    downloadProgress.value = rest;
-    downloadedLanguages.value = await storage.dictGetDownloadedLanguages();
+    console.log('[metldr] download completed for:', langCode)
+    const { [langCode]: _, ...rest } = downloadProgress.value
+    downloadProgress.value = rest
+    downloadedLanguages.value = await storage.dictGetDownloadedLanguages() as string[]
 
     if (!selectedLanguages.value.includes(langCode)) {
-      selectedLanguages.value.push(langCode);
-      await chrome.storage.local.set({ selectedLanguages: [...selectedLanguages.value] });
+      selectedLanguages.value.push(langCode)
+      await chrome.storage.local.set({ selectedLanguages: [...selectedLanguages.value] })
     }
   } catch (error) {
-    console.error('[metldr] download failed for', langCode, ':', error);
-    const { [langCode]: _, ...rest } = downloadProgress.value;
-    downloadProgress.value = rest;
+    console.error('[metldr] download failed for', langCode, ':', error)
+    const { [langCode]: _, ...rest } = downloadProgress.value
+    downloadProgress.value = rest
   }
 }
 
-async function toggleLanguage(langCode) {
-  const index = selectedLanguages.value.indexOf(langCode);
+async function toggleLanguage(langCode: string): Promise<void> {
+  const index = selectedLanguages.value.indexOf(langCode)
   
   if (index === -1) {
-    selectedLanguages.value.push(langCode);
-    await chrome.storage.local.set({ selectedLanguages: [...selectedLanguages.value] });
+    selectedLanguages.value.push(langCode)
+    await chrome.storage.local.set({ selectedLanguages: [...selectedLanguages.value] })
     
     if (!downloadedLanguages.value.includes(langCode) && !downloadProgress.value[langCode]) {
-      startDownload(langCode);
+      startDownload(langCode)
     }
   } else {
-    selectedLanguages.value.splice(index, 1);
-    await chrome.storage.local.set({ selectedLanguages: [...selectedLanguages.value] });
+    selectedLanguages.value.splice(index, 1)
+    await chrome.storage.local.set({ selectedLanguages: [...selectedLanguages.value] })
   }
 }
 
-async function deleteLanguageData(langCode) {
-  if (!confirm(`delete ${langCode} dictionary data?`)) return;
+async function deleteLanguageData(langCode: string): Promise<void> {
+  if (!confirm(`delete ${langCode} dictionary data?`)) return
   
   try {
-    downloadedLanguages.value = downloadedLanguages.value.filter(l => l !== langCode);
-    const { [langCode]: _, ...rest } = downloadProgress.value;
-    downloadProgress.value = rest;
+    downloadedLanguages.value = downloadedLanguages.value.filter(l => l !== langCode)
+    const { [langCode]: _, ...rest } = downloadProgress.value
+    downloadProgress.value = rest
     await chrome.storage.local.set({
       downloadingLanguages: Object.keys(rest),
       dictDownloading: false
-    });
+    })
 
-    await storage.dictDeleteLanguage(langCode);
-    downloadedLanguages.value = await storage.dictGetDownloadedLanguages();
+    await storage.dictDeleteLanguage(langCode)
+    downloadedLanguages.value = await storage.dictGetDownloadedLanguages() as string[]
     const index = selectedLanguages.value.indexOf(langCode);
     if (index !== -1) {
       selectedLanguages.value.splice(index, 1);
@@ -714,7 +667,7 @@ async function deleteLanguageData(langCode) {
   }
 }
 
-watch([summaryMode, allowlistInput, denylistInput, minAutoWords, minPromptWords], () => {
+watch([summaryMode, allowlistInput, denylistInput, minAutoWords], () => {
   saveSummaryPrefs();
 });
 
@@ -730,7 +683,7 @@ function setupTabListener() {
       summaryError.value = null;
       summaryPrompt.value = null;
       
-      if (summaryMode.value !== 'manual') {
+      if (summaryMode.value === 'auto') {
         await fetchCurrentPageSummary(false, 'auto');
       }
     }
@@ -749,26 +702,53 @@ function setupTabListener() {
         summaryError.value = null;
       }
       
-      if (summaryMode.value !== 'manual') {
+      if (summaryMode.value === 'auto') {
         await fetchCurrentPageSummary(urlChanged, 'auto');
       }
     }
   });
 }
 
+function setupStorageListener(): void {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local') return
+    
+    // Sync summary mode
+    if (changes.summaryPrefs?.newValue) {
+      const prefs = changes.summaryPrefs.newValue
+      summaryMode.value = prefs.mode === 'auto' ? 'auto' : 'manual'
+      if (prefs.allowlist) allowlistInput.value = prefs.allowlist.join('\n')
+      if (prefs.denylist) denylistInput.value = prefs.denylist.join('\n')
+      if (prefs.minAutoWords) minAutoWords.value = prefs.minAutoWords
+    }
+    
+    // Sync word popup toggle
+    if (changes.wordPopupEnabled !== undefined) {
+      wordPopupEnabled.value = changes.wordPopupEnabled.newValue ?? true
+    }
+    
+    // Sync selected model
+    if (changes.selectedModel?.newValue) {
+      selectedModel.value = changes.selectedModel.newValue
+    }
+    
+    // Sync selected languages
+    if (changes.selectedLanguages?.newValue) {
+      selectedLanguages.value = changes.selectedLanguages.newValue
+    }
+  })
+}
+
 onMounted(async () => {
   await themeStore.loadSavedTheme();
   
   try {
-    const settings = await chrome.storage.local.get(['wordPopupEnabled', 'gmailAutoSummarize']);
-    if (settings.wordPopupEnabled !== undefined) {
-      wordPopupEnabled.value = settings.wordPopupEnabled;
-    }
-    if (settings.gmailAutoSummarize !== undefined) {
-      gmailAutoSummarize.value = settings.gmailAutoSummarize;
+    const settings = await chrome.storage.local.get(['wordPopupEnabled'])
+    if (typeof settings.wordPopupEnabled === 'boolean') {
+      wordPopupEnabled.value = settings.wordPopupEnabled
     }
   } catch (error) {
-    console.error('metldr: failed to load popup/gmail settings:', error);
+    console.error('metldr: failed to load word popup settings:', error)
   }
   
   await loadSummaryPrefs();
@@ -784,24 +764,24 @@ onMounted(async () => {
   
   await checkOllama();
   setupTabListener();
+  setupStorageListener();
 
   window.addEventListener('keydown', handleKeydown);
 
-  const dropdownClickHandler = (e) => {
-    if (showModelDropdown.value && !e.target.closest('.model-selector-btn') && !e.target.closest('.model-dropdown')) {
-      showModelDropdown.value = false;
+  const dropdownClickHandler = (e: MouseEvent): void => {
+    const target = e.target as HTMLElement
+    if (showModelDropdown.value && !target.closest('.model-selector-btn') && !target.closest('.model-dropdown')) {
+      showModelDropdown.value = false
     }
-  };
+  }
 
   document.addEventListener('click', dropdownClickHandler);
 
   const statusCheckInterval = setInterval(async () => {
     if (ollamaStatus.value !== 'ready') {
       await checkOllama(false); 
-    } else {
-      await refreshModels();
     }
-  }, 3000);
+  }, 5000);
 
   onUnmounted(() => {
     clearInterval(statusCheckInterval);
@@ -812,13 +792,13 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="h-screen flex flex-col bg-base-100 text-base-content overflow-hidden">
+  <div class="h-screen flex flex-col bg-background text-foreground overflow-hidden">
     <!-- teleport target for dropdowns -->
     <div id="dropdown-portal" class="fixed inset-0 pointer-events-none z-50"></div>
 
     <!-- header with tabs -->
-    <header v-if="ollamaStatus === 'ready'" class="shrink-0 sticky top-0 z-10 border-b border-primary/10">
-      <div class="flex gap-1.5 p-2 bg-base-100/95 backdrop-blur-lg">
+    <header v-if="ollamaStatus === 'ready'" class="shrink-0 sticky top-0 z-10 border-b border-border">
+      <div class="flex gap-1.5 p-2 bg-background/95 backdrop-blur-lg">
         <button 
           v-for="(tab, idx) in [{key: 'summary', label: 'Summary', icon: FileText, color: 'primary'}, {key: 'stats', label: 'Stats', icon: BarChart3, color: 'secondary'}, {key: 'settings', label: 'Settings', icon: Settings, color: 'accent'}]"
           :key="tab.key"
@@ -826,8 +806,8 @@ onMounted(async () => {
           class="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 text-[11px] font-medium rounded-lg transition-all duration-200"
           :class="[
             activeTab === tab.key 
-              ? `bg-${tab.color}/15 text-${tab.color} border border-${tab.color}/20` 
-              : 'text-base-content/50 hover:text-base-content/70 hover:bg-base-content/5 border border-transparent'
+              ? `bg-${tab.color}/25 text-${tab.color} border border-${tab.color}/40` 
+              : 'text-foreground/70 hover:text-foreground hover:bg-muted border border-transparent'
           ]"
         >
           <component 
@@ -846,119 +826,34 @@ onMounted(async () => {
       <Transition name="fade" mode="out-in">
         <!-- checking state -->
         <div v-if="ollamaStatus === 'checking'" class="flex flex-col items-center justify-center h-full p-6">
-          <Loader2 class="w-8 h-8 mb-3 animate-spin text-base-content/40" :stroke-width="2" />
-          <p class="text-[12px] text-base-content/50">connecting to ollama...</p>
+          <Loader2 class="w-8 h-8 mb-3 animate-spin text-primary" :stroke-width="2" />
+          <p class="text-[12px] text-foreground/70">connecting to ollama...</p>
         </div>
 
         <!-- not found state -->
-        <div v-else-if="ollamaStatus === 'not-found'" class="p-3 h-full overflow-y-auto">
-          <div class="rounded-xl bg-base-content/5 p-4 space-y-4">
-            <!-- header with pulsing indicator -->
-            <div class="flex items-start gap-3">
-              <div class="w-8 h-8 rounded-lg bg-warning/10 flex items-center justify-center shrink-0 relative">
-                <Server :size="16" class="text-warning/70" />
-                <span class="absolute -top-0.5 -right-0.5 w-2 h-2 bg-warning rounded-full animate-pulse"></span>
+        <div v-else-if="ollamaStatus === 'not-found'" class="p-4">
+          <div class="rounded-xl bg-card p-4 border border-border">
+            <div class="flex items-start gap-3 mb-4">
+              <div class="w-8 h-8 rounded-lg bg-destructive/20 flex items-center justify-center shrink-0">
+                <Server :size="16" class="text-destructive" />
               </div>
               <div>
-                <h2 class="text-[13px] font-medium text-base-content/80 mb-0.5">waiting for ollama...</h2>
-                <p class="text-[10px] text-base-content/40">auto-detecting every 2s · will connect when ready</p>
+                <h2 class="text-[13px] font-medium text-foreground mb-1">ollama not detected</h2>
+                <p class="text-[11px] text-foreground/70">run these commands to set up ollama:</p>
               </div>
             </div>
             
-            <!-- step 1: enable extension access (permanent) -->
-            <div class="rounded-lg bg-primary/5 border border-primary/10 p-3">
-              <div class="text-[11px] font-medium text-base-content/70 mb-2 flex items-center gap-2">
-                <span class="w-4 h-4 rounded-full bg-primary/20 text-primary text-[9px] font-bold flex items-center justify-center">1</span>
-                enable extension access
-                <span class="text-[9px] px-1.5 py-0.5 rounded bg-success/15 text-success/80">one-time</span>
-              </div>
-              <p class="text-[10px] text-base-content/50 mb-2">run this once in {{ platformSetup.terminalName }}, then restart ollama:</p>
-              
-              <!-- windows -->
-              <template v-if="platformSetup.os === 'Windows'">
-                <div class="flex items-center gap-2 bg-base-100/50 rounded-lg p-2 mb-2">
-                  <code class="flex-1 font-mono text-[10px] text-base-content/80 overflow-x-auto whitespace-nowrap">{{ platformSetup.permanentSetup.command }}</code>
-                  <button @click="copyToClipboard(platformSetup.permanentSetup.command)" class="btn btn-xs btn-primary text-[9px] shrink-0">
-                    copy
-                  </button>
-                </div>
-                <p class="text-[9px] text-base-content/40">💡 after running, right-click ollama in system tray → quit, then relaunch</p>
-              </template>
-              
-              <!-- macOS -->
-              <template v-else-if="platformSetup.os === 'macOS'">
-                <div class="flex items-center gap-2 bg-base-100/50 rounded-lg p-2 mb-2">
-                  <code class="flex-1 font-mono text-[10px] text-base-content/80 overflow-x-auto whitespace-nowrap">{{ platformSetup.permanentSetup.command }}</code>
-                  <button @click="copyToClipboard(platformSetup.permanentSetup.command)" class="btn btn-xs btn-primary text-[9px] shrink-0">
-                    copy
-                  </button>
-                </div>
-                <p class="text-[9px] text-base-content/40">💡 then quit ollama from menu bar and relaunch it</p>
-              </template>
-              
-              <!-- linux -->
-              <template v-else>
-                <div class="space-y-1.5 mb-2">
-                  <div v-for="(cmd, i) in platformSetup.permanentSetup.commands" :key="i" class="flex items-center gap-2 bg-base-100/50 rounded-lg p-2">
-                    <code class="flex-1 font-mono text-[9px] text-base-content/80 overflow-x-auto whitespace-nowrap">{{ cmd }}</code>
-                    <button @click="copyToClipboard(cmd)" class="btn btn-2xs btn-ghost text-[8px] shrink-0">copy</button>
-                  </div>
-                </div>
-                <p class="text-[9px] text-base-content/40">💡 run these commands in order, then ollama will work automatically</p>
-              </template>
-              
-              <!-- quick test fallback (collapsible) -->
-              <details class="mt-2">
-                <summary class="text-[9px] text-base-content/40 cursor-pointer hover:text-base-content/60">⚡ quick test (temporary, this session only)</summary>
-                <div class="flex items-center gap-2 bg-base-100/50 rounded-lg p-2 mt-1.5">
-                  <code class="flex-1 font-mono text-[9px] text-base-content/70 overflow-x-auto whitespace-nowrap">{{ platformSetup.serve }}</code>
-                  <button @click="copyToClipboard(platformSetup.serve)" class="btn btn-2xs btn-ghost text-[8px] shrink-0">copy</button>
-                </div>
-              </details>
+            <div class="bg-muted rounded-lg p-3 font-mono text-[11px] text-foreground mb-4 overflow-x-auto">
+              <pre class="whitespace-pre-wrap">{{ setupCommands }}</pre>
             </div>
             
-            <!-- step 2: pull a model (if needed) -->
-            <details class="rounded-lg bg-secondary/5 border border-secondary/10">
-              <summary class="p-3 text-[11px] font-medium text-base-content/70 cursor-pointer hover:bg-secondary/5 flex items-center gap-2">
-                <span class="w-4 h-4 rounded-full bg-secondary/20 text-secondary text-[9px] font-bold flex items-center justify-center">2</span>
-                no models? pull one first
-                <ChevronDown :size="12" class="ml-auto text-base-content/40" />
-              </summary>
-              <div class="px-3 pb-3 space-y-2">
-                <p class="text-[10px] text-base-content/50">in a new terminal, run:</p>
-                <div class="flex items-center gap-2 bg-base-100/50 rounded-lg p-2">
-                  <code class="flex-1 font-mono text-[10px] text-base-content/80">ollama pull gemma3:1b</code>
-                  <button @click="copyToClipboard('ollama pull gemma3:1b')" class="btn btn-xs btn-ghost text-[9px] shrink-0">copy</button>
-                </div>
-                <p class="text-[9px] text-base-content/40">this downloads a fast, lightweight model (~500mb)</p>
-              </div>
-            </details>
-            
-            <!-- step 3: install ollama (if needed) -->
-            <details class="rounded-lg bg-accent/5 border border-accent/10">
-              <summary class="p-3 text-[11px] font-medium text-base-content/70 cursor-pointer hover:bg-accent/5 flex items-center gap-2">
-                <span class="w-4 h-4 rounded-full bg-accent/20 text-accent text-[9px] font-bold flex items-center justify-center">?</span>
-                don't have ollama installed?
-                <ChevronDown :size="12" class="ml-auto text-base-content/40" />
-              </summary>
-              <div class="px-3 pb-3 space-y-2">
-                <p class="text-[10px] text-base-content/50">install with this command:</p>
-                <div class="flex items-center gap-2 bg-base-100/50 rounded-lg p-2">
-                  <code class="flex-1 font-mono text-[10px] text-base-content/80 overflow-x-auto">{{ platformSetup.install }}</code>
-                  <button @click="copyToClipboard(platformSetup.install)" class="btn btn-xs btn-ghost text-[9px] shrink-0">copy</button>
-                </div>
-                <p class="text-[9px] text-base-content/40">or download from <a href="https://ollama.com" target="_blank" class="text-primary/70 hover:text-primary underline">ollama.com</a></p>
-              </div>
-            </details>
-            
-            <!-- manual retry + setup guide -->
-            <div class="flex items-center justify-between pt-2 border-t border-base-content/5">
-              <button @click="retryDetection" class="btn btn-sm bg-base-content/10 hover:bg-base-content/15 border-0 text-[11px]">
-                <RefreshCw :size="12" />
-                check now
+            <div class="flex gap-2">
+              <button @click="copySetupCommands" class="px-3 py-1.5 rounded-md text-[11px] text-foreground/70 hover:bg-muted hover:text-foreground transition-colors">
+                copy commands
               </button>
-              <button @click="openSetupGuide" class="text-[10px] text-base-content/40 hover:text-base-content/60">
-                full setup guide →
+              <button @click="retryDetection" class="px-3 py-1.5 rounded-md text-[11px] bg-primary text-primary-foreground hover:bg-primary/90 transition-colors flex items-center gap-1.5">
+                <RefreshCw :size="12" />
+                retry
               </button>
             </div>
           </div>
@@ -967,15 +862,15 @@ onMounted(async () => {
         <!-- summary tab -->
         <div v-else-if="ollamaStatus === 'ready' && activeTab === 'summary'" :class="['flex flex-col h-full relative', summaryPrompt ? 'pb-16' : '']">
           
-          <div v-if="summaryPrompt" class="absolute right-2 bottom-2 max-w-xs rounded-lg border border-warning/30 bg-warning/5 px-3 py-2 text-[10px] shadow-lg z-10">
+          <div v-if="summaryPrompt" class="absolute right-2 bottom-2 max-w-xs rounded-lg border border-warning/50 bg-warning/10 px-3 py-2 text-[10px] shadow-lg z-10">
             <div class="flex items-start gap-2">
               <div class="flex-1 min-w-0">
-                <div class="font-medium text-base-content/70 truncate">summarise this page?</div>
-                <div class="text-base-content/50 truncate">{{ summaryPrompt.reason }}</div>
+                <div class="font-medium text-foreground truncate">summarise this page?</div>
+                <div class="text-foreground/70 truncate">{{ summaryPrompt.reason }}</div>
               </div>
               <div class="flex gap-1 shrink-0">
-                <button class="btn btn-ghost btn-2xs text-[10px]" @click="declineSummaryPrompt">no</button>
-                <button class="btn btn-2xs bg-warning/20 border-warning/40 text-[10px]" @click="acceptSummaryPrompt">yes</button>
+                <button class="px-2 py-1 rounded text-[10px] text-foreground/70 hover:bg-muted transition-colors" @click="declineSummaryPrompt">no</button>
+                <button class="px-2 py-1 rounded text-[10px] bg-warning/30 border border-warning/50 text-warning-foreground hover:bg-warning/40 transition-colors" @click="acceptSummaryPrompt">yes</button>
               </div>
             </div>
           </div>
@@ -983,7 +878,7 @@ onMounted(async () => {
           <!-- collapsible summary area -->
           <div class="shrink-0 p-2 pb-0">
             <!-- summary card with collapse toggle -->
-            <div v-if="pageSummary" class="rounded-lg bg-primary/5 border border-primary/10">
+            <div v-if="pageSummary" class="rounded-lg bg-card border border-border">
               <!-- header (always visible) -->
               <div 
                 class="flex items-center gap-2 p-2.5 cursor-pointer hover:bg-primary/5 rounded-t-lg transition-colors"
@@ -995,10 +890,10 @@ onMounted(async () => {
                   class="text-primary/60 shrink-0 transition-transform"
                 />
                 <div class="flex-1 min-w-0">
-                  <h3 class="text-[12px] font-medium text-base-content/80 truncate leading-tight">
+                  <h3 class="text-[12px] font-medium text-foreground truncate leading-tight">
                     {{ pageSummary.title || 'untitled' }}
                   </h3>
-                  <p v-if="summaryCollapsed" class="text-[10px] text-base-content/50 truncate">
+                  <p v-if="summaryCollapsed" class="text-[10px] text-foreground/60 truncate">
                     {{ pageSummary.bullets.length }} key points · {{ pageSummary.readTime || 'n/a' }} read
                   </p>
                 </div>
@@ -1025,47 +920,47 @@ onMounted(async () => {
                 @after-leave="onAfterLeave"
               >
                 <div v-if="!summaryCollapsed" class="summary-content overflow-hidden">
-                  <div class="px-3 pb-3 pt-1 border-t border-primary/10">
+                  <div class="px-3 pb-3 pt-1 border-t border-border">
                     <!-- metadata -->
-                    <p v-if="pageSummary.publication || pageSummary.author" class="text-[10px] text-base-content/50 mb-2">
+                    <p v-if="pageSummary.publication || pageSummary.author" class="text-[10px] text-foreground/60 mb-2">
                       {{ pageSummary.publication }}{{ pageSummary.author ? ` · ${pageSummary.author}` : '' }}
                     </p>
                     
                     <!-- bullets -->
                     <ul class="space-y-1.5">
                       <li v-for="(bullet, i) in pageSummary.bullets" :key="i" class="flex gap-2 text-[11px] leading-relaxed">
-                        <span class="text-primary/50 shrink-0 mt-0.5">•</span>
-                        <span class="text-base-content/75 markdown-content" v-html="renderMarkdown(bullet)"></span>
+                        <span class="text-primary shrink-0 mt-0.5">•</span>
+                        <span class="text-foreground markdown-content" v-html="renderMarkdown(bullet)"></span>
                       </li>
                     </ul>
                     
-                    <div class="flex items-center justify-between pt-2 mt-2 border-t border-primary/10">
-                      <span class="text-[10px] text-base-content/50">{{ pageSummary.readTime || 'n/a' }} read</span>
+                    <div class="flex items-center justify-between pt-2 mt-2 border-t border-border">
+                      <span class="text-[10px] text-foreground/60">{{ pageSummary.readTime || 'n/a' }} read</span>
                       <div 
                         v-if="pageSummary.timing"
                         class="timing-badge group relative cursor-help"
                       >
-                        <div class="flex items-center gap-1 text-[10px] text-base-content/50 hover:text-base-content/70 transition-colors">
+                        <div class="flex items-center gap-1 text-[10px] text-foreground/60 hover:text-foreground transition-colors">
                           <span>{{ formatTime(pageSummary.timing.total) }}</span>
-                          <span v-if="pageSummary.timing.cached" class="text-primary/70">· cached</span>
+                          <span v-if="pageSummary.timing.cached" class="text-primary">· cached</span>
                         </div>
                         <!-- hover breakdown tooltip -->
-                        <div class="timing-tooltip absolute bottom-full right-0 mb-2 px-2.5 py-2 rounded-lg bg-base-200 border border-base-content/15 shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-150 z-50 min-w-[140px]">
-                          <div class="text-[10px] font-medium text-base-content/70 mb-1.5 uppercase tracking-wide">time breakdown</div>
+                        <div class="timing-tooltip absolute bottom-full right-0 mb-2 px-2.5 py-2 rounded-lg bg-popover border border-border shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-150 z-50 min-w-[140px]">
+                          <div class="text-[10px] font-medium text-foreground mb-1.5 uppercase tracking-wide">time breakdown</div>
                           <div class="space-y-1 text-[10px]">
                             <div class="flex justify-between gap-3">
-                              <span class="text-base-content/60">extraction</span>
-                              <span class="text-base-content/80 font-mono">{{ formatTime(pageSummary.timing.extraction || 0) }}</span>
+                              <span class="text-foreground/70">extraction</span>
+                              <span class="text-foreground font-mono">{{ formatTime(pageSummary.timing.extraction || 0) }}</span>
                             </div>
                             <div class="flex justify-between gap-3">
-                              <span class="text-base-content/60">llm</span>
-                              <span class="text-base-content/80 font-mono">{{ formatTime(pageSummary.timing.llm || 0) }}</span>
+                              <span class="text-foreground/70">llm</span>
+                              <span class="text-foreground font-mono">{{ formatTime(pageSummary.timing.llm || 0) }}</span>
                             </div>
-                            <div class="flex justify-between gap-3 pt-1 border-t border-base-content/15">
-                              <span class="text-base-content/70">total</span>
+                            <div class="flex justify-between gap-3 pt-1 border-t border-border">
+                              <span class="text-foreground">total</span>
                               <span class="text-primary font-mono font-medium">{{ formatTime(pageSummary.timing.total) }}</span>
                             </div>
-                            <div v-if="pageSummary.timing.model" class="pt-1 text-base-content/55 truncate">
+                            <div v-if="pageSummary.timing.model" class="pt-1 text-foreground/60 truncate">
                               {{ pageSummary.timing.model }}
                             </div>
                           </div>
@@ -1078,85 +973,98 @@ onMounted(async () => {
             </div>
 
             <!-- loading state -->
-            <div v-else-if="summaryLoading" class="flex items-center gap-2.5 p-3 rounded-lg bg-primary/5 border border-primary/10">
-              <Loader2 class="w-4 h-4 animate-spin text-primary/60" />
-              <span class="text-[11px] text-base-content/60">analysing...</span>
+            <div v-else-if="summaryLoading" class="flex items-center gap-2.5 p-3 rounded-lg bg-muted border border-border">
+              <Loader2 class="w-4 h-4 animate-spin text-primary" />
+              <span class="text-[11px] text-foreground">analysing...</span>
             </div>
 
-            <!-- error state -->
-            <div v-else-if="summaryError" class="flex items-center gap-2.5 p-3 rounded-lg bg-error/5 border border-error/10">
-              <AlertCircle :size="13" class="text-error/60 shrink-0" />
-              <div>
-                <p class="text-[11px] text-base-content/70">{{ summaryError }}</p>
-                <p class="text-[10px] text-base-content/50">navigate to an article to see a summary</p>
+            <!-- error state with retry button -->
+            <div v-else-if="summaryError" class="space-y-2">
+              <div class="flex items-center gap-2.5 p-3 rounded-lg bg-destructive/15 border border-destructive/30">
+                <AlertCircle :size="13" class="text-destructive shrink-0" />
+                <div class="flex-1 min-w-0">
+                  <p class="text-[11px] text-foreground">{{ summaryError }}</p>
+                </div>
               </div>
-            </div>
-
-            <!-- no page state / waiting for manual trigger -->
-            <div v-else class="flex items-center justify-between gap-2.5 p-3 rounded-lg bg-base-content/5 border border-base-content/10">
-              <div class="flex items-center gap-2.5">
-                <FileText :size="13" class="text-base-content/40 shrink-0" />
-                <p class="text-[11px] text-base-content/55">browse a page to get a summary</p>
-              </div>
-              <button 
-                v-if="summaryMode === 'manual'"
+              <!-- show retry button on nonemail pages -->
+              <Button 
+                v-if="!isEmailClient"
                 @click="triggerManualSummary"
-                class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-primary/10 hover:bg-primary/20 border border-primary/20 text-primary text-[10px] font-medium transition-all"
                 :disabled="summaryLoading"
-                title="Summarise this page (Ctrl+Shift+L)"
+                class="w-full text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                variant="ghost"
               >
-                <Zap :size="11" />
-                summarise
-              </button>
+                <Zap :size="14" class="mr-2" />
+                try summarising anyway
+              </Button>
+            </div>
+
+            <!-- no page state with summarise button -->
+            <div v-else class="space-y-2">
+              <div v-if="isEmailClient" class="flex items-center gap-2.5 p-3 rounded-lg bg-muted border border-border">
+                <FileText :size="13" class="text-foreground/50 shrink-0" />
+                <p class="text-[11px] text-foreground">browse a page to get a summary</p>
+              </div>
+              <Button 
+                v-else
+                @click="triggerManualSummary"
+                :disabled="summaryLoading"
+                class="w-full"
+                variant="outline"
+              >
+                <Zap :size="14" class="mr-2" />
+                summarise this page
+              </Button>
             </div>
           </div>
 
           <!-- chat ui -->
           <div class="flex-1 flex flex-col min-h-0 p-2">
-            <div class="flex-1 flex flex-col rounded-lg bg-secondary/5 border border-secondary/10 p-3 min-h-0">
+            <div class="flex-1 flex flex-col rounded-lg bg-card border border-border p-3 min-h-0">
               <div class="flex items-center justify-between mb-2 shrink-0">
                 <div class="flex items-center gap-1.5">
-                  <MessageCircle :size="11" class="text-secondary/70" />
-                  <span class="text-[10px] font-medium text-secondary/70 uppercase tracking-wide">chat</span>
+                  <MessageCircle :size="11" class="text-secondary" />
+                  <span class="text-[10px] font-medium text-secondary uppercase tracking-wide">chat</span>
                 </div>
                 <button 
                   v-if="chatMessages.length > 0"
                   @click="clearChat" 
-                  class="text-[10px] text-base-content/50 hover:text-error/70 transition-colors"
+                  class="text-[10px] text-foreground/60 hover:text-destructive transition-colors"
                 >
                   clear
                 </button>
               </div>
               
               <!-- messages container -->
-              <div 
+              <ScrollArea 
                 ref="chatContainer"
-                class="flex-1 overflow-y-auto space-y-2 min-h-0"
+                class="flex-1 min-h-0"
               >
+                <div class="space-y-2 pr-3">
                 <!-- empty state -->
                 <div v-if="chatMessages.length === 0 && !chatLoading" class="flex items-center justify-center h-full">
-                  <p class="text-[10px] text-base-content/50">ask about the article</p>
+                  <p class="text-[10px] text-foreground/50">ask about the article</p>
                 </div>
                 
                 <!-- messages -->
                 <div v-for="(msg, i) in chatMessages" :key="i" class="message-wrapper">
                   <div v-if="msg.role === 'user'" class="flex justify-end">
-                    <div class="max-w-[85%] bg-primary/10 border border-primary/20 rounded-xl rounded-br-sm px-2.5 py-1.5 text-[11px] text-base-content/80">
+                    <div class="max-w-[85%] bg-primary/25 border border-primary/35 rounded-xl rounded-br-sm px-2.5 py-1.5 text-[11px] text-foreground">
                       {{ msg.content }}
                     </div>
                   </div>
                   <div v-else class="flex flex-col items-start max-w-[85%]">
-                    <div class="bg-secondary/10 border border-secondary/20 rounded-xl rounded-bl-sm px-2.5 py-1.5 text-[11px] text-base-content/75 markdown-content" v-html="renderMarkdown(msg.content)">
+                    <div class="bg-muted border border-border rounded-xl rounded-bl-sm px-2.5 py-1.5 text-[11px] text-foreground markdown-content" v-html="renderMarkdown(msg.content)">
                     </div>
                     <div 
                       v-if="msg.timing" 
-                      class="flex items-center gap-1 mt-0.5 ml-1 text-[9px] text-base-content/45 hover:text-base-content/60 transition-colors cursor-default group relative"
+                      class="flex items-center gap-1 mt-0.5 ml-1 text-[9px] text-foreground/50 hover:text-foreground/70 transition-colors cursor-default group relative"
                     >
                       <span>{{ formatTime(msg.timing.total) }}</span>
-                      <div class="chat-timing-tooltip absolute left-full top-1/2 -translate-y-1/2 ml-2 px-2 py-1.5 rounded bg-base-200 border border-base-content/15 shadow-md opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-150 z-50 whitespace-nowrap">
-                        <div class="text-[9px] text-base-content/60">
-                          <span class="text-base-content/80">{{ formatTime(msg.timing.total) }}</span>
-                          <span v-if="msg.timing.model" class="text-base-content/55"> · {{ msg.timing.model }}</span>
+                      <div class="chat-timing-tooltip absolute left-full top-1/2 -translate-y-1/2 ml-2 px-2 py-1.5 rounded bg-popover border border-border shadow-md opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-150 z-50 whitespace-nowrap">
+                        <div class="text-[9px] text-foreground/70">
+                          <span class="text-foreground">{{ formatTime(msg.timing.total) }}</span>
+                          <span v-if="msg.timing.model" class="text-foreground/60"> · {{ msg.timing.model }}</span>
                         </div>
                       </div>
                     </div>
@@ -1165,63 +1073,69 @@ onMounted(async () => {
                 
                 <!-- loading -->
                 <div v-if="chatLoading" class="flex justify-start">
-                  <div class="bg-secondary/10 border border-secondary/20 rounded-xl rounded-bl-sm px-3 py-2">
+                  <div class="bg-muted border border-border rounded-xl rounded-bl-sm px-3 py-2">
                     <div class="flex gap-1">
-                      <span class="w-1.5 h-1.5 bg-secondary/50 rounded-full animate-bounce" style="animation-delay: 0ms"></span>
-                      <span class="w-1.5 h-1.5 bg-secondary/50 rounded-full animate-bounce" style="animation-delay: 150ms"></span>
-                      <span class="w-1.5 h-1.5 bg-secondary/50 rounded-full animate-bounce" style="animation-delay: 300ms"></span>
+                      <span class="w-1.5 h-1.5 bg-secondary rounded-full animate-bounce" style="animation-delay: 0ms"></span>
+                      <span class="w-1.5 h-1.5 bg-secondary rounded-full animate-bounce" style="animation-delay: 150ms"></span>
+                      <span class="w-1.5 h-1.5 bg-secondary rounded-full animate-bounce" style="animation-delay: 300ms"></span>
                     </div>
                   </div>
                 </div>
-              </div>
+                </div>
+              </ScrollArea>
 
               <!-- input -->
               <div class="flex items-center gap-2 mt-2 shrink-0">
-                <input 
+                <Input 
                   ref="chatInputRef"
                   v-model="chatInput"
                   @keydown.enter.prevent="sendChatMessage"
                   type="text"
                   placeholder="ask something..."
-                  class="flex-1 bg-base-content/5 border-0 rounded-lg px-3 py-2 text-[11px] focus:outline-none focus:ring-1 focus:ring-primary/30 placeholder:text-base-content/30"
+                  class="flex-1 h-9 text-[11px]"
                 />
-                <button 
+                <Button 
                   @click="sendChatMessage"
                   :disabled="!chatInput.trim() || chatLoading"
-                  class="flex items-center justify-center w-8 h-8 rounded-lg bg-primary/10 hover:bg-primary/20 border border-primary/20 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                  size="icon"
+                  class="h-9 w-9 bg-primary/15 hover:bg-primary/25 border border-primary/30 text-primary"
+                  variant="ghost"
                 >
-                  <Send :size="14" class="text-primary" />
-                </button>
+                  <Send :size="14" />
+                </Button>
               </div>
             </div>
           </div>
         </div>
 
         <!-- stats tab -->
-        <div v-else-if="ollamaStatus === 'ready' && activeTab === 'stats'" class="p-3 h-full overflow-y-auto">
-          <HistoryManager ref="historyRef" :limit="10" />
-        </div>
+        <ScrollArea v-else-if="ollamaStatus === 'ready' && activeTab === 'stats'" class="h-full">
+          <div class="p-3">
+            <HistoryManager ref="historyRef" :limit="10" />
+          </div>
+        </ScrollArea>
 
         <!-- settings tab -->
-        <div v-else-if="ollamaStatus === 'ready' && activeTab === 'settings'" class="p-3 space-y-3 h-full overflow-y-auto">
+        <ScrollArea v-else-if="ollamaStatus === 'ready' && activeTab === 'settings'" class="h-full">
+          <div class="p-3 space-y-3">
           <!-- model selection -->
-          <div class="rounded-xl bg-base-content/5 p-4 border border-primary/10">
+          <div class="rounded-xl bg-card p-4 border border-border">
             <div class="flex items-center gap-2.5 mb-3">
-              <div class="flex items-center justify-center w-6 h-6 rounded-md bg-primary/15">
+              <div class="flex items-center justify-center w-6 h-6 rounded-md bg-primary/25">
                 <Server :size="12" class="text-primary" />
               </div>
-              <span class="text-[12px] font-medium text-base-content/70 tracking-wide">ai model</span>
+              <span class="text-[12px] font-medium text-foreground tracking-wide">ai model</span>
             </div>
             
             <div class="relative">
               <button 
                 @click="toggleModelDropdown"
-                class="model-selector-btn w-full flex items-center justify-between px-3 py-2.5 bg-base-content/5 hover:bg-base-content/10 rounded-lg transition-colors"
+                class="model-selector-btn w-full flex items-center justify-between px-3 py-2.5 bg-muted hover:bg-muted/80 rounded-lg border border-input transition-colors"
               >
-                <span class="font-mono text-[12px] text-base-content/70">{{ selectedModel }}</span>
+                <span class="font-mono text-[12px] text-foreground">{{ selectedModel }}</span>
                 <ChevronDown 
                   :size="14" 
-                  class="text-base-content/40 transition-transform"
+                  class="text-foreground/60 transition-transform"
                   :class="{ 'rotate-180': showModelDropdown }"
                 />
               </button>
@@ -1235,184 +1149,147 @@ onMounted(async () => {
                   leave-from-class="opacity-100 scale-100"
                   leave-to-class="opacity-0 scale-95"
                 >
-                  <div 
+                  <ScrollArea 
                     v-if="showModelDropdown" 
-                    class="model-dropdown fixed rounded-lg bg-base-100 border border-base-content/10 shadow-xl max-h-48 overflow-y-auto pointer-events-auto"
+                    class="model-dropdown fixed rounded-lg bg-background border border-border shadow-xl max-h-48 pointer-events-auto"
                     :style="{ 
                       top: modelDropdownPos.top + 'px', 
                       left: modelDropdownPos.left + 'px', 
                       width: modelDropdownPos.width + 'px'
                     }"
                   >
+                    <div class="py-1">
                     <button 
                       v-for="model in availableModels" 
                       :key="model"
                       @click="selectModel(model)"
-                      class="w-full flex items-center justify-between px-3 py-2 text-[12px] font-mono hover:bg-base-content/5 transition-colors"
-                      :class="{ 'bg-base-content/10': selectedModel === model }"
+                      class="w-full flex items-center justify-between px-3 py-2 text-[12px] font-mono hover:bg-muted transition-colors"
+                      :class="{ 'bg-muted': selectedModel === model }"
                     >
-                      <span class="text-base-content/70">{{ model }}</span>
-                      <Check v-if="selectedModel === model" :size="14" class="text-base-content/50" />
+                      <span class="text-foreground">{{ model }}</span>
+                      <Check v-if="selectedModel === model" :size="14" class="text-primary" />
                     </button>
-                  </div>
+                    </div>
+                  </ScrollArea>
                 </Transition>
               </Teleport>
             </div>
           </div>
 
           <!-- summary preferences -->
-          <div class="rounded-xl bg-base-content/5 p-4 border border-primary/10 space-y-3">
-            <div class="flex items-center gap-2.5">
-              <div class="flex items-center justify-center w-6 h-6 rounded-md bg-primary/15">
-                <FileText :size="12" class="text-primary" />
-              </div>
-              <span class="text-[12px] font-medium text-base-content/70 tracking-wide">summaries</span>
-            </div>
-
-            <div class="flex gap-2">
-              <button
-                class="btn btn-xs flex-1"
-                :class="summaryMode === 'manual' ? 'bg-primary/15 border-primary/30 text-primary' : 'btn-ghost border-base-content/10'"
-                @click="summaryMode = 'manual'"
-              >manual</button>
-              <button
-                class="btn btn-xs flex-1"
-                :class="summaryMode === 'smart' ? 'bg-primary/15 border-primary/30 text-primary' : 'btn-ghost border-base-content/10'"
-                @click="summaryMode = 'smart'"
-              >smart (ask)</button>
-              <button
-                class="btn btn-xs flex-1"
-                :class="summaryMode === 'auto' ? 'bg-primary/15 border-primary/30 text-primary' : 'btn-ghost border-base-content/10'"
-                @click="summaryMode = 'auto'"
-              >auto (trusted)</button>
-            </div>
-
-            <div class="grid grid-cols-2 gap-2">
-              <label class="text-[11px] text-base-content/60 flex items-center gap-2">
-                <span class="w-28">auto min words</span>
-                <input type="number" min="0" class="input input-xs input-bordered w-full" v-model.number="minAutoWords" />
-              </label>
-              <label class="text-[11px] text-base-content/60 flex items-center gap-2">
-                <span class="w-28">prompt min words</span>
-                <input type="number" min="0" class="input input-xs input-bordered w-full" v-model.number="minPromptWords" />
-              </label>
-            </div>
-
-            <div class="grid grid-cols-2 gap-3">
-              <div>
-                <div class="flex items-center justify-between mb-1">
-                  <span class="text-[11px] text-base-content/60">allowlist</span>
-                  <span class="text-[10px] text-base-content/40">one per line</span>
+          <div class="rounded-xl bg-card p-4 border border-border space-y-3">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2.5">
+                <div class="flex items-center justify-center w-6 h-6 rounded-md bg-primary/25">
+                  <FileText :size="12" class="text-primary" />
                 </div>
-                <textarea 
-                  class="textarea textarea-bordered textarea-xs w-full h-28"
-                  v-model="allowlistInput"
-                  placeholder="example.com"
-                ></textarea>
+                <span class="text-[12px] font-medium text-foreground tracking-wide">auto-summarise</span>
               </div>
-              <div>
-                <div class="flex items-center justify-between mb-1">
-                  <span class="text-[11px] text-base-content/60">denylist</span>
-                  <span class="text-[10px] text-base-content/40">one per line</span>
+              <Toggle 
+                :model-value="summaryMode === 'auto'"
+                @update:model-value="(v: boolean) => summaryMode = v ? 'auto' : 'manual'"
+              />
+            </div>
+            <p class="text-[10px] text-foreground/60">when enabled, pages matching the allowlist will be summarised automatically.</p>
+
+            <div v-if="summaryMode === 'auto'" class="space-y-3 pt-2 border-t border-border">
+              <label class="text-[11px] text-foreground/80 flex items-center gap-2">
+                <span class="shrink-0 text-[10px] w-20">min words</span>
+                <Input type="number" min="0" class="w-full h-7 text-[11px]" v-model.number="minAutoWords" />
+              </label>
+
+              <div class="grid grid-cols-2 gap-3">
+                <div>
+                  <div class="flex items-center justify-between mb-1">
+                    <span class="text-[11px] text-foreground/80">allowlist</span>
+                    <span class="text-[10px] text-foreground/50">one per line</span>
+                  </div>
+                  <Textarea 
+                    class="w-full h-28 text-[11px] resize-none"
+                    v-model="allowlistInput"
+                    placeholder="example.com"
+                  />
                 </div>
-                <textarea 
-                  class="textarea textarea-bordered textarea-xs w-full h-28"
-                  v-model="denylistInput"
-                  placeholder="dashboard"
-                ></textarea>
+                <div>
+                  <div class="flex items-center justify-between mb-1">
+                    <span class="text-[11px] text-foreground/80">denylist</span>
+                    <span class="text-[10px] text-foreground/50">one per line</span>
+                  </div>
+                  <Textarea 
+                    class="w-full h-28 text-[11px] resize-none"
+                    v-model="denylistInput"
+                    placeholder="dashboard"
+                  />
+                </div>
               </div>
             </div>
-
-            <p class="text-[10px] text-base-content/45">manual = only on click; smart = prompt on medium-confidence pages; auto = run on trusted/high-confidence pages.</p>
           </div>
 
           <!-- word lookup toggle -->
-          <div class="rounded-xl bg-base-content/5 p-4 border border-secondary/10">
+          <div class="rounded-xl bg-card p-4 border border-border">
             <div class="flex items-center justify-between">
               <div class="flex items-center gap-2.5 group relative cursor-help" title="show definitions on text selection">
-                <div class="flex items-center justify-center w-6 h-6 rounded-md bg-secondary/15">
+                <div class="flex items-center justify-center w-6 h-6 rounded-md bg-secondary/25">
                   <Sparkles :size="12" class="text-secondary" />
                 </div>
-                <span class="text-[12px] font-medium text-base-content/70 tracking-wide">word lookup</span>
+                <span class="text-[12px] font-medium text-foreground tracking-wide">word lookup</span>
               </div>
-              <input 
-                type="checkbox" 
-                class="toggle toggle-sm toggle-secondary" 
-                :checked="wordPopupEnabled"
-                @click="toggleWordPopup"
-              />
-            </div>
-          </div>
-
-          <!-- gmail settings -->
-          <div class="rounded-xl bg-base-content/5 p-4 border border-info/10">
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2.5 group relative cursor-help" title="auto-summarize gmail threads without clicking the button">
-                <div class="flex items-center justify-center w-6 h-6 rounded-md bg-info/15">
-                  <Mail :size="12" class="text-info" />
-                </div>
-                <div>
-                  <span class="text-[12px] font-medium text-base-content/70 tracking-wide block">gmail auto mode</span>
-                  <span class="text-[10px] text-base-content/40">{{ gmailAutoSummarize ? 'auto-summarize threads' : 'click to summarize (recommended)' }}</span>
-                </div>
-              </div>
-              <input 
-                type="checkbox" 
-                class="toggle toggle-sm toggle-info" 
-                :checked="gmailAutoSummarize"
-                @click="toggleGmailAutoSummarize"
+              <Toggle 
+                :model-value="wordPopupEnabled"
+                @update:model-value="toggleWordPopup"
               />
             </div>
           </div>
 
           <!-- dictionaries -->
-          <div class="rounded-xl bg-base-content/5 p-4 border border-accent/10">
+          <div class="rounded-xl bg-card p-4 border border-border">
             <div class="flex items-center gap-2.5 mb-3">
-              <div class="flex items-center justify-center w-6 h-6 rounded-md bg-accent/15">
+              <div class="flex items-center justify-center w-6 h-6 rounded-md bg-accent/25">
                 <Database :size="12" class="text-accent" />
               </div>
-              <span class="text-[12px] font-medium text-base-content/70 tracking-wide">dictionaries</span>
+              <span class="text-[12px] font-medium text-foreground tracking-wide">dictionaries</span>
             </div>
             
-            <div class="space-y-1 max-h-48 overflow-y-auto">
-              <label 
-                v-for="lang in SUPPORTED_LANGUAGES" 
-                :key="lang.code" 
-                class="flex items-center gap-2.5 py-1.5 cursor-pointer hover:bg-base-content/5 rounded-lg px-2 -mx-2 transition-colors"
-              >
-                <input 
-                  type="checkbox"
-                  :checked="selectedLanguages.includes(lang.code)"
-                  @change="toggleLanguage(lang.code)"
-                  class="checkbox checkbox-sm"
-                />
-                <span class="text-[12px] text-base-content/70 flex-1">{{ lang.name }}</span>
-                
-                <span 
-                  v-if="downloadProgress[lang.code]"
-                  class="text-[10px] text-base-content/55"
+            <ScrollArea class="h-48 w-full">
+              <div class="space-y-1 pr-4">
+                <label 
+                  v-for="lang in SUPPORTED_LANGUAGES" 
+                  :key="lang.code" 
+                  class="flex items-center gap-2.5 py-1.5 cursor-pointer hover:bg-muted/50 rounded-lg px-2 -mx-2 transition-colors"
                 >
-                  {{ Number(downloadProgress[lang.code].progress || 0).toFixed(0) }}%
-                </span>
-                
-                <button
-                  v-if="downloadedLanguages.includes(lang.code)"
-                  @click.stop="deleteLanguageData(lang.code)"
-                  class="btn btn-ghost btn-xs text-base-content/30 hover:text-error/70"
-                >
-                  <X :size="12" />
-                </button>
-              </label>
-            </div>
+                  <Checkbox
+                    :checked="selectedLanguages.includes(lang.code)"
+                    @update:checked="toggleLanguage(lang.code)"
+                    class="h-4 w-4"
+                  />
+                  <span class="text-[12px] text-foreground/80 flex-1">{{ lang.name }}</span>
+                  
+                  <span 
+                    v-if="downloadProgress[lang.code]"
+                    class="text-[10px] text-foreground/60"
+                  >
+                    {{ Number(downloadProgress[lang.code].progress || 0).toFixed(0) }}%
+                  </span>
+                  
+                  <button
+                    v-if="downloadedLanguages.includes(lang.code)"
+                    @click.stop="deleteLanguageData(lang.code)"
+                    class="p-1 rounded hover:bg-muted text-foreground/40 hover:text-destructive transition-colors"
+                  >
+                    <X :size="12" />
+                  </button>
+                </label>
+              </div>
+            </ScrollArea>
           </div>
 
           <!-- theme -->
-          <div class="rounded-xl bg-base-content/5 p-4 border border-primary/10">
+          <div class="rounded-xl bg-card p-4 border border-border">
             <div class="flex items-center gap-2.5 mb-3">
-              <div class="flex items-center justify-center w-6 h-6 rounded-md bg-primary/15">
+              <div class="flex items-center justify-center w-6 h-6 rounded-md bg-primary/20">
                 <Sparkles :size="12" class="text-primary" />
               </div>
-              <span class="text-[12px] font-medium text-base-content/70 tracking-wide">theme</span>
+              <span class="text-[12px] font-medium text-foreground tracking-wide">theme</span>
             </div>
             <div class="grid grid-cols-3 gap-2">
               <button
@@ -1422,8 +1299,8 @@ onMounted(async () => {
                 class="flex flex-col items-center gap-1.5 p-2 rounded-lg transition-all"
                 :class="[
                   themeStore.currentTheme === key 
-                    ? 'bg-base-content/10 ring-1 ring-base-content/20' 
-                    : 'hover:bg-base-content/5'
+                    ? 'bg-muted ring-1 ring-border' 
+                    : 'hover:bg-muted/50'
                 ]"
               >
                 <div class="flex gap-0.5">
@@ -1431,64 +1308,35 @@ onMounted(async () => {
                   <div class="w-3 h-3 rounded-full" :style="{ background: themeData.secondary }"></div>
                   <div class="w-3 h-3 rounded-full" :style="{ background: themeData.accent }"></div>
                 </div>
-                <span class="text-[10px] text-base-content/50">{{ themeData.name }}</span>
+                <span class="text-[10px] text-foreground/70">{{ themeData.name }}</span>
               </button>
             </div>
           </div>
 
-          <!-- cache -->
           <div 
-            class="rounded-xl bg-base-content/5 p-4 border border-error/10 group cursor-help"
+            class="rounded-xl bg-card p-4 border border-border group cursor-help"
             title="clear cached summaries"
           >
             <div class="flex items-center justify-between">
               <div class="flex items-center gap-2.5">
-                <div class="flex items-center justify-center w-6 h-6 rounded-md bg-error/15">
-                  <Trash2 :size="12" class="text-error" />
+                <div class="flex items-center justify-center w-6 h-6 rounded-md bg-destructive/20">
+                  <Trash2 :size="12" class="text-destructive" />
                 </div>
-                <span class="text-[12px] font-medium text-base-content/70 tracking-wide">cache</span>
+                <span class="text-[12px] font-medium text-foreground tracking-wide">cache</span>
               </div>
-              <button @click="clearCache" class="btn btn-sm btn-ghost text-[11px] text-error/70 hover:text-error hover:bg-error/10">
+              <button @click="clearCache" class="px-2 py-1 rounded text-[11px] text-destructive/70 hover:text-destructive hover:bg-destructive/10 transition-colors">
                 clear
               </button>
             </div>
           </div>
-
-          <!-- help & support -->
-          <div class="rounded-xl bg-base-content/5 p-4 border border-warning/10">
-            <div class="flex items-center gap-2.5 mb-3">
-              <div class="flex items-center justify-center w-6 h-6 rounded-md bg-warning/15">
-                <HelpCircle :size="12" class="text-warning" />
-              </div>
-              <div>
-                <span class="text-[12px] font-medium text-base-content/70 tracking-wide block">need help?</span>
-                <span class="text-[10px] text-base-content/40">stuck or having problems?</span>
-              </div>
-            </div>
-            <div class="flex gap-2">
-              <button 
-                @click="openSetupGuide" 
-                class="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-warning/10 hover:bg-warning/20 border border-warning/20 text-warning text-[11px] font-medium transition-all"
-              >
-                <ExternalLink :size="11" />
-                setup guide
-              </button>
-              <button 
-                @click="openFaqs" 
-                class="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-base-content/5 hover:bg-base-content/10 border border-base-content/10 text-base-content/60 text-[11px] font-medium transition-all"
-              >
-                <HelpCircle :size="11" />
-                see FAQs
-              </button>
-            </div>
           </div>
-        </div>
+        </ScrollArea>
 
         <!-- error state -->
         <div v-else-if="ollamaStatus === 'error'" class="flex flex-col items-center justify-center h-full p-6">
-          <X :size="32" class="mb-3 text-error/50" />
-          <p class="text-[12px] text-base-content/50 mb-3">connection error</p>
-          <button @click="retryDetection" class="btn btn-sm btn-ghost text-[11px]">
+          <X :size="32" class="mb-3 text-destructive/50" />
+          <p class="text-[12px] text-foreground/70 mb-3">connection error</p>
+          <button @click="retryDetection" class="px-3 py-1.5 rounded-md text-[11px] bg-primary text-primary-foreground hover:bg-primary/90 transition-colors flex items-center gap-1.5">
             <RefreshCw :size="12" />
             retry
           </button>
@@ -1499,29 +1347,6 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-::-webkit-scrollbar {
-  width: 3px;
-  height: 3px;
-}
-
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  background: oklch(from var(--bc) l c h / 0.08);
-  border-radius: 3px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: oklch(from var(--bc) l c h / 0.15);
-}
-
-* {
-  scrollbar-width: thin;
-  scrollbar-color: oklch(from var(--bc) l c h / 0.08) transparent;
-}
-
 .model-dropdown {
   z-index: 9999 !important;
 }
