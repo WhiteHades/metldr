@@ -42,8 +42,8 @@ export class ArticleExtractor {
       return { skip: true, reason: 'system page' };
     }
     
-    const documentClone = document.cloneNode(true);
-    const article = new Readability(documentClone, { charThreshold: 140 }).parse();
+    const documentClone = document.cloneNode(true) as Document
+    const article = new Readability(documentClone, { charThreshold: 140 }).parse()
     
     if (!article?.textContent || article.textContent.length < 100) {
       return { 
