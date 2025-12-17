@@ -1,114 +1,153 @@
-import { OllamaService } from './OllamaService.js';
-import { cacheService } from './CacheService.js';
+import { OllamaService } from './OllamaService'
+import { cacheService } from './CacheService'
+import type {
+  AmountFact,
+  IdFact,
+  DateFact,
+  ContactFact,
+  LinkFact,
+  ExtractedFacts,
+  EmailMetadata,
+  ReplySuggestion,
+  EmailSummary,
+  ParsedLLMSummary,
+  ParsedReply,
+  ParsedReplies
+} from '../types'
 
 export class EmailService {
-  static async summarize(emailContent, emailId = null, metadata = null, force = false) {
-    const startTime = Date.now();
+  static async summarize(
+    emailContent: string, 
+    emailId: string | null = null, 
+    metadata: EmailMetadata | null = null, 
+    force = false
+  ): Promise<EmailSummary> {
+    const startTime = Date.now()
 
     try {
       if (force && emailId) {
         try {
-          await cacheService.deleteReplySuggestions(emailId);
+          await cacheService.deleteReplySuggestions(emailId)
         } catch (err) {
-          console.warn('[EmailService.summarize] failed to clear reply suggestions:', err.message);
+          console.warn('[EmailService.summarize] failed to clear reply suggestions:', (err as Error).message)
         }
       }
 
       if (!force && emailId) {
-        const cached = await cacheService.getEmailSummary(emailId);
+        const cached = await cacheService.getEmailSummary(emailId) as EmailSummary | null
         if (cached) {
-          const elapsed = Date.now() - startTime;          
-          this._maybeGenerateReplies(emailId, emailContent, cached, metadata);
-          return { ...cached, time_ms: elapsed, cached: true };
+          const elapsed = Date.now() - startTime          
+          this._maybeGenerateReplies(emailId, emailContent, cached, metadata)
+          return { ...cached, time_ms: elapsed, cached: true }
         }
       }
 
-      const { available } = await OllamaService.checkAvailable();
-      if (!available) throw new Error('ollama not available');
+      const { available } = await OllamaService.checkAvailable()
+      if (!available) throw new Error('ollama not available')
 
-      const facts = this._extractFacts(emailContent);
+      const facts = this._extractFacts(emailContent)
       if (!facts || !Object.keys(facts).length) {
-        throw new Error('no facts extracted');
+        throw new Error('no facts extracted')
       }
 
-      const model = await OllamaService.selectBest('email_summary');
-      if (!model) throw new Error('no models available');
+      const model = await OllamaService.selectBest('email_summary')
+      if (!model) throw new Error('no models available')
 
       const snippet = emailContent.length > 6000
         ? emailContent.substring(0, 4000) + '\n...[truncated]...\n' + emailContent.substring(emailContent.length - 2000)
-        : emailContent;
+        : emailContent
 
-      const summary = await this._generateSummary(facts, snippet, metadata, model);
+      const summary = await this._generateSummary(facts, snippet, metadata, model)
 
-      const elapsed = Date.now() - startTime;
-      summary.time_ms = elapsed;
-      summary.cached = false;
-      summary.model = model;
+      const elapsed = Date.now() - startTime
+      summary.time_ms = elapsed
+      summary.cached = false
+      summary.model = model
 
       if (emailId) {
-        await cacheService.setEmailSummary(emailId, summary);
-        this._generateRepliesBackground(emailId, emailContent, summary, metadata);
+        await cacheService.setEmailSummary(emailId, summary)
+        this._generateRepliesBackground(emailId, emailContent, summary, metadata)
       }
 
-      return summary;
+      return summary
     } catch (err) {
-      console.error('[EmailService.summarize]', err.message);
-      throw err;
+      console.error('[EmailService.summarize]', (err as Error).message)
+      throw err
     }
   }
 
-  static async _maybeGenerateReplies(emailId, emailContent, summary, metadata) {
+  static async _maybeGenerateReplies(
+    emailId: string, 
+    emailContent: string, 
+    summary: EmailSummary, 
+    metadata: EmailMetadata | null
+  ): Promise<void> {
     try {
-      const cached = await cacheService.getReplySuggestions(emailId);
+      const cached = await cacheService.getReplySuggestions(emailId)
       if (!cached) {
-        this._generateRepliesBackground(emailId, emailContent, summary, metadata);
+        this._generateRepliesBackground(emailId, emailContent, summary, metadata)
       }
     } catch (err) {
-      console.error('[EmailService._maybeGenerateReplies]', err.message);
+      console.error('[EmailService._maybeGenerateReplies]', (err as Error).message)
     }
   }
 
-  static _generateRepliesBackground(emailId, emailContent, summary, metadata) {
+  static _generateRepliesBackground(
+    emailId: string, 
+    emailContent: string, 
+    summary: EmailSummary, 
+    metadata: EmailMetadata | null
+  ): void {
     this.generateReplySuggestions(emailId, emailContent, summary, metadata)
       .then(suggestions => {
         if (suggestions?.length > 0) {
-          console.log('[EmailService] generated', suggestions.length, 'reply suggestions for', emailId);
+          console.log('[EmailService] generated', suggestions.length, 'reply suggestions for', emailId)
         }
       })
       .catch(err => {
-        console.error('[EmailService._generateRepliesBackground]', err.message);
-      });
+        console.error('[EmailService._generateRepliesBackground]', (err as Error).message)
+      })
   }
 
-  static async generateReplySuggestions(emailId, emailContent, summary, metadata = null) {
+  static async generateReplySuggestions(
+    emailId: string, 
+    emailContent: string, 
+    summary: EmailSummary, 
+    metadata: EmailMetadata | null = null
+  ): Promise<ReplySuggestion[]> {
     try {
-      const cached = await cacheService.getReplySuggestions(emailId);
-      if (cached) return cached;
+      const cached = await cacheService.getReplySuggestions(emailId) as ReplySuggestion[] | null
+      if (cached) return cached
 
-      const { available } = await OllamaService.checkAvailable();
-      if (!available) return [];
+      const { available } = await OllamaService.checkAvailable()
+      if (!available) return []
 
-      const model = await OllamaService.selectBest('email_summary');
-      if (!model) return [];
+      const model = await OllamaService.selectBest('email_summary')
+      if (!model) return []
 
       const snippet = emailContent.length > 4000
         ? emailContent.substring(0, 3000) + '\n...[truncated]...\n' + emailContent.substring(emailContent.length - 1000)
-        : emailContent;
+        : emailContent
 
-      const suggestions = await this._generateReplies(snippet, summary, metadata, model);
+      const suggestions = await this._generateReplies(snippet, summary, metadata, model)
       
       if (suggestions?.length > 0 && emailId) {
-        await cacheService.setReplySuggestions(emailId, suggestions);
+        await cacheService.setReplySuggestions(emailId, suggestions)
       }
 
-      return suggestions;
+      return suggestions
     } catch (err) {
-      console.error('[EmailService.generateReplySuggestions]', err.message);
-      return [];
+      console.error('[EmailService.generateReplySuggestions]', (err as Error).message)
+      return []
     }
   }
 
-  static async _generateReplies(snippet, summary, metadata, model) {
+  static async _generateReplies(
+    snippet: string, 
+    summary: EmailSummary | null, 
+    metadata: EmailMetadata | null, 
+    model: string
+  ): Promise<ReplySuggestion[]> {
     const schema = {
       type: 'object',
       required: ['replies'],
@@ -144,11 +183,11 @@ export class EmailService {
           description: 'Array of suggested reply options with varying tones and lengths'
         }
       }
-    };
+    }
 
-    let metadataCtx = '';
+    let metadataCtx = ''
     if (metadata) {
-      metadataCtx = this._buildMetadataContext(metadata);
+      metadataCtx = this._buildMetadataContext(metadata)
     }
 
     const summaryCtx = summary ? `
@@ -157,7 +196,7 @@ SUMMARY OF EMAIL:
 - Summary: ${summary.summary || ''}
 - Action Items: ${(summary.action_items || []).join(', ') || 'none'}
 - Urgency: ${summary.urgency || 'normal'}
-` : '';
+` : ''
 
     const systemPrompt = `You are an expert email assistant. Generate diverse reply options that the user can quickly select and send.
 
@@ -175,7 +214,7 @@ RULES:
 11. For questions, provide helpful and direct answers
 12. Each reply should be immediately sendable with minimal editing
 
-OUTPUT: JSON only. No explanations.`;
+OUTPUT: JSON only. No explanations.`
 
     const userPrompt = `Generate reply suggestions for this email.
 
@@ -185,7 +224,7 @@ ORIGINAL EMAIL:
 ${snippet}
 ---
 
-Generate 3-5 reply options with varying tones (professional/friendly/brief/detailed) and lengths (short/medium/long).`;
+Generate 3-5 reply options with varying tones (professional/friendly/brief/detailed) and lengths (short/medium/long).`
 
     try {
       const result = await OllamaService.complete(
@@ -195,38 +234,38 @@ Generate 3-5 reply options with varying tones (professional/friendly/brief/detai
           { role: 'user', content: userPrompt }
         ],
         { format: schema, temperature: 0.4, top_p: 0.9 }
-      );
+      )
 
       if (!result.ok) {
-        console.error('[EmailService._generateReplies]', result.error);
-        return [];
+        console.error('[EmailService._generateReplies]', result.error)
+        return []
       }
 
-      const parsed = JSON.parse(result.content);
+      const parsed: ParsedReplies = JSON.parse(result.content || '{}')
       return (parsed.replies || []).map((r, idx) => ({
         id: `reply_${idx}`,
         tone: r.tone || 'professional',
         length: r.length || 'medium',
         body: r.body || '',
         label: r.label || `Option ${idx + 1}`
-      }));
+      }))
     } catch (err) {
-      console.error('[EmailService._generateReplies] parse error:', err.message);
-      return [];
+      console.error('[EmailService._generateReplies] parse error:', (err as Error).message)
+      return []
     }
   }
 
-  static async getCachedReplies(emailId) {
+  static async getCachedReplies(emailId: string): Promise<ReplySuggestion[] | null> {
     try {
-      return await cacheService.getReplySuggestions(emailId);
+      return await cacheService.getReplySuggestions(emailId) as ReplySuggestion[] | null
     } catch (err) {
-      console.error('[EmailService.getCachedReplies]', err.message);
-      return null;
+      console.error('[EmailService.getCachedReplies]', (err as Error).message)
+      return null
     }
   }
 
-  static _extractFacts(text) {
-    const facts = {
+  static _extractFacts(text: string): ExtractedFacts {
+    const facts: ExtractedFacts = {
       amounts: [],
       ids: [],
       dates: [],
@@ -235,26 +274,27 @@ Generate 3-5 reply options with varying tones (professional/friendly/brief/detai
       people: [],
       locations: [],
       action_items: []
-    };
+    }
 
     try {
-      const amountRx = /(?:USD|EUR|GBP|INR|BDT|HUF|AUD|CAD|CHF|JPY|CNY|HKD|[A-Z]{3})?\s?[$€£₹]?[\s]*\d{1,3}(?:[\s.,]\d{3})*(?:[.,]\d{2})?\s?(?:USD|EUR|GBP|INR|BDT|HUF|AUD|CAD|CHF|JPY|CNY|HKD|[A-Z]{3})?/g;
-      const amountLabels = [/total/i, /amount/i, /price/i, /fare/i, /paid/i, /due/i];
-      const seenAmounts = new Set();
-      let m;
+      const amountRx = /(?:USD|EUR|GBP|INR|BDT|HUF|AUD|CAD|CHF|JPY|CNY|HKD|[A-Z]{3})?\s?[$€£₹]?[\s]*\d{1,3}(?:[\s.,]\d{3})*(?:[.,]\d{2})?\s?(?:USD|EUR|GBP|INR|BDT|HUF|AUD|CAD|CHF|JPY|CNY|HKD|[A-Z]{3})?/g
+      const amountLabels = [/total/i, /amount/i, /price/i, /fare/i, /paid/i, /due/i]
+      const seenAmounts = new Set<string>()
+      let m: RegExpExecArray | null
 
       while ((m = amountRx.exec(text)) !== null) {
-        const val = m[0].trim();
-        if (val.length < 3) continue;
+        const val = m[0].trim()
+        if (val.length < 3) continue
 
-        const ctx = text.substring(Math.max(0, m.index - 40), m.index + val.length + 10);
-        const label = amountLabels.find(r => r.test(ctx))?.source.replace(/\//g, '') || 'amount';
-        const curr = (val.match(/USD|EUR|GBP|INR|BDT|HUF|AUD|CAD|CHF|JPY|CNY|HKD|[A-Z]{3}/) || [null])[0] || (val.includes('$') ? 'USD' : null);
-        const key = `${label}:${val}:${curr || ''}`;
+        const ctx = text.substring(Math.max(0, m.index - 40), m.index + val.length + 10)
+        const label = amountLabels.find(r => r.test(ctx))?.source.replace(/\//g, '') || 'amount'
+        const currMatch = val.match(/USD|EUR|GBP|INR|BDT|HUF|AUD|CAD|CHF|JPY|CNY|HKD|[A-Z]{3}/)
+        const curr = (currMatch ? currMatch[0] : null) || (val.includes('$') ? 'USD' : null)
+        const key = `${label}:${val}:${curr || ''}`
 
         if (!seenAmounts.has(key)) {
-          facts.amounts.push({ label, value: val.replace(/[^0-9.,]/g, ''), currency: curr });
-          seenAmounts.add(key);
+          facts.amounts.push({ label, value: val.replace(/[^0-9.,]/g, ''), currency: curr })
+          seenAmounts.add(key)
         }
       }
 
@@ -262,91 +302,96 @@ Generate 3-5 reply options with varying tones (professional/friendly/brief/detai
         /(booking|order|invoice|ticket|reference|ref|pnr|record locator)[:#]?\s*([A-Z0-9-]{5,})/gi,
         /(package|parcel)\s+number[:#]?\s*([A-Z0-9 \-]{6,})/gi,
         /(tracking|trace|parcel id|shipment id)[:#]?\s*([A-Z0-9-]{6,})/gi
-      ];
-      const seenIds = new Set();
+      ]
+      const seenIds = new Set<string>()
 
       for (const pattern of idPatterns) {
         while ((m = pattern.exec(text)) !== null) {
-          const label = m[1].toLowerCase().replace(/\s+/g, '_');
-          const value = m[2].replace(/\s{2,}/g, ' ').trim();
-          const key = `${label}:${value}`;
+          const label = m[1].toLowerCase().replace(/\s+/g, '_')
+          const value = m[2].replace(/\s{2,}/g, ' ').trim()
+          const key = `${label}:${value}`
 
           if (!seenIds.has(key)) {
-            facts.ids.push({ label, value });
-            seenIds.add(key);
+            facts.ids.push({ label, value })
+            seenIds.add(key)
           }
         }
       }
 
-      const isoDateRx = /\b\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}(?::\d{2})?)?\b/g;
-      const humanDateRx = /(Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*,?\s+\d{1,2}\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}(?:\s+\d{1,2}:\d{2}(?:\s*[AP]M)?\s*[A-Z]{2,3})?/gi;
-      const seenDates = new Set();
+      const isoDateRx = /\b\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}(?::\d{2})?)?\b/g
+      const humanDateRx = /(Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*,?\s+\d{1,2}\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}(?:\s+\d{1,2}:\d{2}(?:\s*[AP]M)?\s*[A-Z]{2,3})?/gi
+      const seenDates = new Set<string>()
 
       while ((m = isoDateRx.exec(text)) !== null) {
-        const when = m[0];
+        const when = m[0]
         if (!seenDates.has(when)) {
-          facts.dates.push({ label: 'date', when });
-          seenDates.add(when);
+          facts.dates.push({ label: 'date', when })
+          seenDates.add(when)
         }
       }
 
       while ((m = humanDateRx.exec(text)) !== null) {
-        const when = m[0];
+        const when = m[0]
         if (!seenDates.has(when)) {
-          const ctx = text.substring(Math.max(0, m.index - 40), m.index + when.length + 10).toLowerCase();
+          const ctx = text.substring(Math.max(0, m.index - 40), m.index + when.length + 10).toLowerCase()
           const label = /depart|departure|flight|outbound/.test(ctx) ? 'departure'
             : /arriv/.test(ctx) ? 'arrival'
             : /check[- ]?in/.test(ctx) ? 'check-in'
-            : 'date';
+            : 'date'
 
-          facts.dates.push({ label, when });
-          seenDates.add(when);
+          facts.dates.push({ label, when })
+          seenDates.add(when)
         }
       }
 
-      const emailRx = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
-      const phoneRx = /\+?\d[\d\s\-()]{6,}\d/g;
-      const seenContact = new Set();
+      const emailRx = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g
+      const phoneRx = /\+?\d[\d\s\-()]{6,}\d/g
+      const seenContact = new Set<string>()
 
       while ((m = emailRx.exec(text)) !== null) {
-        const v = m[0];
+        const v = m[0]
         if (!seenContact.has(v)) {
-          facts.contacts.push({ type: 'email', value: v });
-          seenContact.add(v);
+          facts.contacts.push({ type: 'email', value: v })
+          seenContact.add(v)
         }
       }
 
       while ((m = phoneRx.exec(text)) !== null) {
-        const v = m[0].trim();
+        const v = m[0].trim()
         if (!seenContact.has(v)) {
-          facts.contacts.push({ type: 'phone', value: v });
-          seenContact.add(v);
+          facts.contacts.push({ type: 'phone', value: v })
+          seenContact.add(v)
         }
       }
 
-      const actionLines = text.split(/\n+/).filter(l => /\b(pay|confirm|check[- ]?in|download|track|manage|reset|verify|complete|submit|reply)\b/i.test(l));
-      facts.action_items = Array.from(new Set(actionLines.map(l => l.trim()).filter(l => l.length > 0 && l.length < 160))).slice(0, 6);
+      const actionLines = text.split(/\n+/).filter(l => /\b(pay|confirm|check[- ]?in|download|track|manage|reset|verify|complete|submit|reply)\b/i.test(l))
+      facts.action_items = Array.from(new Set(actionLines.map(l => l.trim()).filter(l => l.length > 0 && l.length < 160))).slice(0, 6)
 
-      const lines = text.split(/\n+/);
+      const lines = text.split(/\n+/)
       for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim();
+        const line = lines[i].trim()
         if (/^(z[- ]?box|locker|pick[- ]?up point)/i.test(line)) {
-          const next = (lines[i + 1] || '').trim();
-          const loc = [line.replace(/^z[- ]?box\s*/i, 'z-box'), next].filter(Boolean).join(', ');
+          const next = (lines[i + 1] || '').trim()
+          const loc = [line.replace(/^z[- ]?box\s*/i, 'z-box'), next].filter(Boolean).join(', ')
           if (loc.length > 8 && !facts.locations.includes(loc)) {
-            facts.locations.push(loc);
+            facts.locations.push(loc)
           }
         }
       }
 
-      return facts;
+      return facts
     } catch (err) {
-      console.error('[EmailService._extractFacts]', err.message);
-      return facts;
+      console.error('[EmailService._extractFacts]', (err as Error).message)
+      return facts
     }
   }
 
-  static async _generateSummary(facts, snippet, metadata, model) {
+  static async _generateSummary(
+    facts: ExtractedFacts, 
+    snippet: string, 
+    metadata: EmailMetadata | null, 
+    model: string
+  ): Promise<EmailSummary> {
     const intentCategories = [
       'Invoice', 'Receipt', 'Payment', 'Refund', 'Subscription',
       'Meeting Request', 'Calendar Invite', 'Reminder', 'Reschedule', 'Cancellation',
@@ -362,7 +407,7 @@ Generate 3-5 reply options with varying tones (professional/friendly/brief/detai
       'Social Notification', 'Connection Request', 'Mention', 'Comment',
       'Satire/Joke', 'Spam', 'Phishing Attempt', 'Auto-Reply', 'Out of Office',
       'Forwarded', 'Thread Reply', 'Digest', 'Notification', 'Other'
-    ];
+    ]
 
     const schema = {
       type: 'object',
@@ -402,13 +447,13 @@ Generate 3-5 reply options with varying tones (professional/friendly/brief/detai
           }
         }
       }
-    };
+    }
 
-    const factsText = this._buildFactsSummary(facts);
+    const factsText = this._buildFactsSummary(facts)
 
-    let metadataCtx = '';
+    let metadataCtx = ''
     if (metadata) {
-      metadataCtx = this._buildMetadataContext(metadata);
+      metadataCtx = this._buildMetadataContext(metadata)
     }
 
     const systemPrompt = `You are an expert Executive Assistant who processes all types of emails. Your job is to filter noise, extract signal, and classify accurately.
@@ -430,7 +475,7 @@ SPECIAL CASES:
 - Travel bookings: include dates, confirmation numbers, locations
 - Security alerts: always mark as high/critical urgency
 
-OUTPUT: JSON only. No explanations outside the schema.`;
+OUTPUT: JSON only. No explanations outside the schema.`
 
     const userPrompt = `Analyze this email and classify it accurately.
 
@@ -449,9 +494,9 @@ STEPS:
 4. Extract concrete action items (if any)
 5. Assess urgency based on deadlines and content type
 
-Respond with JSON matching the schema. Be precise with intent classification.`;
+Respond with JSON matching the schema. Be precise with intent classification.`
 
-    return await OllamaService.tryWithFallback(async (selectedModel) => {
+    return await OllamaService.tryWithFallback(async (selectedModel: string): Promise<EmailSummary> => {
       const result = await OllamaService.complete(
         selectedModel,
         [
@@ -459,114 +504,114 @@ Respond with JSON matching the schema. Be precise with intent classification.`;
           { role: 'user', content: userPrompt }
         ],
         { format: schema, temperature: 0.1, top_p: 0.8 }
-      );
+      )
 
-      if (!result.ok) throw new Error(result.error);
+      if (!result.ok) throw new Error(result.error)
 
-      const parsed = JSON.parse(result.content);
+      const parsed: ParsedLLMSummary = JSON.parse(result.content || '{}')
 
-      const mainDate = parsed.key_details?.main_date || (facts.dates?.[0]?.when);
-      const bookingRef = parsed.key_details?.booking_reference || (facts.ids?.[0]?.value);
-      const amount = parsed.key_details?.amount || (facts.amounts?.[0] ? `${facts.amounts[0].value} ${facts.amounts[0].currency || ''}` : null);
+      const mainDate = parsed.key_details?.main_date || (facts.dates?.[0]?.when)
+      const bookingRef = parsed.key_details?.booking_reference || (facts.ids?.[0]?.value)
+      const amount = parsed.key_details?.amount || (facts.amounts?.[0] ? `${facts.amounts[0].value} ${facts.amounts[0].currency || ''}` : null)
 
-      const badPatterns = /^(whenever|maybe|consider|possibly|if you|you could)/i;
+      const badPatterns = /^(whenever|maybe|consider|possibly|if you|you could)/i
       const actionItems = (parsed.action_items || [])
         .filter(item => item && item.length > 3 && !badPatterns.test(item.trim()))
-        .slice(0, 4);
+        .slice(0, 4)
 
       return {
         summary: parsed.summary || 'no summary generated',
         action_items: actionItems,
         dates: mainDate ? [mainDate] : [],
         key_facts: { 
-          booking_reference: bookingRef, 
-          amount,
+          booking_reference: bookingRef || null, 
+          amount: amount || null,
           sender_org: parsed.key_details?.sender_org || null
         },
         intent: parsed.intent || null,
         reasoning: parsed.reasoning || null,
         urgency: parsed.urgency || 'normal'
-      };
-    }, 'email_summary');
+      }
+    }, 'email_summary')
   }
 
-  static _buildFactsSummary(facts) {
-    const lines = [];
+  static _buildFactsSummary(facts: ExtractedFacts): string {
+    const lines: string[] = []
 
     if (facts.amounts?.length > 0) {
-      lines.push('amounts:');
-      facts.amounts.forEach(a => lines.push(`- ${a.label}: ${a.value} ${a.currency || ''}`));
+      lines.push('amounts:')
+      facts.amounts.forEach(a => lines.push(`- ${a.label}: ${a.value} ${a.currency || ''}`))
     }
 
     if (facts.ids?.length > 0) {
-      lines.push('\nids:');
-      facts.ids.forEach(id => lines.push(`- ${id.label}: ${id.value}`));
+      lines.push('\nids:')
+      facts.ids.forEach(id => lines.push(`- ${id.label}: ${id.value}`))
     }
 
     if (facts.dates?.length > 0) {
-      lines.push('\ndates:');
-      facts.dates.forEach(d => lines.push(`- ${d.label}: ${d.when}`));
+      lines.push('\ndates:')
+      facts.dates.forEach(d => lines.push(`- ${d.label}: ${d.when}`))
     }
 
     if (facts.people?.length > 0) {
-      lines.push('\npeople:');
-      facts.people.forEach(p => lines.push(`- ${p}`));
+      lines.push('\npeople:')
+      facts.people.forEach(p => lines.push(`- ${p}`))
     }
 
     if (facts.locations?.length > 0) {
-      lines.push('\nlocations:');
-      facts.locations.forEach(l => lines.push(`- ${l}`));
+      lines.push('\nlocations:')
+      facts.locations.forEach(l => lines.push(`- ${l}`))
     }
 
     if (facts.action_items?.length > 0) {
-      lines.push('\nactions:');
-      facts.action_items.forEach(a => lines.push(`- ${a}`));
+      lines.push('\nactions:')
+      facts.action_items.forEach(a => lines.push(`- ${a}`))
     }
 
     if (facts.contacts?.length > 0) {
-      lines.push('\ncontacts:');
-      facts.contacts.forEach(c => lines.push(`- ${c.type}: ${c.value}`));
+      lines.push('\ncontacts:')
+      facts.contacts.forEach(c => lines.push(`- ${c.type}: ${c.value}`))
     }
 
     if (facts.links?.length > 0) {
-      lines.push('\nlinks:');
-      facts.links.forEach(l => { if (l.url) lines.push(`- ${l.label}: ${l.url}`); });
+      lines.push('\nlinks:')
+      facts.links.forEach(l => { if (l.url) lines.push(`- ${l.label}: ${l.url}`) })
     }
 
-    return lines.join('\n') || 'no facts extracted';
+    return lines.join('\n') || 'no facts extracted'
   }
 
-  static _buildMetadataContext(metadata) {
-    if (!metadata) return '';
+  static _buildMetadataContext(metadata: EmailMetadata): string {
+    if (!metadata) return ''
 
-    const lines = ['EMAIL METADATA:'];
-    const fromName = metadata.from || metadata.sender || null;
-    const fromEmail = metadata.fromEmail || metadata.senderEmail || null;
-    const fromLine = [fromName, fromEmail ? `<${fromEmail}>` : null].filter(Boolean).join(' ').trim();
-    if (fromLine) lines.push(`From: ${fromLine}`);
+    const lines = ['EMAIL METADATA:']
+    const fromName = metadata.from || metadata.sender || null
+    const fromEmail = metadata.fromEmail || metadata.senderEmail || null
+    const fromLine = [fromName, fromEmail ? `<${fromEmail}>` : null].filter(Boolean).join(' ').trim()
+    if (fromLine) lines.push(`From: ${fromLine}`)
 
-    const replyTo = metadata.replyTo || metadata['reply-to'] || null;
-    if (replyTo) lines.push(`Reply-To: ${replyTo}`);
+    const replyTo = metadata.replyTo || metadata['reply-to'] || null
+    if (replyTo) lines.push(`Reply-To: ${replyTo}`)
 
-    const toList = metadata.toList || metadata.toRecipients || null;
-    const to = metadata.to || (Array.isArray(toList) ? toList.join(', ') : null);
-    if (to) lines.push(`To: ${to}`);
+    const toList = metadata.toList || metadata.toRecipients || null
+    const to = metadata.to || (Array.isArray(toList) ? toList.join(', ') : null)
+    if (to) lines.push(`To: ${to}`)
 
-    const ccList = metadata.ccList || metadata.ccRecipients || null;
-    const cc = metadata.cc || (Array.isArray(ccList) ? ccList.join(', ') : null);
-    if (cc) lines.push(`Cc: ${cc}`);
+    const ccList = metadata.ccList || metadata.ccRecipients || null
+    const cc = metadata.cc || (Array.isArray(ccList) ? ccList.join(', ') : null)
+    if (cc) lines.push(`Cc: ${cc}`)
 
-    const bccList = metadata.bccList || metadata.bccRecipients || null;
-    const bcc = metadata.bcc || (Array.isArray(bccList) ? bccList.join(', ') : null);
-    if (bcc) lines.push(`Bcc: ${bcc}`);
+    const bccList = metadata.bccList || metadata.bccRecipients || null
+    const bcc = metadata.bcc || (Array.isArray(bccList) ? bccList.join(', ') : null)
+    if (bcc) lines.push(`Bcc: ${bcc}`)
 
-    if (metadata.date) lines.push(`Date: ${metadata.date}`);
-    if (metadata.subject) lines.push(`Subject: ${metadata.subject}`);
-    if (metadata.mailedBy) lines.push(`Mailed-By: ${metadata.mailedBy}`);
-    if (metadata.signedBy) lines.push(`Signed-By: ${metadata.signedBy}`);
-    if (metadata.participants?.length) lines.push(`Participants: ${metadata.participants.join(', ')}`);
-    if (metadata.emailCount) lines.push(`Message Count: ${metadata.emailCount}`);
+    if (metadata.date) lines.push(`Date: ${metadata.date}`)
+    if (metadata.subject) lines.push(`Subject: ${metadata.subject}`)
+    if (metadata.mailedBy) lines.push(`Mailed-By: ${metadata.mailedBy}`)
+    if (metadata.signedBy) lines.push(`Signed-By: ${metadata.signedBy}`)
+    if (metadata.participants?.length) lines.push(`Participants: ${metadata.participants.join(', ')}`)
+    if (metadata.emailCount) lines.push(`Message Count: ${metadata.emailCount}`)
 
-    return lines.join('\n') + '\n\n';
+    return lines.join('\n') + '\n\n'
   }
 }
