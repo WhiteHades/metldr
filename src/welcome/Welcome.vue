@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue';
-import { useThemeStore } from '../stores/theme.js';
-import { getOsType, getSetupCommands } from '../utils/platformUtils.js';
+import { useThemeStore } from '../stores/theme';
+import { getOsType, getSetupCommands } from '../utils/platformUtils';
 import { gsap } from 'gsap';
 import { 
   Download, Terminal, Cpu, Sparkles, Check, Copy, 
