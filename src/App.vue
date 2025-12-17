@@ -10,7 +10,7 @@ import { marked } from 'marked'
 import { 
   Sparkles, BarChart3, Settings, Loader2, ChevronDown, ChevronUp, Check, 
   Send, Trash2, X, RefreshCw, Database,
-  Zap, Server, Circle, MessageCircle, FileText, AlertCircle
+  Zap, Server, Circle, MessageCircle, FileText, AlertCircle, HelpCircle
 } from 'lucide-vue-next'
 import type {
   AppPageSummary,
@@ -1368,6 +1368,21 @@ onMounted(async () => {
               </div>
               <button @click="clearCache" class="px-2 py-1 rounded text-[11px] text-destructive/70 hover:text-destructive hover:bg-destructive/10 transition-colors">
                 clear
+              </button>
+            </div>
+          </div>
+
+          <!-- help -->
+          <div class="rounded-xl bg-card p-4 border border-border">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2.5">
+                <div class="flex items-center justify-center w-6 h-6 rounded-md bg-info/20">
+                  <HelpCircle :size="12" class="text-info" />
+                </div>
+                <span class="text-[12px] font-medium text-foreground tracking-wide">help</span>
+              </div>
+              <button @click="openWelcomePage" class="px-2 py-1 rounded text-[11px] text-foreground/70 hover:text-foreground hover:bg-muted transition-colors">
+                open guide
               </button>
             </div>
           </div>

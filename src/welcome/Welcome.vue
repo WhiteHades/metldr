@@ -8,6 +8,7 @@ import {
   ChevronRight, ChevronDown, ExternalLink, Zap, Shield, Globe,
   FileText, MessageCircle, Mail, Reply, BookOpen, Languages, HelpCircle
 } from 'lucide-vue-next';
+import { Button } from '../components/ui';
 
 const themeStore = useThemeStore();
 const detectedOs = ref(getOsType());
@@ -218,7 +219,6 @@ onMounted(async () => {
         
         <div class="badge">
           <div class="pulse-ring"></div>
-          <Sparkles :size="16" />
           <span>private & local ai</span>
         </div>
         
@@ -289,20 +289,21 @@ onMounted(async () => {
               
               <div class="command-box">
                 <code>{{ platformSetup.install }}</code>
-                <button 
+                <Button 
                   @click="copyToClipboard(platformSetup.install, 'install')"
-                  class="copy-btn"
+                  class="copy-btn p-0 h-7 w-7"
+                  variant="ghost"
                   :class="{ copied: copiedStates['install'] }"
                 >
                   <Check v-if="copiedStates['install']" :size="16" />
                   <Copy v-else :size="16" />
-                </button>
+                </Button>
               </div>
               
-              <button @click="openOllamaWebsite" class="link-btn">
+              <Button @click="openOllamaWebsite" variant="link" class="link-btn h-auto p-0 font-normal">
                 or download from ollama.com
                 <ExternalLink :size="12" />
-              </button>
+              </Button>
             </div>
           </div>
           
@@ -323,14 +324,15 @@ onMounted(async () => {
                 <p class="step-subtitle">{{ platformSetup.permanentSetup.commandNote }}</p>
                 <div class="command-box">
                   <code>{{ platformSetup.permanentSetup.command }}</code>
-                  <button 
+                  <Button 
                     @click="copyToClipboard(platformSetup.permanentSetup.command, 'permanent')"
-                    class="copy-btn"
+                    class="copy-btn p-0 h-7 w-7"
+                    variant="ghost"
                     :class="{ copied: copiedStates['permanent'] }"
                   >
                     <Check v-if="copiedStates['permanent']" :size="16" />
                     <Copy v-else :size="16" />
-                  </button>
+                  </Button>
                 </div>
                 <p class="step-note">after running this, right-click ollama in the system tray → quit, then relaunch it.</p>
                 
@@ -349,14 +351,15 @@ onMounted(async () => {
                 <p class="step-subtitle">{{ platformSetup.permanentSetup.commandNote }}</p>
                 <div class="command-box">
                   <code>{{ platformSetup.permanentSetup.command }}</code>
-                  <button 
+                  <Button 
                     @click="copyToClipboard(platformSetup.permanentSetup.command, 'permanent')"
-                    class="copy-btn"
+                    class="copy-btn p-0 h-7 w-7"
+                    variant="ghost"
                     :class="{ copied: copiedStates['permanent'] }"
                   >
                     <Check v-if="copiedStates['permanent']" :size="16" />
                     <Copy v-else :size="16" />
-                  </button>
+                  </Button>
                 </div>
                 <p class="step-note">then quit ollama from the menu bar (click the llama icon → quit) and relaunch it.</p>
               </template>
@@ -366,33 +369,34 @@ onMounted(async () => {
                 <p class="step-subtitle">{{ platformSetup.permanentSetup.commandNote }}</p>
                 <div v-for="(cmd, i) in platformSetup.permanentSetup.commands" :key="i" class="command-box" style="margin-bottom: 8px;">
                   <code>{{ cmd }}</code>
-                  <button 
+                  <Button 
                     @click="copyToClipboard(cmd, `linux-${i}`)"
-                    class="copy-btn"
+                    class="copy-btn p-0 h-7 w-7"
+                    variant="ghost"
                     :class="{ copied: copiedStates[`linux-${i}`] }"
                   >
                     <Check v-if="copiedStates[`linux-${i}`]" :size="16" />
                     <Copy v-else :size="16" />
-                  </button>
+                  </Button>
                 </div>
               </template>
               
-              <!-- quick test fallback -->
               <details class="alt-method">
                 <summary>
-                  <span>⚡ quick test (temporary, this session only)</span>
+                  <span>quick test (temporary, this session only)</span>
                 </summary>
                 <p class="alt-desc">if you just want to test quickly, run this in a terminal. note: you'll need to run it again each time.</p>
                 <div class="command-box">
                   <code>{{ platformSetup.serve }}</code>
-                  <button 
+                  <Button 
                     @click="copyToClipboard(platformSetup.serve, 'serve')"
-                    class="copy-btn"
+                    class="copy-btn p-0 h-7 w-7"
+                    variant="ghost"
                     :class="{ copied: copiedStates['serve'] }"
                   >
                     <Check v-if="copiedStates['serve']" :size="16" />
                     <Copy v-else :size="16" />
-                  </button>
+                  </Button>
                 </div>
               </details>
             </div>
@@ -427,27 +431,30 @@ onMounted(async () => {
             <p class="model-desc">{{ model.desc }}</p>
             <div class="model-cmd">
               <code>ollama pull {{ model.name }}</code>
-              <button 
+              <Button 
                 @click="copyToClipboard(`ollama pull ${model.name}`, model.name)"
-                class="copy-btn-sm"
+                class="copy-btn-sm p-0 h-5 w-5"
+                variant="ghost"
                 :class="{ copied: copiedStates[model.name] }"
               >
                 <Check v-if="copiedStates[model.name]" :size="12" />
                 <Copy v-else :size="12" />
-              </button>
+              </Button>
             </div>
           </div>
         </div>
         
-        <p class="models-tip">💡 copy any command above, paste it in your terminal, and hit enter. start with a small model - you can always add more later!</p>
+        <div class="models-tip-glow">
+          <p class="models-tip">copy any command above, paste it in your terminal, and hit enter. start with a small model - you can always add more later!</p>
+        </div>
       </section>
       
       <!-- cta -->
       <section ref="ctaRef" class="cta-section">
-        <button @click="getStarted" class="cta-btn">
+        <Button @click="getStarted" class="cta-btn h-auto">
           <span>get started</span>
           <ChevronRight :size="22" />
-        </button>
+        </Button>
         <p class="cta-hint">you can reopen this guide anytime from settings</p>
       </section>
       
@@ -1016,10 +1023,37 @@ onMounted(async () => {
   color: #4ade80;
 }
 
+.models-tip-glow {
+  max-width: 600px;
+  margin: 0 auto;
+  padding: 16px 24px;
+  background: rgba(251, 191, 36, 0.05);
+  border: 1px solid rgba(251, 191, 36, 0.2);
+  border-radius: 12px;
+  box-shadow: 0 0 30px rgba(251, 191, 36, 0.05);
+  position: relative;
+  overflow: hidden;
+}
+
+.models-tip-glow::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: radial-gradient(circle at center, rgba(251, 191, 36, 0.1) 0%, transparent 70%);
+  pointer-events: none;
+}
+
 .models-tip {
   text-align: center;
   font-size: 14px;
-  color: #71717a;
+  color: #fbbf24;
+  line-height: 1.6;
+  position: relative;
+  z-index: 1;
+  font-weight: 500;
 }
 
 /* cta */
