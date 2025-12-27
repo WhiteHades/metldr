@@ -1,6 +1,9 @@
-import { SUPPORTED_LANGUAGES } from '../lib/StorageManager'
+import { SUPPORTED_LANGUAGES } from '../utils/storage'
+import { storageService } from './StorageService'
+import { logger } from './LoggerService'
 import type { DictionaryEntry } from '../types'
 
+const log = logger.createScoped('DictionaryService')
 const DB_DICT = 'metldr-dictionary'
 const DB_VERSION = 3
 
@@ -15,11 +18,11 @@ export class DictionaryService {
     if (this.db) return
 
     this.initPromise = new Promise<void>((resolve, reject) => {
-      console.log('[DictionaryService] opening db:', DB_DICT, 'v' + DB_VERSION)
+      log.log('opening db:', DB_DICT + ' v' + DB_VERSION)
       const req = indexedDB.open(DB_DICT, DB_VERSION)
 
       req.onerror = () => {
-        console.error('[DictionaryService] open failed:', req.error)
+        log.error('open failed', req.error)
         this.initPromise = null
         reject(req.error)
       }
@@ -27,7 +30,7 @@ export class DictionaryService {
       req.onsuccess = () => {
         this.db = req.result
         const stores = Array.from(this.db.objectStoreNames)
-        console.log('[DictionaryService] db opened, stores:', stores)
+        log.log('db opened, stores:', stores)
         this.initPromise = null
         resolve()
       }
@@ -56,14 +59,13 @@ export class DictionaryService {
     }
 
     try {
-      const result = await chrome.storage.local.get(['selectedLanguages'])
-      const stored = result.selectedLanguages
+      const stored = await storageService.get<string[] | Record<string, string>>('selectedLanguages', ['en'])
       let langs: string[]
 
       if (!stored) {
         langs = ['en']
       } else if (Array.isArray(stored)) {
-        langs = stored as string[]
+        langs = stored
       } else if (typeof stored === 'object') {
         langs = Object.values(stored).filter((l): l is string => typeof l === 'string')
       } else {
@@ -76,7 +78,7 @@ export class DictionaryService {
       this.languageCacheTime = now
       return langs
     } catch (err) {
-      console.error('[DictionaryService.getSelectedLanguages]', (err as Error).message)
+      log.error('getSelectedLanguages failed', (err as Error).message)
       return ['en']
     }
   }
@@ -86,7 +88,7 @@ export class DictionaryService {
       try {
         await this.init()
       } catch (err) {
-        console.error('[DictionaryService.find] init failed:', (err as Error).message)
+        log.error('init failed', (err as Error).message)
         return null
       }
     }
@@ -94,12 +96,12 @@ export class DictionaryService {
     const searchLangs = languages || (await this.getSelectedLanguages())
     const normalizedWord = word.toLowerCase().trim()
     
-    console.log('[DictionaryService.find] looking up:', normalizedWord, 'in langs:', searchLangs)
+    log.debug('looking up: ' + normalizedWord + ' in langs:', searchLangs)
 
     for (const langCode of searchLangs) {
       try {
         if (!this.db!.objectStoreNames.contains(langCode)) {
-          console.log('[DictionaryService.find] store not found:', langCode)
+          log.debug('store not found: ' + langCode)
           continue
         }
 
@@ -110,13 +112,13 @@ export class DictionaryService {
 
           req.onsuccess = () => resolve(req.result)
           req.onerror = () => {
-            console.log('[DictionaryService.find] get error:', req.error)
+            log.debug('get error: ' + req.error)
             resolve(undefined)
           }
         })
 
         if (result) {
-          console.log('[DictionaryService.find] found in', langCode, ':', result.word)
+          log.debug('found in ' + langCode + ': ' + result.word)
           return {
             definitions: [{
               definition: result.definition,
@@ -130,12 +132,12 @@ export class DictionaryService {
           }
         }
       } catch (err) {
-        console.log(`[DictionaryService.find] lookup failed for ${langCode}:`, (err as Error).message)
+        log.debug('lookup failed for ' + langCode + ': ' + (err as Error).message)
         continue
       }
     }
 
-    console.log('[DictionaryService.find] word not found in any lang')
+    log.debug('word not found in any lang')
     return null
   }
 

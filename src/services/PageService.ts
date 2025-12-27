@@ -1,13 +1,7 @@
 import { OllamaService } from './OllamaService'
 import { cacheService } from './CacheService'
-import type {
-  ExtractedData,
-  SummaryTiming,
-  PageSummary,
-  ChatMessage,
-  PageContext,
-  ChatResult
-} from '../types'
+import { aiGateway, AIPrompts } from './ai'
+import type { ExtractedData, SummaryTiming, PageSummary, ChatMessage, PageContext, ChatResult } from '../types'
 
 export class PageService {
 
@@ -32,41 +26,29 @@ export class PageService {
     metadata += '\n---\nARTICLE CONTENT:\n\n'
 
     const fullContent = metadata + content
-
-    const model = await OllamaService.selectBest('page_summary')
-    if (!model) throw new Error('no models available')
-
     const llmStart = performance.now()
-    const result = await OllamaService.complete(
-      model,
-      [
-        { role: 'system', content: `you are a factual summariser. extract the most important points from articles.
 
-RULES:
-1. only use information explicitly stated in the article
-2. never infer or add information not in the text
-3. include specific names, numbers, dates exactly as stated
-4. output exactly 3 bullet points, each starting with "- "
-5. each bullet should be specific, not vague` },
-        { role: 'user', content: `${fullContent}\n---\n\nWrite 3 bullet points summarising the key facts:` }
-      ],
-      { temperature: 0.1 }
-    )
+    console.log('[PageService] summarizing, length:', fullContent.length)
+
+    const result = await aiGateway.summarize({
+      content: fullContent,
+      context: `This article is titled "${title}"`,
+      type: 'key-points',
+      length: 'medium'
+    })
+
     timing.llm = Math.round(performance.now() - llmStart)
 
-    if (!result.ok) throw new Error(result.error)
+    console.log('[PageService] result:', { ok: result.ok, provider: result.provider, len: result.summary?.length })
 
-    const bullets = (result.content || '')
-      .split('\n')
-      .map(l => l.trim())
-      .filter(l => /^[-•]|^\d+\./.test(l))
-      .map(l => l.replace(/^[-•]\s*/, '').replace(/^\d+\.\s*/, ''))
-      .filter(l => l.length > 10)
-      .slice(0, 3)
+    if (!result.ok) throw new Error(result.error || 'summarization failed')
+
+    const bullets = this._parseBullets(result.summary || '')
 
     timing.total = Math.round(performance.now() - startTotal)
     timing.cached = false
-    timing.model = model
+    timing.model = result.provider === 'chrome-ai' ? 'gemini-nano' : 'ollama'
+    timing.provider = result.provider
 
     const summary: PageSummary = {
       title, author, publishDate, publication,
@@ -80,17 +62,27 @@ RULES:
     return summary
   }
 
+  private static _parseBullets(text: string): string[] {
+    const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0)
+    
+    // match: - bullet, • bullet, * bullet, 1. numbered
+    const bullets = lines
+      .filter(l => /^[-•*]|^\d+\./.test(l))
+      .map(l => l.replace(/^[-•*]\s*/, '').replace(/^\d+\.\s*/, '').trim())
+      .filter(l => l.length > 10)
+      .slice(0, 5)
+
+    // fallback: use raw lines if no bullets found
+    if (bullets.length === 0 && lines.length > 0) {
+      return lines.filter(l => l.length > 15).slice(0, 3)
+    }
+
+    return bullets
+  }
+
   static async chat(messages: ChatMessage[], pageContext: PageContext | null, model: string | null): Promise<ChatResult> {
     const startTime = performance.now()
     
-    let selectedModel = model
-    if (!selectedModel) selectedModel = await OllamaService.selectBest('page_summary')
-    
-    if (!selectedModel) {
-      console.error('[PageService.chat] no model available')
-      return { ok: false, error: 'no models available' }
-    }
-
     let contextText = pageContext?.fullContent || ''
 
     const MAX_CONTEXT = 50000
@@ -103,28 +95,55 @@ RULES:
     }
 
     const systemPrompt = contextText 
-      ? `you are an assistant helping the user understand an article.\n\nARTICLE CONTENT:\n${contextText}\n\nRULES:\n1. answer based ONLY on the article above\n2. if info isn't in the article, say so\n3. be concise (2-3 sentences unless more needed)`
-      : 'you are a helpful assistant. be concise.'
+      ? AIPrompts.chat.withContext({ content: contextText })
+      : AIPrompts.chat.noContext
+
+    const lastUserMsg = messages.filter(m => m.role === 'user').pop()?.content || ''
+
+    // use aiGateway.complete which respects provider preference
+    const result = await aiGateway.complete({
+      systemPrompt,
+      userPrompt: lastUserMsg,
+      temperature: 0.3
+    })
+    
+    if (result.ok) {
+      const isChrome = aiGateway.getPreference() === 'chrome-ai'
+      return {
+        ok: true,
+        content: result.content,
+        timing: { 
+          total: Math.round(performance.now() - startTime), 
+          model: isChrome ? 'gemini-nano' : (model || 'ollama')
+        }
+      }
+    }
+
+    // fallback to ollama directly if gateway failed
+    let selectedModel = model
+    if (!selectedModel) selectedModel = await OllamaService.selectBest('page_summary')
+    
+    if (!selectedModel) {
+      return { ok: false, error: result.error || 'no ai available' }
+    }
 
     const useLongTimeout = contextText.length > 2000
 
     try {
-      const result = await OllamaService.complete(
+      const ollamaResult = await OllamaService.complete(
         selectedModel,
         [{ role: 'system', content: systemPrompt }, ...messages.slice(-6)],
         { temperature: 0.2, longContext: useLongTimeout }
       )
       
       return {
-        ...result,
-        timing: {
-          total: Math.round(performance.now() - startTime),
-          model: selectedModel
-        }
+        ...ollamaResult,
+        timing: { total: Math.round(performance.now() - startTime), model: selectedModel }
       }
     } catch (err) {
-      console.error('[PageService.chat] error:', (err as Error).message)
+      console.error('[PageService.chat]', (err as Error).message)
       return { ok: false, error: (err as Error).message || 'chat failed' }
     }
   }
 }
+

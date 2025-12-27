@@ -1,256 +1,213 @@
-const DB_CACHE = 'metldr_cache'
-const DB_VERSION = 4
+import { databaseService, DB_CONFIGS } from './DatabaseService'
+import { logger } from './LoggerService'
+import type { AppPageSummary, AppChatMessage } from '@/types'
+
+const log = logger.createScoped('CacheService')
 const STORE_SUMMARIES = 'summaries'
 const STORE_PAGE_CACHE = 'page_cache'
 const STORE_REPLY_SUGGESTIONS = 'reply_suggestions'
+const STORE_TAB_SESSIONS = 'tab_sessions'
+
+interface CacheEntry<T> {
+  timestamp: number
+  ttl: number
+  data: T
+}
+
+interface EmailSummaryEntry extends CacheEntry<unknown> {
+  emailId: string
+  summary: unknown
+}
+
+interface PageSummaryEntry extends CacheEntry<unknown> {
+  url: string
+  summary: unknown
+}
+
+interface ReplySuggestionsEntry extends CacheEntry<unknown> {
+  emailId: string
+  suggestions: unknown
+}
+
+export interface TabSessionEntry {
+  url: string
+  timestamp: number
+  chatMessages: AppChatMessage[]
+  pageSummary: AppPageSummary | null
+  summaryCollapsed: boolean
+}
 
 export class CacheService {
-  private db: IDBDatabase | null = null
-
-  async init(): Promise<void> {
-    if (this.db) return
-
-    return new Promise<void>((resolve, reject) => {
-      const req = indexedDB.open(DB_CACHE, DB_VERSION)
-
-      req.onerror = () => {
-        console.error('[CacheService] open failed:', req.error)
-        reject(req.error)
-      }
-
-      req.onsuccess = () => {
-        this.db = req.result
-        resolve()
-      }
-
-      req.onupgradeneeded = (event) => {
-        const target = event.target as IDBOpenDBRequest
-        const db = target.result
-        if (!db.objectStoreNames.contains(STORE_SUMMARIES)) {
-          db.createObjectStore(STORE_SUMMARIES, { keyPath: 'emailId' })
-        }
-        if (!db.objectStoreNames.contains(STORE_PAGE_CACHE)) {
-          db.createObjectStore(STORE_PAGE_CACHE, { keyPath: 'url' })
-        }
-        if (!db.objectStoreNames.contains(STORE_REPLY_SUGGESTIONS)) {
-          db.createObjectStore(STORE_REPLY_SUGGESTIONS, { keyPath: 'emailId' })
-        }
-      }
-    })
+  private isExpired(entry: { timestamp?: number; ttl?: number }): boolean {
+    if (!entry.timestamp || !entry.ttl) return false
+    return Date.now() > entry.timestamp + entry.ttl
   }
 
   async getEmailSummary(emailId: string): Promise<unknown> {
-    if (!this.db) await this.init()
+    try {
+      const result = await databaseService.get<EmailSummaryEntry>(DB_CONFIGS.cache, STORE_SUMMARIES, emailId)
+      if (!result) return null
 
-    return new Promise((resolve) => {
-      try {
-        const tx = this.db!.transaction([STORE_SUMMARIES], 'readonly')
-        const store = tx.objectStore(STORE_SUMMARIES)
-        const req = store.get(emailId)
-
-        req.onsuccess = () => {
-          const result = req.result
-          if (!result) {
-            resolve(null)
-            return
-          }
-
-          if (result.timestamp && result.ttl) {
-            const now = Date.now()
-            if (now > result.timestamp + result.ttl) {
-              this.deleteEmailSummary(emailId).catch(() => {})
-              resolve(null)
-              return
-            }
-          }
-
-          resolve(result.summary)
-        }
-
-        req.onerror = () => resolve(null)
-      } catch (err) {
-        console.error('[CacheService.getEmailSummary]', (err as Error).message)
-        resolve(null)
+      if (this.isExpired(result)) {
+        this.deleteEmailSummary(emailId).catch(() => {})
+        return null
       }
-    })
+
+      return result.summary
+    } catch (err) {
+      log.error('getEmailSummary failed', (err as Error).message)
+      return null
+    }
   }
 
   async setEmailSummary(emailId: string, summary: unknown, ttlMs = 7 * 24 * 60 * 60 * 1000): Promise<void> {
-    if (!this.db) await this.init()
-
     try {
-      const tx = this.db!.transaction([STORE_SUMMARIES], 'readwrite')
-      const store = tx.objectStore(STORE_SUMMARIES)
-      store.put({
+      await databaseService.put(DB_CONFIGS.cache, STORE_SUMMARIES, {
         emailId,
         summary,
         timestamp: Date.now(),
         ttl: ttlMs
       })
-      
       chrome.runtime.sendMessage({ type: 'SUMMARY_ADDED', emailId }).catch(() => {})
     } catch (err) {
-      console.error('[CacheService.setEmailSummary]', (err as Error).message)
+      log.error('setEmailSummary failed', (err as Error).message)
     }
   }
 
   async deleteEmailSummary(emailId: string): Promise<void> {
-    if (!this.db) await this.init()
-
     try {
-      const tx = this.db!.transaction([STORE_SUMMARIES], 'readwrite')
-      const store = tx.objectStore(STORE_SUMMARIES)
-      store.delete(emailId)
+      await databaseService.delete(DB_CONFIGS.cache, STORE_SUMMARIES, emailId)
     } catch (err) {
-      console.error('[CacheService.deleteEmailSummary]', (err as Error).message)
+      log.error('deleteEmailSummary failed', (err as Error).message)
     }
   }
 
   async getPageSummary(url: string): Promise<unknown> {
-    if (!this.db) await this.init()
+    try {
+      const result = await databaseService.get<PageSummaryEntry>(DB_CONFIGS.cache, STORE_PAGE_CACHE, url)
+      if (!result) return null
 
-    return new Promise((resolve) => {
-      try {
-        const tx = this.db!.transaction([STORE_PAGE_CACHE], 'readonly')
-        const store = tx.objectStore(STORE_PAGE_CACHE)
-        const req = store.get(url)
-
-        req.onsuccess = () => {
-          const result = req.result
-          if (!result) {
-            resolve(null)
-            return
-          }
-
-          if (result.timestamp && result.ttl) {
-            const now = Date.now()
-            if (now > result.timestamp + result.ttl) {
-              this.deletePageSummary(url).catch(() => {})
-              resolve(null)
-              return
-            }
-          }
-
-          resolve(result.summary)
-        }
-
-        req.onerror = () => resolve(null)
-      } catch (err) {
-        console.error('[CacheService.getPageSummary]', (err as Error).message)
-        resolve(null)
+      if (this.isExpired(result)) {
+        this.deletePageSummary(url).catch(() => {})
+        return null
       }
-    })
+
+      return result.summary
+    } catch (err) {
+      log.error('getPageSummary failed', (err as Error).message)
+      return null
+    }
   }
 
   async setPageSummary(url: string, summary: unknown, ttlSeconds = 3600): Promise<void> {
-    if (!this.db) await this.init()
-
     try {
-      const tx = this.db!.transaction([STORE_PAGE_CACHE], 'readwrite')
-      const store = tx.objectStore(STORE_PAGE_CACHE)
-      store.put({
+      await databaseService.put(DB_CONFIGS.cache, STORE_PAGE_CACHE, {
         url,
         summary,
         timestamp: Date.now(),
         ttl: ttlSeconds * 1000
       })
     } catch (err) {
-      console.error('[CacheService.setPageSummary]', (err as Error).message)
+      log.error('setPageSummary failed', (err as Error).message)
     }
   }
 
   async deletePageSummary(url: string): Promise<void> {
-    if (!this.db) await this.init()
-
     try {
-      const tx = this.db!.transaction([STORE_PAGE_CACHE], 'readwrite')
-      const store = tx.objectStore(STORE_PAGE_CACHE)
-      store.delete(url)
+      await databaseService.delete(DB_CONFIGS.cache, STORE_PAGE_CACHE, url)
     } catch (err) {
-      console.error('[CacheService.deletePageSummary]', (err as Error).message)
+      log.error('deletePageSummary failed', (err as Error).message)
     }
   }
 
   async clearAll(): Promise<void> {
-    if (!this.db) await this.init()
-
     try {
-      const tx = this.db!.transaction([STORE_SUMMARIES, STORE_PAGE_CACHE, STORE_REPLY_SUGGESTIONS], 'readwrite')
-      tx.objectStore(STORE_SUMMARIES).clear()
-      tx.objectStore(STORE_PAGE_CACHE).clear()
-      tx.objectStore(STORE_REPLY_SUGGESTIONS).clear()
+      await Promise.all([
+        databaseService.clear(DB_CONFIGS.cache, STORE_SUMMARIES),
+        databaseService.clear(DB_CONFIGS.cache, STORE_PAGE_CACHE),
+        databaseService.clear(DB_CONFIGS.cache, STORE_REPLY_SUGGESTIONS),
+        databaseService.clear(DB_CONFIGS.cache, STORE_TAB_SESSIONS)
+      ])
     } catch (err) {
-      console.error('[CacheService.clearAll]', (err as Error).message)
+      log.error('clearAll failed', (err as Error).message)
     }
   }
 
   async getReplySuggestions(emailId: string): Promise<unknown> {
-    if (!this.db) await this.init()
-    
-    if (!this.db!.objectStoreNames.contains(STORE_REPLY_SUGGESTIONS)) {
-      console.warn('[CacheService] reply_suggestions store not found')
+    try {
+      const result = await databaseService.get<ReplySuggestionsEntry>(DB_CONFIGS.cache, STORE_REPLY_SUGGESTIONS, emailId)
+      if (!result) return null
+
+      if (this.isExpired(result)) {
+        this.deleteReplySuggestions(emailId).catch(() => {})
+        return null
+      }
+
+      return result.suggestions
+    } catch (err) {
+      log.error('getReplySuggestions failed', (err as Error).message)
       return null
     }
-
-    return new Promise((resolve) => {
-      try {
-        const tx = this.db!.transaction([STORE_REPLY_SUGGESTIONS], 'readonly')
-        const store = tx.objectStore(STORE_REPLY_SUGGESTIONS)
-        const req = store.get(emailId)
-
-        req.onsuccess = () => {
-          const result = req.result
-          if (!result) {
-            resolve(null)
-            return
-          }
-
-          if (result.timestamp && result.ttl) {
-            const now = Date.now()
-            if (now > result.timestamp + result.ttl) {
-              this.deleteReplySuggestions(emailId).catch(() => {})
-              resolve(null)
-              return
-            }
-          }
-
-          resolve(result.suggestions)
-        }
-
-        req.onerror = () => resolve(null)
-      } catch (err) {
-        console.error('[CacheService.getReplySuggestions]', (err as Error).message)
-        resolve(null)
-      }
-    })
   }
 
   async setReplySuggestions(emailId: string, suggestions: unknown, ttlMs = 7 * 24 * 60 * 60 * 1000): Promise<void> {
-    if (!this.db) await this.init()
-
     try {
-      const tx = this.db!.transaction([STORE_REPLY_SUGGESTIONS], 'readwrite')
-      const store = tx.objectStore(STORE_REPLY_SUGGESTIONS)
-      store.put({
+      await databaseService.put(DB_CONFIGS.cache, STORE_REPLY_SUGGESTIONS, {
         emailId,
         suggestions,
         timestamp: Date.now(),
         ttl: ttlMs
       })
     } catch (err) {
-      console.error('[CacheService.setReplySuggestions]', (err as Error).message)
+      log.error('setReplySuggestions failed', (err as Error).message)
     }
   }
 
   async deleteReplySuggestions(emailId: string): Promise<void> {
-    if (!this.db) await this.init()
-
     try {
-      const tx = this.db!.transaction([STORE_REPLY_SUGGESTIONS], 'readwrite')
-      const store = tx.objectStore(STORE_REPLY_SUGGESTIONS)
-      store.delete(emailId)
+      await databaseService.delete(DB_CONFIGS.cache, STORE_REPLY_SUGGESTIONS, emailId)
     } catch (err) {
-      console.error('[CacheService.deleteReplySuggestions]', (err as Error).message)
+      log.error('deleteReplySuggestions failed', (err as Error).message)
+    }
+  }
+
+  async getTabSession(url: string): Promise<TabSessionEntry | null> {
+    try {
+      const result = await databaseService.get<TabSessionEntry>(DB_CONFIGS.cache, STORE_TAB_SESSIONS, url)
+      return result || null
+    } catch (err) {
+      log.error('getTabSession failed', (err as Error).message)
+      return null
+    }
+  }
+
+  async setTabSession(
+    url: string, 
+    chatMessages: AppChatMessage[], 
+    pageSummary: AppPageSummary | null, 
+    summaryCollapsed: boolean
+  ): Promise<void> {
+    try {
+      const plainMessages = JSON.parse(JSON.stringify(chatMessages))
+      const plainSummary = pageSummary ? JSON.parse(JSON.stringify(pageSummary)) : null
+      
+      await databaseService.put(DB_CONFIGS.cache, STORE_TAB_SESSIONS, {
+        url,
+        chatMessages: plainMessages,
+        pageSummary: plainSummary,
+        summaryCollapsed,
+        timestamp: Date.now()
+      })
+    } catch (err) {
+      log.error('setTabSession failed', (err as Error).message)
+    }
+  }
+
+  async deleteTabSession(url: string): Promise<void> {
+    try {
+      await databaseService.delete(DB_CONFIGS.cache, STORE_TAB_SESSIONS, url)
+    } catch (err) {
+      log.error('deleteTabSession failed', (err as Error).message)
     }
   }
 }

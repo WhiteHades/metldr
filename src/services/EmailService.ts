@@ -1,5 +1,6 @@
 import { OllamaService } from './OllamaService'
 import { cacheService } from './CacheService'
+import { aiGateway, AIPrompts } from './ai'
 import type {
   AmountFact,
   IdFact,
@@ -42,20 +43,59 @@ export class EmailService {
         }
       }
 
-      const { available } = await OllamaService.checkAvailable()
-      if (!available) throw new Error('ollama not available')
-
       const facts = this._extractFacts(emailContent)
       if (!facts || !Object.keys(facts).length) {
         throw new Error('no facts extracted')
       }
 
-      const model = await OllamaService.selectBest('email_summary')
-      if (!model) throw new Error('no models available')
-
       const snippet = emailContent.length > 6000
         ? emailContent.substring(0, 4000) + '\n...[truncated]...\n' + emailContent.substring(emailContent.length - 2000)
         : emailContent
+
+      // check provider preference
+      const preferChrome = aiGateway.getPreference() === 'chrome-ai'
+      
+      // try preferred provider first for email summary
+      if (preferChrome) {
+        const chromeResult = await this._tryChromeSummary(snippet, metadata, facts)
+        if (chromeResult) {
+          const elapsed = Date.now() - startTime
+          chromeResult.time_ms = elapsed
+          chromeResult.cached = false
+          chromeResult.model = 'gemini-nano'
+
+          if (emailId) {
+            await cacheService.setEmailSummary(emailId, chromeResult)
+            this._generateRepliesBackground(emailId, emailContent, chromeResult, metadata)
+          }
+          return chromeResult
+        }
+      }
+
+      // use ollama (either as preference or fallback)
+      const { available } = await OllamaService.checkAvailable()
+      if (!available) {
+        // if ollama was preferred but not available, try chrome as fallback
+        if (!preferChrome) {
+          const chromeResult = await this._tryChromeSummary(snippet, metadata, facts)
+          if (chromeResult) {
+            const elapsed = Date.now() - startTime
+            chromeResult.time_ms = elapsed
+            chromeResult.cached = false
+            chromeResult.model = 'gemini-nano'
+
+            if (emailId) {
+              await cacheService.setEmailSummary(emailId, chromeResult)
+              this._generateRepliesBackground(emailId, emailContent, chromeResult, metadata)
+            }
+            return chromeResult
+          }
+        }
+        throw new Error('no ai available')
+      }
+
+      const model = await OllamaService.selectBest('email_summary')
+      if (!model) throw new Error('no models available')
 
       const summary = await this._generateSummary(facts, snippet, metadata, model)
 
@@ -74,6 +114,144 @@ export class EmailService {
       console.error('[EmailService.summarize]', (err as Error).message)
       throw err
     }
+  }
+
+  // try chrome ai prompt api for email summary
+  static async _tryChromeSummary(snippet: string, metadata: EmailMetadata | null, facts: ExtractedFacts): Promise<EmailSummary | null> {
+    try {
+      const caps = await aiGateway.chrome.getCapabilities()
+      if (!caps.complete) return null
+
+      let metadataCtx = ''
+      if (metadata) metadataCtx = this._buildMetadataContext(metadata)
+      const factsText = this._buildFactsSummary(facts)
+
+      const prompt = AIPrompts.email.summaryUser(snippet, metadataCtx, factsText)
+
+      const result = await aiGateway.chrome.complete({
+        systemPrompt: AIPrompts.email.summarySystem,
+        userPrompt: prompt,
+        temperature: 0.1
+      })
+
+      if (!result.ok) return null
+
+      // parse JSON from response
+      const jsonMatch = result.content?.match(/\{[\s\S]*\}/)
+      if (!jsonMatch) return null
+
+      const parsed = JSON.parse(jsonMatch[0])
+
+      return {
+        summary: parsed.summary || 'no summary',
+        action_items: parsed.action_items || [],
+        dates: parsed.key_details?.date ? [parsed.key_details.date] : [],
+        key_facts: {
+          booking_reference: null,
+          amount: parsed.key_details?.amount || null,
+          sender_org: null
+        },
+        intent: parsed.intent || 'Other',
+        reasoning: null,
+        urgency: parsed.urgency || 'normal'
+      }
+    } catch (err) {
+      console.log('[EmailService._tryChromeSummary] failed:', (err as Error).message)
+      return null
+    }
+  }
+
+  // try chrome ai for reply generation using Writer API with summary context
+  static async _tryChromReplies(
+    snippet: string,
+    summary: EmailSummary,
+    metadata: EmailMetadata | null
+  ): Promise<ReplySuggestion[] | null> {
+    try {
+      const caps = await aiGateway.chrome.getCapabilities()
+      
+      // prefer complete API for structured output
+      if (caps.complete) {
+        const emailContext = { metadata, facts: null, summary, snippet }
+        const result = await aiGateway.chrome.complete({
+          systemPrompt: AIPrompts.email.replySystem,
+          userPrompt: AIPrompts.email.replyUser(emailContext),
+          temperature: 0.4
+        })
+
+        if (!result.ok) return null
+
+        // parse JSON from response
+        const jsonMatch = result.content?.match(/\{[\s\S]*\}/)
+        if (!jsonMatch) return null
+
+        const parsed = JSON.parse(jsonMatch[0]) as ParsedReplies
+        const replies = (parsed.replies || []).map((r, idx) => ({
+          id: `reply_${idx}`,
+          tone: r.tone || 'professional',
+          length: r.length || 'medium',
+          body: r.body || '',
+          label: r.label || `Option ${idx + 1}`
+        }))
+
+        if (replies.length > 0) {
+          console.log('[EmailService._tryChromReplies] generated', replies.length, 'replies via Chrome AI')
+          return replies
+        }
+      }
+
+      // fallback to Writer API if available (simpler but less structured)
+      if (caps.write) {
+        const context = this._buildReplyContext(snippet, summary, metadata)
+        const suggestions: ReplySuggestion[] = []
+        
+        const tones: Array<{ tone: 'formal' | 'neutral' | 'casual'; label: string; length: 'short' | 'medium' | 'long' }> = [
+          { tone: 'formal', label: 'Professional', length: 'medium' },
+          { tone: 'casual', label: 'Friendly', length: 'medium' },
+          { tone: 'neutral', label: 'Quick Reply', length: 'short' }
+        ]
+
+        for (const { tone, label, length } of tones) {
+          const result = await aiGateway.chrome.write({
+            prompt: `Write a ${label.toLowerCase()} reply to this email: ${snippet.substring(0, 1000)}`,
+            context,
+            tone,
+            length
+          })
+
+          if (result.ok && result.content) {
+            suggestions.push({
+              id: `reply_${suggestions.length}`,
+              tone: tone === 'formal' ? 'professional' : tone === 'casual' ? 'friendly' : 'brief',
+              length,
+              body: result.content,
+              label
+            })
+          }
+        }
+
+        if (suggestions.length > 0) {
+          console.log('[EmailService._tryChromReplies] generated', suggestions.length, 'replies via Writer API')
+          return suggestions
+        }
+      }
+
+      return null
+    } catch (err) {
+      console.log('[EmailService._tryChromReplies] failed:', (err as Error).message)
+      return null
+    }
+  }
+
+  // build context string for Writer API
+  static _buildReplyContext(snippet: string, summary: EmailSummary, metadata: EmailMetadata | null): string {
+    let context = ''
+    if (metadata?.from) context += `From: ${metadata.from}\n`
+    if (metadata?.subject) context += `Subject: ${metadata.subject}\n`
+    if (summary.summary) context += `Summary: ${summary.summary}\n`
+    if (summary.intent) context += `Intent: ${summary.intent}\n`
+    if (summary.action_items?.length) context += `Action Items: ${summary.action_items.join(', ')}\n`
+    return context
   }
 
   static async _maybeGenerateReplies(
@@ -119,23 +297,49 @@ export class EmailService {
       const cached = await cacheService.getReplySuggestions(emailId) as ReplySuggestion[] | null
       if (cached) return cached
 
-      const { available } = await OllamaService.checkAvailable()
-      if (!available) return []
-
-      const model = await OllamaService.selectBest('email_summary')
-      if (!model) return []
-
       const snippet = emailContent.length > 4000
         ? emailContent.substring(0, 3000) + '\n...[truncated]...\n' + emailContent.substring(emailContent.length - 1000)
         : emailContent
 
-      const suggestions = await this._generateReplies(snippet, summary, metadata, model)
-      
-      if (suggestions?.length > 0 && emailId) {
-        await cacheService.setReplySuggestions(emailId, suggestions)
+      const preferChrome = aiGateway.getPreference() === 'chrome-ai'
+
+      // try preferred provider first
+      if (preferChrome) {
+        const chromeReplies = await this._tryChromReplies(snippet, summary, metadata)
+        if (chromeReplies && chromeReplies.length > 0) {
+          if (emailId) {
+            await cacheService.setReplySuggestions(emailId, chromeReplies)
+          }
+          return chromeReplies
+        }
       }
 
-      return suggestions
+      // try ollama (either as preference or fallback)
+      const { available } = await OllamaService.checkAvailable()
+      if (available) {
+        const model = await OllamaService.selectBest('email_summary')
+        if (model) {
+          const suggestions = await this._generateReplies(snippet, summary, metadata, model)
+          
+          if (suggestions?.length > 0 && emailId) {
+            await cacheService.setReplySuggestions(emailId, suggestions)
+          }
+          return suggestions
+        }
+      }
+
+      // if ollama was preferred but failed, try chrome as fallback
+      if (!preferChrome) {
+        const chromeReplies = await this._tryChromReplies(snippet, summary, metadata)
+        if (chromeReplies && chromeReplies.length > 0) {
+          if (emailId) {
+            await cacheService.setReplySuggestions(emailId, chromeReplies)
+          }
+          return chromeReplies
+        }
+      }
+
+      return []
     } catch (err) {
       console.error('[EmailService.generateReplySuggestions]', (err as Error).message)
       return []
@@ -185,46 +389,15 @@ export class EmailService {
       }
     }
 
-    let metadataCtx = ''
-    if (metadata) {
-      metadataCtx = this._buildMetadataContext(metadata)
+    const emailContext = {
+      metadata,
+      facts: null,
+      summary,
+      snippet
     }
 
-    const summaryCtx = summary ? `
-SUMMARY OF EMAIL:
-- Intent: ${summary.intent || 'unknown'}
-- Summary: ${summary.summary || ''}
-- Action Items: ${(summary.action_items || []).join(', ') || 'none'}
-- Urgency: ${summary.urgency || 'normal'}
-` : ''
-
-    const systemPrompt = `You are an expert email assistant. Generate diverse reply options that the user can quickly select and send.
-
-RULES:
-1. Generate 3-5 distinct reply options with different tones/lengths
-2. Always include: one brief/professional, one friendly, one detailed (if appropriate)
-3. Match the formality level of the original email
-4. Keep "short" replies to 1-2 sentences max
-5. For "medium" replies, use 1 short paragraph
-6. For "long" replies, be thorough but concise (2-3 paragraphs max)
-7. Do NOT include email headers/subject lines
-8. Greetings/sign-offs should be minimal or omitted for short replies
-9. Make replies context-aware based on email content and action items
-10. For confirmation-type emails, include a quick "Got it" option
-11. For questions, provide helpful and direct answers
-12. Each reply should be immediately sendable with minimal editing
-
-OUTPUT: JSON only. No explanations.`
-
-    const userPrompt = `Generate reply suggestions for this email.
-
-${metadataCtx}${summaryCtx}
----
-ORIGINAL EMAIL:
-${snippet}
----
-
-Generate 3-5 reply options with varying tones (professional/friendly/brief/detailed) and lengths (short/medium/long).`
+    const systemPrompt = AIPrompts.email.replySystem
+    const userPrompt = AIPrompts.email.replyUser(emailContext)
 
     try {
       const result = await OllamaService.complete(

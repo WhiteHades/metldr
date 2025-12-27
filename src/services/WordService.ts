@@ -1,5 +1,6 @@
 import { OllamaService } from './OllamaService'
 import { dictionaryService } from './DictionaryService'
+import { aiGateway } from './ai'
 import type {
   Definition,
   WordLookupResult,
@@ -9,6 +10,14 @@ import type {
   LLMParsedResult
 } from '../types'
 
+/**
+ * word service with chrome ai integration
+ * 
+ * uses ai gateway for language detection with automatic fallback:
+ * 1. regex pattern matching (fastest)
+ * 2. chrome built-in language detector (if available)
+ * 3. ollama local llm (fallback)
+ */
 export class WordService {
   static initialized = false
   
@@ -243,7 +252,41 @@ Define "${word}" (15-20 words max, considering context). Respond only with JSON.
     }
   }
 
+  /**
+   * detect language using hybrid approach:
+   * 1. regex patterns (fastest, for common scripts)
+   * 2. chrome language detector api (high accuracy)
+   * 3. ollama fallback (if chrome ai unavailable)
+   */
   static async detectLanguage(word: string, sentence = ''): Promise<string> {
+    const text = sentence || word
+
+    // tier 1: regex pattern matching (fastest)
+    const regexResult = this._detectLanguageByRegex(text)
+    if (regexResult) {
+      console.log('[WordService.detectLanguage] detected via regex:', regexResult)
+      return regexResult
+    }
+
+    // tier 2: chrome language detector api
+    try {
+      const chromeResult = await aiGateway.detectLanguage({ text })
+      if (chromeResult.ok && chromeResult.language) {
+        console.log('[WordService.detectLanguage] detected via', chromeResult.provider, ':', chromeResult.language)
+        return chromeResult.language
+      }
+    } catch (err) {
+      console.log('[WordService.detectLanguage] ai gateway error:', (err as Error).message)
+    }
+
+    // tier 3: ollama fallback (handled by aiGateway internally)
+    return 'en'
+  }
+
+  /**
+   * fast regex-based language detection for common scripts
+   */
+  private static _detectLanguageByRegex(text: string): string | null {
     const patterns: Record<string, RegExp> = {
       'de': /[äöüßÄÖÜ]/i,
       'fr': /[àâäéèêëïîôùûüÿç]/i,
@@ -260,45 +303,10 @@ Define "${word}" (15-20 words max, considering context). Respond only with JSON.
       'vi': /[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i,
     }
 
-    const text = sentence || word
     for (const [lang, pattern] of Object.entries(patterns)) {
       if (pattern.test(text)) return lang
     }
 
-    try {
-      const model = await OllamaService.selectBest('word_lookup')
-      if (!model) return 'en'
-
-      const schema = {
-        type: 'object',
-        properties: {
-          language: {
-            type: 'string',
-            enum: ['en', 'de', 'fr', 'es', 'it', 'pt', 'ru', 'ja', 'zh', 'ko', 'ar', 'he', 'th', 'vi', 'other']
-          }
-        },
-        required: ['language']
-      }
-
-      const result = await OllamaService.complete(
-        model,
-        [{ role: 'user', content: `Detect language of: "${text}". Respond only with JSON.` }],
-        { format: schema, temperature: 0 }
-      )
-
-      if (result.ok) {
-        try {
-          const parsed = JSON.parse(result.content || '{}') as { language?: string }
-          const lang = parsed.language
-          if (lang && lang !== 'other') return lang
-        } catch (e) {
-          console.log('[WordService.detectLanguage] parse error:', e)
-        }
-      }
-    } catch (err) {
-      console.log('[WordService.detectLanguage] llm error:', (err as Error).message)
-    }
-
-    return 'en'
+    return null
   }
 }

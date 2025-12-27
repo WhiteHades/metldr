@@ -1,4 +1,4 @@
-import { stripThinking } from '../lib/textUtils'
+import { stripThinking } from '../utils/text'
 import type {
   OllamaModel,
   OllamaTagsResponse,
@@ -38,8 +38,7 @@ export class OllamaService {
       const models = data.models?.map(m => m.name) || []
 
       return { available: true, models }
-    } catch (err) {
-      console.error('[OllamaService.checkAvailable]', (err as Error).message)
+    } catch {
       return { available: false, models: [] }
     }
   }

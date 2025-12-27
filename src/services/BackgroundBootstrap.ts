@@ -4,10 +4,13 @@ import { dictionaryService } from './DictionaryService'
 import { WordService } from './WordService'
 import { EmailService } from './EmailService'
 import { PageService } from './PageService'
-import { SummaryPrefs } from '../lib/summaryPrefs'
+import { SummaryPrefs } from '../utils/summaryPrefs'
+import { aiGateway } from './ai'
+import { logger } from './LoggerService'
 import type {
   EmailSummaryMessage,
   GetReplySuggestionsMessage,
+  GenerateReplySuggestionsMessage,
   ExtractAndSummarizeMessage,
   WordLookupMessage,
   ChatMessageRequest,
@@ -18,8 +21,12 @@ import type {
   ClassifyResult,
   SummaryResult,
   ChatMessage,
-  ExtractedData
+  ExtractedData,
+  GetEmailCacheMessage,
+  SetEmailCacheMessage
 } from '../types'
+
+const log = logger.createScoped('BackgroundBootstrap')
 
 export class BackgroundBootstrap {
   static isInitialized = false
@@ -34,27 +41,32 @@ export class BackgroundBootstrap {
   }
   
   static async _doInit(): Promise<void> {
-    console.log('[BackgroundBootstrap] starting initialization...')
+    log.log('starting initialization...')
     
     chrome.sidePanel
       .setPanelBehavior({ openPanelOnActionClick: true })
-      .catch(err => console.error('[BackgroundBootstrap] side panel error:', err))
+      .catch(err => log.error('side panel error', err))
 
-    try {
-      await cacheService.init()
-      console.log('[BackgroundBootstrap] cache service ready')
-    } catch (err) {
-      console.error('[BackgroundBootstrap] cache init failed:', (err as Error).message)
-    }
+    log.log('cache service ready (lazy init)')
     
     try {
       await dictionaryService.init()
-      console.log('[BackgroundBootstrap] dictionary service ready')
+      log.log('dictionary service ready')
     } catch (err) {
-      console.error('[BackgroundBootstrap] dictionary init failed:', (err as Error).message)
+      log.error('dictionary init failed', (err as Error).message)
     }
     
     this.isInitialized = true
+
+    // Listen for provider preference changes
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === 'local' && changes.preferredProvider?.newValue) {
+        const pref = changes.preferredProvider.newValue as string
+        if (pref === 'chrome-ai' || pref === 'ollama') {
+          aiGateway.setPreference(pref)
+        }
+      }
+    })
 
     chrome.runtime.onMessage.addListener((msg: BackgroundMessage, _sender, respond: ResponseCallback) => {
       if (msg.type === 'SUMMARIZE_EMAIL') {
@@ -64,6 +76,16 @@ export class BackgroundBootstrap {
 
       if (msg.type === 'GET_REPLY_SUGGESTIONS') {
         this._onGetReplySuggestions(msg, respond)
+        return true
+      }
+
+      if (msg.type === 'GENERATE_REPLY_SUGGESTIONS') {
+        this._onGenerateReplySuggestions(msg as GenerateReplySuggestionsMessage, respond)
+        return true
+      }
+
+      if (msg.type === 'EXTRACT_ONLY') {
+        this._onExtractOnly(msg, respond)
         return true
       }
 
@@ -87,10 +109,20 @@ export class BackgroundBootstrap {
         return true
       }
 
+      if (msg.type === 'GET_EMAIL_CACHE') {
+        this._onGetEmailCache(msg as GetEmailCacheMessage, respond)
+        return true
+      }
+
+      if (msg.type === 'SET_EMAIL_CACHE') {
+        this._onSetEmailCache(msg as SetEmailCacheMessage, respond)
+        return true
+      }
+
       return false
     })
 
-    console.log('[BackgroundBootstrap] initialized')
+    log.log('initialized')
   }
 
   static _onEmailSummary(msg: EmailSummaryMessage, respond: ResponseCallback): void {
@@ -105,7 +137,7 @@ export class BackgroundBootstrap {
         )
         respond({ summary })
       } catch (err) {
-        console.error('[BackgroundBootstrap._onEmailSummary]', (err as Error).message)
+        log.error('onEmailSummary', (err as Error).message)
         const errMsg = (err as Error)?.message || 'unknown error'
         const needsOllama = /ollama/i.test(errMsg)
         respond({
@@ -138,7 +170,115 @@ export class BackgroundBootstrap {
           respond({ success: false, error: 'no suggestions available' })
         }
       } catch (err) {
-        console.error('[BackgroundBootstrap._onGetReplySuggestions]', (err as Error).message)
+        log.error('onGetReplySuggestions', (err as Error).message)
+        respond({ success: false, error: (err as Error).message })
+      }
+    })()
+  }
+
+  static _onGenerateReplySuggestions(msg: GenerateReplySuggestionsMessage, respond: ResponseCallback): void {
+    (async () => {
+      try {
+        const { emailId, forceRegenerate } = msg
+        if (!emailId) {
+          respond({ success: false, error: 'no emailId' })
+          return
+        }
+
+        log.log('generating reply suggestions', { emailId, force: forceRegenerate })
+
+        // delete cached suggestions if force regenerating
+        if (forceRegenerate) {
+          try {
+            await cacheService.deleteReplySuggestions(emailId)
+          } catch (err) {
+            log.warn('failed to delete cached suggestions', (err as Error).message)
+          }
+        }
+
+        // check if we already have suggestions
+        if (!forceRegenerate) {
+          const cached = await EmailService.getCachedReplies(emailId)
+          if (cached && cached.length > 0) {
+            respond({ success: true, suggestions: cached })
+            return
+          }
+        }
+
+        // get cached summary to build context
+        const cachedSummary = await cacheService.getEmailSummary(emailId)
+        if (!cachedSummary) {
+          log.log('no cached summary for thread, cannot generate suggestions')
+          respond({ success: false, error: 'no email summary available' })
+          return
+        }
+
+        // request email content from current tab
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+        if (!tab?.id) {
+          respond({ success: false, error: 'no active tab' })
+          return
+        }
+
+        // get email content from content script
+        let emailContent = ''
+        let metadata = null
+        try {
+          const extractResponse = await chrome.tabs.sendMessage(tab.id, { 
+            type: 'GET_EMAIL_CONTENT',
+            emailId 
+          }) as { success: boolean; content?: string; metadata?: Record<string, unknown> }
+          
+          if (extractResponse?.success && extractResponse.content) {
+            emailContent = extractResponse.content
+            metadata = extractResponse.metadata || null
+          }
+        } catch (err) {
+          log.log('could not extract email content', (err as Error).message)
+        }
+
+        // if we couldn't get email content, try to generate with just the summary
+        if (!emailContent) {
+          log.log('no email content, generating with summary context only')
+          // create a minimal email content from summary
+          const summary = cachedSummary as { summary?: string; action_items?: string[] }
+          emailContent = `Summary: ${summary.summary || ''}\nAction items: ${(summary.action_items || []).join(', ')}`
+        }
+
+        const suggestions = await EmailService.generateReplySuggestions(
+          emailId, 
+          emailContent, 
+          cachedSummary as Parameters<typeof EmailService.generateReplySuggestions>[2],
+          metadata
+        )
+
+        if (suggestions && suggestions.length > 0) {
+          respond({ success: true, suggestions })
+        } else {
+          respond({ success: false, error: 'failed to generate suggestions' })
+        }
+      } catch (err) {
+        log.error('onGenerateReplySuggestions', (err as Error).message)
+        respond({ success: false, error: (err as Error).message })
+      }
+    })()
+  }
+
+  static _onExtractOnly(msg: { tabId: number }, respond: ResponseCallback): void {
+    (async () => {
+      try {
+        const { tabId } = msg
+        if (!tabId) {
+          respond({ success: false, error: 'no tabId' })
+          return
+        }
+        const response = await chrome.tabs.sendMessage(tabId, { type: 'EXTRACT_ARTICLE' }) as { success: boolean; data?: ExtractedData; error?: string }
+        if (!response?.success || !response.data) {
+          respond({ success: false, error: response?.error || 'extraction failed' })
+          return
+        }
+        respond({ success: true, data: response.data })
+      } catch (err) {
         respond({ success: false, error: (err as Error).message })
       }
     })()
@@ -199,7 +339,7 @@ export class BackgroundBootstrap {
           respond({ success: false, error: 'word not found' })
         }
       } catch (err) {
-        console.error('[BackgroundBootstrap._onWordLookup]', (err as Error).message)
+        log.error('onWordLookup', (err as Error).message)
         respond({ success: false, error: (err as Error).message || 'lookup failed' })
       }
     })()
@@ -211,7 +351,7 @@ export class BackgroundBootstrap {
         const { available, models } = await OllamaService.checkAvailable()
         respond({ success: true, connected: available, models })
       } catch (err) {
-        console.error('[BackgroundBootstrap._onHealthCheck]', (err as Error).message)
+        log.error('onHealthCheck', (err as Error).message)
         respond({ success: true, connected: false, models: [] })
       }
     })()
@@ -232,7 +372,7 @@ export class BackgroundBootstrap {
         const result = await PageService.chat(messages, pageContext || null, model || null)
         
         if (!result) {
-          console.error('[BackgroundBootstrap._onChatMessage] no result from PageService')
+          log.error('onChatMessage no result from PageService')
           respond({ ok: false, error: 'no response from chat service' })
           return
         }
@@ -243,7 +383,7 @@ export class BackgroundBootstrap {
         })
         
       } catch (err) {
-        console.error('[BackgroundBootstrap._onChatMessage] error:', (err as Error).message)
+        log.error('onChatMessage error:', (err as Error).message)
         respond({ ok: false, error: (err as Error).message || 'chat processing failed' })
       }
     })()
@@ -264,7 +404,7 @@ export class BackgroundBootstrap {
 
   static _enqueueSummary<T>(task: () => Promise<T>): Promise<T | { success: false; error: string }> {
     this.summaryQueue = this.summaryQueue.then(() => task()).catch(err => {
-      console.error('[BackgroundBootstrap] summary queue error:', (err as Error).message)
+      log.error('summary queue error', (err as Error).message)
       return { success: false, error: (err as Error).message }
     })
     return this.summaryQueue as Promise<T | { success: false; error: string }>
@@ -272,32 +412,32 @@ export class BackgroundBootstrap {
 
   static async _performExtractAndSummarize(tabId: number, force: boolean, trigger = 'auto'): Promise<SummaryResult> {
     try {
-      console.log('[BackgroundBootstrap] _performExtractAndSummarize:', { tabId, force, trigger })
+      log.log('_performExtractAndSummarize:', { tabId, force, trigger })
       const prefs = await this._getSummaryPrefs()
       let extracted: ExtractedData | undefined
       try {
         const response = await chrome.tabs.sendMessage(tabId, { type: 'EXTRACT_ARTICLE' }) as { success: boolean; data?: ExtractedData; error?: string }
-        console.log('[BackgroundBootstrap] EXTRACT_ARTICLE response:', { success: response?.success, hasData: !!response?.data, error: response?.error })
+        log.log('EXTRACT_ARTICLE response:', { success: response?.success, hasData: !!response?.data, error: response?.error })
         if (!response?.success) {
           return { success: false, error: response?.error || 'extraction failed' }
         }
         extracted = response.data
       } catch (err) {
-        console.error('[BackgroundBootstrap] content script error:', (err as Error).message)
+        log.error('content script error:', (err as Error).message)
         return { success: false, error: 'content script not ready - please refresh the page' }
       }
 
       if (!extracted) return { success: false, error: 'extraction failed' }
       if (extracted.skip) return { success: false, skip: true, reason: extracted.reason }
       const gating = this._classifyPage(extracted, prefs, trigger, force)
-      console.log('[BackgroundBootstrap] classification:', { action: gating.action, reason: gating.reason, wordCount: extracted?.wordCount })
+      log.log('classification:', { action: gating.action, reason: gating.reason, wordCount: extracted?.wordCount })
       if (gating.action === 'skip') return { success: false, skip: true, reason: gating.reason }
       if (gating.action === 'prompt') return { success: false, prompt: true, reason: gating.reason }
 
       const summary = await PageService.summarize(extracted as Parameters<typeof PageService.summarize>[0], force)
       return { success: true, summary }
     } catch (err) {
-      console.error('[BackgroundBootstrap._performExtractAndSummarize]', (err as Error).message)
+      log.error('performExtractAndSummarize]', (err as Error).message)
       return { success: false, error: (err as Error).message }
     }
   }
@@ -366,5 +506,29 @@ export class BackgroundBootstrap {
     }
 
     return { action: 'wait', reason: 'low_confidence' }
+  }
+
+  static _onGetEmailCache(msg: GetEmailCacheMessage, respond: ResponseCallback): void {
+    (async () => {
+      try {
+        const cached = await cacheService.getEmailSummary(msg.emailId)
+        respond({ cached })
+      } catch (err) {
+        log.error('onGetEmailCache]', (err as Error).message)
+        respond({ cached: null })
+      }
+    })()
+  }
+
+  static _onSetEmailCache(msg: SetEmailCacheMessage, respond: ResponseCallback): void {
+    (async () => {
+      try {
+        await cacheService.setEmailSummary(msg.emailId, msg.summary)
+        respond({ success: true })
+      } catch (err) {
+        log.error('onSetEmailCache]', (err as Error).message)
+        respond({ success: false })
+      }
+    })()
   }
 }
