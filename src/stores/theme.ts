@@ -1,5 +1,9 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { storageService } from '@/services/StorageService'
+import { logger } from '@/services/LoggerService'
+
+const log = logger.createScoped('ThemeStore')
 
 interface ThemeColors {
   name: string
@@ -20,51 +24,6 @@ interface ThemeColors {
 // note: color values must stay in sync with src/lib/ThemeManager.ts for content script
 export const useThemeStore = defineStore('theme', () => {
   const themes: Record<string, ThemeColors> = {
-    default: {
-      name: 'default',
-      primary: 'oklch(0.75 0.18 230)',
-      secondary: 'oklch(0.70 0.16 285)',
-      accent: 'oklch(0.76 0.15 165)',
-      warning: 'oklch(0.78 0.16 85)',
-      error: 'oklch(0.65 0.22 28)',
-      success: 'oklch(0.72 0.15 145)',
-      background: 'oklch(0.10 0.01 265)',
-      card: 'oklch(0.14 0.01 265)',
-      foreground: 'oklch(0.90 0.02 265)',
-      muted: 'oklch(0.60 0.02 265)',
-      border: 'oklch(0.24 0.02 265)',
-      shadow: 'oklch(0 0 0 / 0.15)',
-    },
-    light: {
-      name: 'light',
-      primary: 'oklch(0.55 0.20 230)',
-      secondary: 'oklch(0.50 0.18 285)',
-      accent: 'oklch(0.56 0.17 165)',
-      warning: 'oklch(0.68 0.18 85)',
-      error: 'oklch(0.55 0.24 28)',
-      success: 'oklch(0.62 0.17 145)',
-      background: 'oklch(0.98 0.01 265)',
-      card: 'oklch(0.96 0.01 265)',
-      foreground: 'oklch(0.20 0.02 265)',
-      muted: 'oklch(0.45 0.02 265)',
-      border: 'oklch(0.90 0.01 265)',
-      shadow: 'oklch(0 0 0 / 0.08)',
-    },
-    cyberpunk: {
-      name: 'cyberpunk',
-      primary: 'oklch(0.75 0.22 200)',
-      secondary: 'oklch(0.60 0.24 340)',
-      accent: 'oklch(0.84 0.16 100)',
-      warning: 'oklch(0.80 0.18 90)',
-      error: 'oklch(0.55 0.20 25)',
-      success: 'oklch(0.66 0.16 150)',
-      background: 'oklch(0.15 0.01 265)',
-      card: 'oklch(0.19 0.01 265)',
-      foreground: 'oklch(0.88 0.02 265)',
-      muted: 'oklch(0.50 0.02 265)',
-      border: 'oklch(0.75 0.22 200 / 0.2)',
-      shadow: 'oklch(0.75 0.22 200 / 0.10)',
-    },
     catppuccin: {
       name: 'catppuccin',
       primary: 'oklch(0.87 0.04 30)',
@@ -95,16 +54,46 @@ export const useThemeStore = defineStore('theme', () => {
       border: 'oklch(0.66 0.15 45 / 0.3)',
       shadow: 'oklch(0.66 0.15 45 / 0.2)',
     },
+    cyberpunk: {
+      name: 'cyberpunk',
+      primary: 'oklch(0.75 0.22 200)',
+      secondary: 'oklch(0.60 0.24 340)',
+      accent: 'oklch(0.84 0.16 100)',
+      warning: 'oklch(0.80 0.18 90)',
+      error: 'oklch(0.55 0.20 25)',
+      success: 'oklch(0.66 0.16 150)',
+      background: 'oklch(0.15 0.01 265)',
+      card: 'oklch(0.19 0.01 265)',
+      foreground: 'oklch(0.88 0.02 265)',
+      muted: 'oklch(0.50 0.02 265)',
+      border: 'oklch(0.75 0.22 200 / 0.2)',
+      shadow: 'oklch(0.75 0.22 200 / 0.10)',
+    },
+    light: {
+      name: 'light',
+      primary: 'oklch(0.55 0.20 230)',
+      secondary: 'oklch(0.50 0.18 285)',
+      accent: 'oklch(0.56 0.17 165)',
+      warning: 'oklch(0.68 0.18 85)',
+      error: 'oklch(0.55 0.24 28)',
+      success: 'oklch(0.62 0.17 145)',
+      background: 'oklch(0.98 0.01 265)',
+      card: 'oklch(0.96 0.01 265)',
+      foreground: 'oklch(0.20 0.02 265)',
+      muted: 'oklch(0.45 0.02 265)',
+      border: 'oklch(0.90 0.01 265)',
+      shadow: 'oklch(0 0 0 / 0.08)',
+    },
   }
 
-  const currentTheme = ref<string>('default')
+  const currentTheme = ref<string>('catppuccin')
   const colors = computed(() => themes[currentTheme.value])
 
   const setTheme = (themeName: string): void => {
     if (themes[themeName]) {
       currentTheme.value = themeName
       applyThemeToDOM(themes[themeName])
-      chrome.storage.local.set({ theme: themeName })
+      storageService.set('theme', themeName)
     }
   }
 
@@ -141,16 +130,16 @@ export const useThemeStore = defineStore('theme', () => {
 
   const loadSavedTheme = async (): Promise<void> => {
     try {
-      const result = await chrome.storage.local.get('theme') as { theme?: string }
-      if (result.theme && themes[result.theme]) {
-        currentTheme.value = result.theme
-        applyThemeToDOM(themes[result.theme])
+      const themeName = await storageService.get('theme', 'catppuccin')
+      if (themeName && themes[themeName]) {
+        currentTheme.value = themeName
+        applyThemeToDOM(themes[themeName])
       } else {
-        applyThemeToDOM(themes.default)
+        applyThemeToDOM(themes.catppuccin)
       }
     } catch (error) {
-      console.error('failed to load theme:', error)
-      applyThemeToDOM(themes.default)
+      log.error('failed to load theme:', error)
+      applyThemeToDOM(themes.catppuccin)
     }
   }
 

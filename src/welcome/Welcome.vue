@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useThemeStore } from '../stores/theme';
 import { getOsType, getSetupCommands } from '../utils/platformUtils';
 import { gsap } from 'gsap';
@@ -7,7 +7,7 @@ import {
   Download, Cpu, Sparkles, Check, Copy, 
   ChevronRight, ChevronDown, ExternalLink, Zap, Shield, Globe,
   FileText, MessageCircle, Mail, Reply, BookOpen, Languages, HelpCircle,
-  Command, AppWindow, Terminal
+  Command, AppWindow, Terminal, Loader2, AlertCircle, CheckCircle2, Cloud, RefreshCw
 } from 'lucide-vue-next';
 import { Button } from '../components/ui';
 
@@ -24,6 +24,138 @@ const osIcon = computed(() => {
 });
 
 const copiedStates = ref({});
+
+// chrome ai state
+const chromeAIStatus = ref('checking'); // 'checking' | 'unavailable' | 'no-browser' | 'available' | 'downloadable' | 'downloading' | 'ready'
+const chromeAIProgress = ref(0);
+const chromeAIMessage = ref('checking chrome ai availability...');
+const chromeVersion = ref('');
+let statusPollingInterval = null;
+
+// check chrome ai availability
+async function checkChromeAI() {
+  try {
+    // check browser version
+    const ua = navigator.userAgent;
+    const chromeMatch = ua.match(/Chrome\/(\d+)/);
+    if (chromeMatch) {
+      chromeVersion.value = chromeMatch[1];
+    }
+    
+    // check if summarizer api exists
+    if (typeof Summarizer === 'undefined') {
+      chromeAIStatus.value = 'no-browser';
+      chromeAIMessage.value = `chrome ai requires chrome 138+ (you have ${chromeVersion.value || 'unknown'})`;
+      return;
+    }
+    
+    const availability = await Summarizer.availability();
+    
+    switch (availability) {
+      case 'available':
+        chromeAIStatus.value = 'ready';
+        chromeAIMessage.value = 'gemini nano is ready to use!';
+        chromeAIProgress.value = 100;
+        break;
+      case 'downloadable':
+        chromeAIStatus.value = 'downloadable';
+        chromeAIMessage.value = 'gemini nano can be downloaded (~1.5GB)';
+        chromeAIProgress.value = 0;
+        break;
+      case 'downloading':
+        chromeAIStatus.value = 'downloading';
+        chromeAIMessage.value = 'gemini nano is downloading...';
+        startProgressPolling();
+        break;
+      case 'unavailable':
+        chromeAIStatus.value = 'unavailable';
+        chromeAIMessage.value = 'gemini nano is not available on this device';
+        break;
+      default:
+        chromeAIStatus.value = 'unavailable';
+        chromeAIMessage.value = 'could not determine chrome ai status';
+    }
+  } catch (err) {
+    console.error('[Welcome] Chrome AI check failed:', err);
+    chromeAIStatus.value = 'no-browser';
+    chromeAIMessage.value = 'chrome ai not available in this browser';
+  }
+}
+
+// trigger model download by creating a summarizer instance
+async function triggerChromeAIDownload() {
+  if (chromeAIStatus.value !== 'downloadable') return;
+  
+  chromeAIStatus.value = 'downloading';
+  chromeAIMessage.value = 'starting gemini nano download...';
+  chromeAIProgress.value = 0;
+  
+  try {
+    // creating a summarizer instance triggers the download
+    await Summarizer.create({
+      type: 'key-points',
+      format: 'plain-text',
+      length: 'medium',
+      expectedInputLanguages: ['en', 'es', 'ja'],
+      expectedContextLanguages: ['en'],
+      outputLanguage: 'en',
+      monitor: (m) => {
+        m.addEventListener('downloadprogress', (e) => {
+          if (e.loaded) {
+            chromeAIProgress.value = Math.min(e.loaded, 100);
+            chromeAIMessage.value = `downloading gemini nano... ${Math.round(e.loaded)}%`;
+          }
+        });
+      }
+    });
+    
+    chromeAIStatus.value = 'ready';
+    chromeAIMessage.value = 'gemini nano is ready to use!';
+    chromeAIProgress.value = 100;
+    stopProgressPolling();
+  } catch (err) {
+    console.error('[Welcome] Chrome AI download failed:', err);
+    chromeAIStatus.value = 'downloadable';
+    chromeAIMessage.value = 'download failed. click to retry.';
+  }
+}
+
+// poll for download progress (fallback when we can't track directly)
+function startProgressPolling() {
+  stopProgressPolling();
+  statusPollingInterval = setInterval(async () => {
+    try {
+      const availability = await Summarizer.availability();
+      if (availability === 'available') {
+        chromeAIStatus.value = 'ready';
+        chromeAIMessage.value = 'gemini nano is ready to use!';
+        chromeAIProgress.value = 100;
+        stopProgressPolling();
+      } else if (availability === 'downloading') {
+        // simulate progress during download
+        if (chromeAIProgress.value < 95) {
+          chromeAIProgress.value += Math.random() * 3;
+        }
+      }
+    } catch (err) {
+      // ignore polling errors
+    }
+  }, 2000);
+}
+
+function stopProgressPolling() {
+  if (statusPollingInterval) {
+    clearInterval(statusPollingInterval);
+    statusPollingInterval = null;
+  }
+}
+
+function openChromeFlags() {
+  // can't directly open chrome:// URLs, so copy to clipboard
+  navigator.clipboard.writeText('chrome://flags/#optimization-guide-on-device-model');
+  copiedStates.value['chrome-flags'] = true;
+  setTimeout(() => { copiedStates.value['chrome-flags'] = false; }, 2500);
+}
 
 const features = [
   {
@@ -149,6 +281,9 @@ function openOllamaWebsite() {
 onMounted(async () => {
   await themeStore.loadSavedTheme();
   
+  // check chrome ai availability
+  checkChromeAI();
+  
   // wait for fonts to load to prevent jank
   if (document.fonts && document.fonts.ready) {
     await document.fonts.ready;
@@ -208,6 +343,10 @@ onMounted(async () => {
     ease: 'power2.out',
     repeat: -1
   });
+});
+
+onUnmounted(() => {
+  stopProgressPolling();
 });
 </script>
 
@@ -281,9 +420,144 @@ onMounted(async () => {
         </div>
       </section>
       
-      <!-- setup steps -->
+      <!-- OPTION 1: gemini nano (recommended) -->
       <section class="setup-section">
-        <h2 class="section-title">quick setup</h2>
+        <div class="setup-header">
+          <div class="setup-badge recommended">
+            <span>recommended</span>
+          </div>
+          <h2 class="section-title">option 1: gemini nano</h2>
+          <p class="setup-desc">zero setup — runs directly in chrome with no downloads or configuration</p>
+        </div>
+        
+        <!-- live status -->
+        <div class="gemini-status" :class="chromeAIStatus">
+          <div class="gemini-status-icon">
+            <Loader2 v-if="chromeAIStatus === 'checking' || chromeAIStatus === 'downloading'" :size="20" class="spinning" />
+            <CheckCircle2 v-else-if="chromeAIStatus === 'ready'" :size="20" />
+            <Cloud v-else-if="chromeAIStatus === 'downloadable'" :size="20" />
+            <AlertCircle v-else :size="20" />
+          </div>
+          <div class="gemini-status-content">
+            <span class="gemini-status-title">
+              <template v-if="chromeAIStatus === 'checking'">checking...</template>
+              <template v-else-if="chromeAIStatus === 'ready'">ready to use!</template>
+              <template v-else-if="chromeAIStatus === 'downloadable'">available for download</template>
+              <template v-else-if="chromeAIStatus === 'downloading'">downloading...</template>
+              <template v-else>setup required</template>
+            </span>
+            <span class="gemini-status-msg">{{ chromeAIMessage }}</span>
+          </div>
+          <div v-if="chromeAIStatus === 'downloading'" class="gemini-progress">
+            <div class="gemini-progress-bar">
+              <div class="gemini-progress-fill" :style="{ width: chromeAIProgress + '%' }"></div>
+            </div>
+            <span>{{ Math.round(chromeAIProgress) }}%</span>
+          </div>
+          <Button 
+            v-if="chromeAIStatus === 'downloadable'"
+            @click="triggerChromeAIDownload"
+            class="gemini-action-btn"
+          >
+            <Download :size="14" />
+            download
+          </Button>
+          <Button 
+            v-else-if="chromeAIStatus === 'ready'"
+            @click="getStarted"
+            class="gemini-action-btn ready"
+          >
+            <Check :size="14" />
+            get started
+          </Button>
+        </div>
+        
+        <!-- setup steps (only if not ready) -->
+        <div v-if="chromeAIStatus !== 'ready'" ref="stepsRef" class="steps">
+          <div class="step">
+            <div class="step-number">1</div>
+            <div class="step-body">
+              <div class="step-header">
+                <Globe :size="20" />
+                <h3>use chrome 138+</h3>
+                <span v-if="chromeVersion" class="os-badge">you have {{ chromeVersion }}</span>
+              </div>
+              <p>gemini nano requires chrome canary or dev channel (138+).</p>
+              <div class="command-box">
+                <code>chrome://version</code>
+                <Button 
+                  @click="copyToClipboard('chrome://version', 'chrome-version')"
+                  class="copy-btn p-0 h-7 w-7"
+                  variant="ghost"
+                  :class="{ copied: copiedStates['chrome-version'] }"
+                >
+                  <Check v-if="copiedStates['chrome-version']" :size="16" />
+                  <Copy v-else :size="16" />
+                </Button>
+              </div>
+            </div>
+          </div>
+          
+          <div class="step">
+            <div class="step-number">2</div>
+            <div class="step-body">
+              <div class="step-header">
+                <Zap :size="20" />
+                <h3>enable ai flags</h3>
+              </div>
+              <p>paste this url and enable the flags below, then restart chrome.</p>
+              <div class="command-box">
+                <code>chrome://flags/#optimization-guide-on-device-model</code>
+                <Button 
+                  @click="copyToClipboard('chrome://flags/#optimization-guide-on-device-model', 'flags-url')"
+                  class="copy-btn p-0 h-7 w-7"
+                  variant="ghost"
+                  :class="{ copied: copiedStates['flags-url'] }"
+                >
+                  <Check v-if="copiedStates['flags-url']" :size="16" />
+                  <Copy v-else :size="16" />
+                </Button>
+              </div>
+              <ul class="flag-list">
+                <li><code>#optimization-guide-on-device-model</code> → <strong>Enabled BypassPerfRequirement</strong></li>
+                <li><code>#prompt-api-for-gemini-nano</code> → <strong>Enabled</strong></li>
+                <li><code>#summarization-api-for-gemini-nano</code> → <strong>Enabled</strong></li>
+              </ul>
+            </div>
+          </div>
+          
+          <div class="step">
+            <div class="step-number">3</div>
+            <div class="step-body">
+              <div class="step-header">
+                <RefreshCw :size="20" />
+                <h3>restart & verify</h3>
+              </div>
+              <p>after enabling flags, fully restart chrome and return here.</p>
+              <Button @click="checkChromeAI" variant="outline" class="recheck-btn-inline">
+                <Loader2 v-if="chromeAIStatus === 'checking'" :size="14" class="spinning" />
+                <Zap v-else :size="14" />
+                recheck status
+              </Button>
+            </div>
+          </div>
+        </div>
+      </section>
+      
+      <!-- divider -->
+      <div class="section-divider">
+        <span>or use ollama</span>
+      </div>
+      
+      <!-- OPTION 2: ollama (fallback) -->
+      <section class="setup-section ollama-section">
+        <div class="setup-header">
+          <div class="setup-badge fallback">
+            <span>alternative</span>
+          </div>
+          <h2 class="section-title">option 2: ollama</h2>
+          <p class="setup-desc">for older browsers or if you prefer running your own models</p>
+        </div>
         
         <div ref="stepsRef" class="steps">
           <!-- step 1 -->
@@ -1066,6 +1340,219 @@ onMounted(async () => {
   font-weight: 500;
 }
 
+/* setup header and badges */
+.setup-header {
+  text-align: center;
+  margin-bottom: 40px;
+}
+
+.setup-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 100px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 16px;
+}
+
+.setup-badge.recommended {
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.15), rgba(16, 185, 129, 0.15));
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  color: #4ade80;
+}
+
+.setup-badge.fallback {
+  background: rgba(113, 113, 122, 0.1);
+  border: 1px solid rgba(113, 113, 122, 0.25);
+  color: #a1a1aa;
+}
+
+.setup-desc {
+  font-size: 14px;
+  color: #71717a;
+}
+
+/* section divider */
+.section-divider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 60px 0;
+  position: relative;
+}
+
+.section-divider::before,
+.section-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.08), transparent);
+}
+
+.section-divider span {
+  padding: 0 24px;
+  font-size: 13px;
+  color: #52525b;
+  font-weight: 500;
+}
+
+/* gemini status bar */
+.gemini-status {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 20px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  margin-bottom: 32px;
+  transition: all 0.3s ease;
+}
+
+.gemini-status.ready {
+  background: rgba(34, 197, 94, 0.08);
+  border-color: rgba(34, 197, 94, 0.25);
+}
+
+.gemini-status.downloading {
+  background: rgba(59, 130, 246, 0.08);
+  border-color: rgba(59, 130, 246, 0.25);
+}
+
+.gemini-status-icon {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  flex-shrink: 0;
+}
+
+.gemini-status.ready .gemini-status-icon { color: #4ade80; }
+.gemini-status.downloadable .gemini-status-icon { color: #60a5fa; }
+.gemini-status.checking .gemini-status-icon,
+.gemini-status.downloading .gemini-status-icon { color: #60a5fa; }
+.gemini-status.no-browser .gemini-status-icon,
+.gemini-status.unavailable .gemini-status-icon { color: #fbbf24; }
+
+.gemini-status-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.gemini-status-title {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  color: #e4e4e7;
+}
+
+.gemini-status-msg {
+  display: block;
+  font-size: 12px;
+  color: #71717a;
+  margin-top: 2px;
+}
+
+.gemini-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 120px;
+}
+
+.gemini-progress-bar {
+  flex: 1;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.gemini-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+.gemini-progress span {
+  font-size: 11px;
+  color: #a1a1aa;
+  font-weight: 500;
+}
+
+.gemini-action-btn {
+  gap: 6px !important;
+  padding: 8px 16px !important;
+  font-size: 13px !important;
+  background: linear-gradient(135deg, #3b82f6, #8b5cf6) !important;
+  border: none !important;
+  color: white !important;
+}
+
+.gemini-action-btn.ready {
+  background: linear-gradient(135deg, #22c55e, #10b981) !important;
+}
+
+/* flag list */
+.flag-list {
+  list-style: none;
+  padding: 0;
+  margin: 16px 0 0 0;
+  font-size: 13px;
+  color: #a1a1aa;
+}
+
+.flag-list li {
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.flag-list li:last-child {
+  border-bottom: none;
+}
+
+.flag-list code {
+  background: rgba(139, 92, 246, 0.12);
+  color: #c4b5fd;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.flag-list strong {
+  color: #4ade80;
+}
+
+/* recheck button inline */
+.recheck-btn-inline {
+  margin-top: 12px;
+  font-size: 13px !important;
+  gap: 8px !important;
+}
+
+/* spinning animation */
+.spinning {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ollama section styling */
+.ollama-section {
+  opacity: 0.9;
+}
+
 /* cta */
 .cta-section {
   text-align: center;
@@ -1326,9 +1813,352 @@ onMounted(async () => {
   white-space: nowrap;
 }
 
+/* chrome ai section */
+.chrome-ai-section {
+  margin-bottom: 80px;
+  padding-top: 60px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.chrome-ai-section.primary {
+  margin-top: 60px;
+  background: linear-gradient(180deg, rgba(139, 92, 246, 0.03) 0%, transparent 100%);
+  padding: 48px 32px;
+  border-radius: 24px;
+  border: 1px solid rgba(139, 92, 246, 0.12);
+}
+
+.chrome-ai-header {
+  text-align: center;
+  margin-bottom: 40px;
+}
+
+.chrome-ai-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.12), rgba(168, 85, 247, 0.12));
+  border: 1px solid rgba(139, 92, 246, 0.25);
+  border-radius: 100px;
+  color: #a78bfa;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 24px;
+}
+
+.chrome-ai-badge.recommended {
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.15), rgba(16, 185, 129, 0.15));
+  border-color: rgba(34, 197, 94, 0.35);
+  color: #4ade80;
+}
+
+/* status card */
+.chrome-ai-status-card {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 24px 28px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  margin-bottom: 24px;
+  transition: all 0.3s ease;
+}
+
+.chrome-ai-status-card.ready {
+  background: rgba(34, 197, 94, 0.08);
+  border-color: rgba(34, 197, 94, 0.25);
+}
+
+.chrome-ai-status-card.downloading {
+  background: rgba(59, 130, 246, 0.08);
+  border-color: rgba(59, 130, 246, 0.25);
+}
+
+.status-icon-container {
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  flex-shrink: 0;
+}
+
+.status-icon.spinning {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.status-icon.success { color: #4ade80; }
+.status-icon.download { color: #60a5fa; }
+.status-icon.warning { color: #fbbf24; }
+
+.status-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.status-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #e4e4e7;
+  margin-bottom: 4px;
+}
+
+.status-message {
+  font-size: 13px;
+  color: #71717a;
+}
+
+.progress-container {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.progress-bar {
+  flex: 1;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.progress-text {
+  font-size: 12px;
+  color: #a1a1aa;
+  font-weight: 500;
+  min-width: 40px;
+  text-align: right;
+}
+
+.status-action {
+  flex-shrink: 0;
+}
+
+.download-btn {
+  background: linear-gradient(135deg, #3b82f6, #8b5cf6) !important;
+  border: none !important;
+  color: white !important;
+  padding: 10px 20px !important;
+  font-weight: 600 !important;
+  gap: 8px !important;
+}
+
+.download-btn:hover {
+  opacity: 0.9;
+  transform: translateY(-1px);
+}
+
+.ready-btn {
+  background: linear-gradient(135deg, #22c55e, #10b981) !important;
+  border: none !important;
+  color: white !important;
+  padding: 10px 20px !important;
+  font-weight: 600 !important;
+  gap: 8px !important;
+}
+
+.setup-btn {
+  border-color: rgba(255, 255, 255, 0.15) !important;
+  font-size: 13px !important;
+}
+
+.recheck-btn {
+  margin-top: 12px;
+  font-size: 12px !important;
+  gap: 6px !important;
+}
+
+.recheck-btn .spinning {
+  animation: spin 1s linear infinite;
+}
+
+/* setup details accordion */
+.chrome-ai-setup-details {
+  margin-top: 24px;
+}
+
+.chrome-ai-setup-details summary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px;
+  font-size: 13px;
+  color: #71717a;
+  cursor: pointer;
+  list-style: none;
+  transition: color 0.2s;
+}
+
+.chrome-ai-setup-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.chrome-ai-setup-details summary:hover {
+  color: #a1a1aa;
+}
+
+.chrome-ai-setup-details summary svg {
+  transition: transform 0.3s;
+}
+
+.chrome-ai-setup-details[open] summary svg {
+  transform: rotate(180deg);
+}
+
+.chrome-ai-setup-details .chrome-ai-grid {
+  margin-top: 20px;
+}
+
+.chrome-ai-desc {
+  font-size: 16px;
+  color: #a1a1aa;
+  max-width: 600px;
+  margin: 0 auto;
+  line-height: 1.7;
+}
+
+.chrome-ai-desc strong {
+  color: #e4e4e7;
+}
+
+.chrome-ai-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+  margin-bottom: 32px;
+}
+
+.chrome-ai-card {
+  display: flex;
+  gap: 16px;
+  padding: 24px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 16px;
+  transition: all 0.3s ease;
+}
+
+.chrome-ai-card:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.1);
+  transform: translateY(-3px);
+}
+
+.chrome-ai-card-icon {
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  flex-shrink: 0;
+}
+
+.chrome-ai-step {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.chrome-ai-card-content h3 {
+  font-size: 15px;
+  font-weight: 600;
+  color: #e4e4e7;
+  margin-bottom: 8px;
+}
+
+.chrome-ai-card-content p {
+  font-size: 13px;
+  color: #71717a;
+  line-height: 1.5;
+  margin-bottom: 12px;
+}
+
+.chrome-ai-card-content .command-box.small {
+  padding: 8px 12px;
+  margin-bottom: 8px;
+}
+
+.chrome-ai-card-content .command-box.small code {
+  font-size: 11px;
+}
+
+.chrome-ai-flags {
+  list-style: none;
+  font-size: 12px;
+  color: #a1a1aa;
+  line-height: 1.8;
+}
+
+.chrome-ai-flags li {
+  padding-left: 16px;
+  position: relative;
+}
+
+.chrome-ai-flags li::before {
+  content: "→";
+  position: absolute;
+  left: 0;
+  color: #4ade80;
+}
+
+.chrome-ai-flags strong {
+  color: #4ade80;
+}
+
+.chrome-ai-note {
+  font-size: 11px !important;
+  color: #52525b !important;
+  font-style: italic;
+}
+
+.chrome-ai-note-box {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px 20px;
+  background: rgba(251, 191, 36, 0.08);
+  border: 1px solid rgba(251, 191, 36, 0.2);
+  border-radius: 12px;
+}
+
+.chrome-ai-note-box svg {
+  color: #fbbf24;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.chrome-ai-note-box p {
+  font-size: 13px;
+  color: #a1a1aa;
+  line-height: 1.6;
+}
+
+.chrome-ai-note-box strong {
+  color: #fbbf24;
+}
+
 /* responsive */
 @media (max-width: 900px) {
   .features-grid { grid-template-columns: repeat(2, 1fr); }
+  .chrome-ai-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 640px) {
@@ -1341,5 +2171,9 @@ onMounted(async () => {
   .faq-answer { padding-left: 20px; }
   .faq-question { padding: 14px 16px; font-size: 14px; gap: 10px; }
   .faq-icon { width: 32px; height: 32px; }
+  .chrome-ai-status-card { flex-direction: column; text-align: center; }
+  .chrome-ai-section.primary { padding: 32px 20px; }
+  .status-action { width: 100%; }
+  .status-action button { width: 100%; }
 }
 </style>
