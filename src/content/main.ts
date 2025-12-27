@@ -1,5 +1,5 @@
 import * as InboxSDK from '@inboxsdk/core';
-import { ContentScriptBootstrap } from '../ui/ContentScriptBootstrap';
+import { ContentScriptBootstrap } from '../content-ui/ContentScriptBootstrap';
 import { INBOXSDK_APP_ID } from '../config/secrets';
 
 const isGmail = window.location.hostname.includes('mail.google.com');

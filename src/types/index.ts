@@ -161,6 +161,7 @@ export interface SummaryTiming {
   total: number
   cached?: boolean
   model?: string
+  provider?: 'chrome-ai' | 'ollama'
 }
 
 export interface PageSummary {
@@ -426,6 +427,12 @@ export interface GetReplySuggestionsMessage {
   emailId: string
 }
 
+export interface GenerateReplySuggestionsMessage {
+  type: 'GENERATE_REPLY_SUGGESTIONS'
+  emailId: string
+  forceRegenerate?: boolean
+}
+
 export interface ExtractAndSummarizeMessage {
   type: 'EXTRACT_AND_SUMMARIZE'
   tabId: number
@@ -453,13 +460,27 @@ export interface CheckHealthMessage {
   type: 'CHECK_OLLAMA_HEALTH'
 }
 
+export interface GetEmailCacheMessage {
+  type: 'GET_EMAIL_CACHE'
+  emailId: string
+}
+
+export interface SetEmailCacheMessage {
+  type: 'SET_EMAIL_CACHE'
+  emailId: string
+  summary: unknown
+}
+
 export type BackgroundMessage =
   | EmailSummaryMessage
   | GetReplySuggestionsMessage
+  | GenerateReplySuggestionsMessage
   | ExtractAndSummarizeMessage
   | WordLookupMessage
   | ChatMessageRequest
   | CheckHealthMessage
+  | GetEmailCacheMessage
+  | SetEmailCacheMessage
 
 export type ResponseCallback = (response: unknown) => void
 
@@ -586,6 +607,8 @@ export interface AppPageSummary {
   readTime?: string
   content?: string
   fullContent?: string
+  wordCount?: number
+  timestamp?: number
   timing?: SummaryTiming
 }
 

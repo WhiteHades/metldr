@@ -82,13 +82,15 @@ declare global {
       format?: 'plain-text' | 'markdown'
       length?: 'short' | 'medium' | 'long'
       sharedContext?: string
+      expectedInputLanguages?: string[]
+      expectedContextLanguages?: string[]
+      outputLanguage?: string
       monitor?: (m: { addEventListener: (event: string, cb: (e: { loaded: number }) => void) => void }) => void
     }): Promise<WriterInstance>
   }
 
   var Writer: WriterConstructor | undefined
 
-  // rewriter api
   interface RewriterInstance {
     rewrite(text: string, options?: { context?: string; signal?: AbortSignal }): Promise<string>
     rewriteStreaming(text: string, options?: { context?: string }): ReadableStream<string>
@@ -102,6 +104,9 @@ declare global {
       format?: 'as-is' | 'plain-text' | 'markdown'
       length?: 'as-is' | 'shorter' | 'longer'
       sharedContext?: string
+      expectedInputLanguages?: string[]
+      expectedContextLanguages?: string[]
+      outputLanguage?: string
       monitor?: (m: { addEventListener: (event: string, cb: (e: { loaded: number }) => void) => void }) => void
     }): Promise<RewriterInstance>
   }
@@ -119,19 +124,23 @@ declare global {
   }
 
   interface LanguageModelAvailability {
-    available: 'available' | 'downloadable' | 'downloading' | 'unavailable' | 'no'
+    available: 'available' | 'downloadable' | 'downloading' | 'unavailable' | 'no' | 'readily' | 'after-download'
     defaultTopK?: number
     maxTopK?: number
     defaultTemperature?: number
   }
 
   interface LanguageModelConstructor {
-    availability(): Promise<LanguageModelAvailability>
+    availability(options?: { languages?: string[] }): Promise<string | LanguageModelAvailability>
+    params(): Promise<{ defaultTopK: number; maxTopK: number; defaultTemperature: number; maxTemperature: number }>
     create(options?: {
       initialPrompts?: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>
       systemPrompt?: string
       temperature?: number
       topK?: number
+      expectedInputs?: Array<{ type: 'text' | 'image' | 'audio'; languages?: string[] }>
+      expectedOutputs?: Array<{ type: 'text'; languages: string[] }>
+      signal?: AbortSignal
       monitor?: (m: { addEventListener: (event: string, cb: (e: { loaded: number }) => void) => void }) => void
     }): Promise<LanguageModelSession>
   }
