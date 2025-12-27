@@ -9,6 +9,11 @@
   "action": {
     "default_title": "metldr - click to open"
   },
+  "icons": {
+    "16": "icon-16.png",
+    "48": "icon-48.png",
+    "128": "icon-128.png"
+  },
   "side_panel": {
     "default_path": "index.html"
   },

@@ -31,6 +31,6 @@
     /* Types */
     "types": ["chrome"]
   },
-  "include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.vue", "vite.config.ts"],
+  "include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.vue", "src/types/chrome-ai.d.ts", "vite.config.ts"],
   "exclude": ["node_modules", "dist"]
 }

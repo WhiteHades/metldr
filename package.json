@@ -1,7 +1,7 @@
 {
   "name": "metldr",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.6.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -16,17 +16,21 @@
     "@radix-icons/vue": "^1.0.0",
     "@tailwindcss/vite": "^4.1.17",
     "@vueuse/core": "^14.1.0",
+    "ai": "^6.0.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "gsap": "^3.13.0",
     "lucide-vue-next": "^0.553.0",
     "marked": "^17.0.1",
+    "motion-v": "^1.7.4",
     "pinia": "^3.0.4",
     "radix-vue": "^1.9.17",
-    "reka-ui": "^2.6.1",
+    "reka-ui": "^2.7.0",
+    "streamdown-vue": "^1.0.29",
     "tailwind-merge": "^3.4.0",
     "tailwindcss": "^4.1.17",
-    "vue": "^3.5.22"
+    "vue": "^3.5.22",
+    "vue-stick-to-bottom": "^0.1.0"
   },
   "devDependencies": {
     "@types/chrome": "^0.1.32",
