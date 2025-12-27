@@ -2,6 +2,10 @@
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { FileText, Clock, Zap, Loader2, ChevronRight, TrendingUp, Trash2, Database } from 'lucide-vue-next'
 import type { HistoryItem } from '@/types'
+import { databaseService, DB_CONFIGS } from '@/services/DatabaseService'
+import { logger } from '@/services/LoggerService'
+
+const log = logger.createScoped('HistoryManager')
 
 const props = defineProps<{
   limit?: number
@@ -11,47 +15,16 @@ const history = ref<HistoryItem[]>([])
 const loading = ref<boolean>(true)
 let messageListener: ((message: { type: string }) => void) | null = null
 
-async function openDB(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open('metldr_cache', 4)
-    request.onsuccess = () => resolve(request.result)
-    request.onerror = () => reject(request.error)
-    request.onupgradeneeded = (event) => {
-      const target = event.target as IDBOpenDBRequest
-      const db = target.result
-      if (!db.objectStoreNames.contains('summaries')) {
-        db.createObjectStore('summaries', { keyPath: 'emailId' })
-      }
-      if (!db.objectStoreNames.contains('page_cache')) {
-        db.createObjectStore('page_cache', { keyPath: 'url' })
-      }
-      if (!db.objectStoreNames.contains('reply_suggestions')) {
-        db.createObjectStore('reply_suggestions', { keyPath: 'emailId' })
-      }
-    }
-  })
-}
-
 async function loadHistory(): Promise<HistoryItem[]> {
   try {
     loading.value = true
-    const db = await openDB()
-    const transaction = db.transaction(['summaries'], 'readonly')
-    const store = transaction.objectStore('summaries')
-    const request = store.getAll()
-
-    return new Promise((resolve) => {
-      request.onsuccess = () => {
-        const allSummaries = (request.result || []) as HistoryItem[]
-        const sorted = allSummaries
-          .sort((a: HistoryItem, b: HistoryItem) => b.timestamp - a.timestamp)
-          .slice(0, props.limit ?? 10)
-        resolve(sorted)
-      }
-      request.onerror = () => resolve([])
-    })
+    const allSummaries = await databaseService.getAll<HistoryItem>(DB_CONFIGS.cache, 'summaries')
+    const sorted = allSummaries
+      .sort((a: HistoryItem, b: HistoryItem) => b.timestamp - a.timestamp)
+      .slice(0, props.limit ?? 10)
+    return sorted
   } catch (error) {
-    console.error('metldr: failed to load history:', error)
+    log.error('failed to load history:', error)
     return []
   } finally {
     loading.value = false
@@ -80,12 +53,10 @@ const stats = computed(() => {
 async function clearHistory(): Promise<void> {
   if (!confirm('clear all summary history?')) return
   try {
-    const db = await openDB()
-    const tx = db.transaction(['summaries'], 'readwrite')
-    tx.objectStore('summaries').clear()
+    await databaseService.clear(DB_CONFIGS.cache, 'summaries')
     history.value = []
   } catch (err) {
-    console.error('metldr: failed to clear history:', err)
+    log.error('failed to clear history:', err)
   }
 }
 
