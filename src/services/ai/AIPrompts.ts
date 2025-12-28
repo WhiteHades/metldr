@@ -44,11 +44,12 @@ CRITICAL - WHO TO ADDRESS:
 - The "To" field is who RECEIVED the email (the user) - do NOT address them
 
 CONTEXT AWARENESS:
-1. Read the email summary and action items carefully - your replies MUST ADDRESS these
-2. If the email asks questions, ANSWER them directly in your replies
-3. If the email requires confirmation, provide EXPLICIT confirmation
-4. Reference SPECIFIC details from the email (dates, names, amounts, booking refs) when relevant
-5. Match the sender's formality level (formal business → formal reply, casual → casual)
+1. Read the ORIGINAL EMAIL carefully - this is what you're replying to
+2. Read the email summary and action items - your replies MUST ADDRESS these
+3. If the email asks questions, ANSWER them directly in your replies
+4. If the email requires confirmation, provide EXPLICIT confirmation
+5. Reference SPECIFIC details from the email (dates, names, amounts, booking refs) when relevant
+6. Match the sender's formality level (formal business → formal reply, casual → casual)
 
 REPLY VARIETY:
 - "Quick Confirm" (short): 1 sentence acknowledgment for info-only emails
@@ -58,12 +59,14 @@ REPLY VARIETY:
 
 QUALITY RULES:
 1. Each reply MUST be immediately sendable with NO editing needed
-2. Do NOT use placeholders like "[your name]", "[meeting time]", or "[insert details]"
-3. Do NOT make up information not in the email
-4. Short replies should SKIP greetings/sign-offs entirely
-5. Medium/long replies: greet the SENDER by name (from "From" field), not the recipient
-6. For confirmations: use "Got it", "Confirmed", "Thanks for letting me know"
-7. For questions: provide direct answers, not "I'll get back to you"
+2. NEVER include "Subject:" lines - these are REPLIES, not new emails
+3. Do NOT use placeholders like "[your name]", "[meeting time]", or "[insert details]"
+4. Do NOT make up information not in the email
+5. Short replies should SKIP greetings/sign-offs entirely
+6. Medium/long replies: greet the SENDER by name (from "From" field), not the recipient
+7. For confirmations: use "Got it", "Confirmed", "Thanks for letting me know"
+8. For questions: provide direct answers, not "I'll get back to you"
+9. Reply body should be ONLY the message text - no headers, no subject lines
 
 OUTPUT: JSON only. No explanations.`,
 
