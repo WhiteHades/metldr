@@ -102,46 +102,23 @@
     "liga" 1,
     "calt" 1;
 
-  /* typography scale */
-  --font-size-xs: 0.6875rem; /* 11px */
-  --font-size-sm: 0.8125rem; /* 13px */
-  --font-size-base: 0.9375rem; /* 15px */
-  --font-size-lg: 1.0625rem; /* 17px */
-  --font-size-xl: 1.25rem; /* 20px */
-  --font-size-2xl: 1.5rem; /* 24px */
+  --font-size-base: 0.9375rem;  
+  --font-text-body: 13px;
+  --font-text-secondary: 12px;
+  --font-text-small: 11px;
+}
 
-  /* line heights */
-  --leading-tight: 1.25;
-  --leading-snug: 1.375;
-  --leading-normal: 1.5;
-  --leading-relaxed: 1.625;
+/* font size presets */
+[data-font-size="small"] {
+  --font-text-body: 12px;
+  --font-text-secondary: 11px;
+  --font-text-small: 10px;
+}
 
-  /* glassmorphism & depth */
-  --glass-blur: blur(16px);
-  --glass-bg-light: rgba(255, 255, 255, 0.7);
-  --glass-bg-dark: rgba(20, 20, 20, 0.7);
-  --glass-border: rgba(255, 255, 255, 0.15);
-  --header-height: 52px;
-
-  /* shadows */
-  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.05);
-  --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.03);
-  --shadow-md: 0 4px 8px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04);
-  --shadow-lg: 0 8px 16px rgba(0, 0, 0, 0.1), 0 4px 8px rgba(0, 0, 0, 0.05);
-  --shadow-xl: 0 16px 32px rgba(0, 0, 0, 0.12), 0 8px 16px rgba(0, 0, 0, 0.06);
-
-  /* animations */
-  --transition-fast: 0.15s ease;
-  --transition-normal: 0.3s ease;
-  --transition-slow: 0.5s ease;
-
-  /* spacing scale */
-  --space-1: 0.25rem;
-  --space-2: 0.5rem;
-  --space-3: 0.75rem;
-  --space-4: 1rem;
-  --space-6: 1.5rem;
-  --space-8: 2rem;
+[data-font-size="large"] {
+  --font-text-body: 14px;
+  --font-text-secondary: 13px;
+  --font-text-small: 12px;
 }
 
 body {
