@@ -33,25 +33,25 @@ function copySetupCommands() {
         </div>
         <div>
           <h2 class="text-[15px] font-semibold text-foreground">start ollama</h2>
-          <p class="text-[11px] text-foreground/60">run this command to connect</p>
+          <p class="text-(length:--font-text-secondary) text-foreground/60">run this command to connect</p>
         </div>
       </div>
       
       <!-- main command -->
       <div class="bg-background/80 backdrop-blur-sm rounded-lg p-4 border border-border mb-4">
         <div class="flex items-center justify-between mb-2">
-          <span class="text-[10px] font-medium text-foreground/50 uppercase tracking-wide">
+          <span class="text-(length:--font-text-secondary) font-medium text-foreground/50 uppercase tracking-wide">
             {{ isWindows ? 'powershell' : 'terminal' }}
           </span>
           <button 
             @click="copySetupCommands" 
-            class="text-[10px] text-primary hover:text-primary/80 transition-colors flex items-center gap-1"
+            class="text-(length:--font-text-secondary) text-primary hover:text-primary/80 transition-colors flex items-center gap-1"
           >
             <Check v-if="copiedSetup" :size="10" />
             <span>{{ copiedSetup ? 'copied!' : 'copy' }}</span>
           </button>
         </div>
-        <pre class="font-mono text-[12px] text-foreground whitespace-pre-wrap leading-relaxed">{{ setupCommands }}</pre>
+        <pre class="font-mono text-(length:--font-text-secondary) text-foreground whitespace-pre-wrap leading-relaxed">{{ setupCommands }}</pre>
       </div>
       
       <!-- auto-retry indicator -->
@@ -60,14 +60,14 @@ function copySetupCommands() {
           <Circle :size="8" class="text-primary animate-pulse" fill="currentColor" />
           <div class="absolute inset-0 rounded-full bg-primary/30 animate-ping"></div>
         </div>
-        <span class="text-[10px] text-foreground/60">auto-detecting ollama...</span>
+        <span class="text-(length:--font-text-secondary) text-foreground/60">auto-detecting ollama...</span>
       </div>
       
       <!-- retry button -->
       <Button 
         @click="emit('retry')" 
         variant="outline"
-        class="w-full mb-4 h-9 text-[12px] border-primary/30 hover:bg-primary/10 hover:border-primary/50"
+        class="w-full mb-4 h-9 text-(length:--font-text-secondary) border-primary/30 hover:bg-primary/10 hover:border-primary/50"
       >
         <RefreshCw :size="13" class="mr-2" />
         check connection now
@@ -75,7 +75,7 @@ function copySetupCommands() {
       
       <!-- fallback section -->
       <div class="pt-4 border-t border-border/50">
-        <p class="text-[11px] text-foreground/50 text-center">
+        <p class="text-(length:--font-text-secondary) text-foreground/50 text-center">
           don't have ollama installed?
           <button 
             @click="emit('open-welcome')" 
