@@ -36,7 +36,7 @@ const ollamaSelected = computed(() => props.preferredProvider === 'ollama')
       <div class="flex items-center justify-center w-6 h-6 rounded-md bg-primary/25">
         <Binary :size="12" class="text-primary" />
       </div>
-      <span class="text-[12px] font-medium text-foreground tracking-wide">ai provider</span>
+      <span class="text-(length:--font-text-secondary) font-medium text-foreground tracking-wide">ai provider</span>
     </div>
 
     <!-- chrome ai row -->
@@ -46,11 +46,11 @@ const ollamaSelected = computed(() => props.preferredProvider === 'ollama')
       :class="chromeSelected ? 'bg-primary/10 ring-1 ring-primary/30' : 'bg-muted/30 hover:bg-muted/50'"
     >
       <div class="flex items-center gap-2">
-        <span class="text-[11px] font-medium" :class="chromeSelected ? 'text-primary' : 'text-foreground/70'">gemini nano</span>
-        <span class="text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400/70">easy</span>
+        <span class="text-(length:--font-text-secondary) font-medium" :class="chromeSelected ? 'text-primary' : 'text-foreground/70'">gemini nano</span>
+        <span class="text-(length:--font-text-secondary) px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400/70">easy</span>
       </div>
       <span 
-        class="text-[9px] px-1.5 py-0.5 rounded-full font-medium"
+        class="text-(length:--font-text-secondary) px-1.5 py-0.5 rounded-full font-medium"
         :class="{
           'bg-emerald-500/20 text-emerald-400': chromeAIStatus === 'available',
           'bg-amber-500/20 text-amber-400': chromeAIStatus === 'downloading',
@@ -74,12 +74,12 @@ const ollamaSelected = computed(() => props.preferredProvider === 'ollama')
         ]"
       >
         <div class="flex items-center gap-2">
-          <span class="text-[11px] font-medium" :class="ollamaSelected ? 'text-secondary' : 'text-foreground/70'">ollama</span>
-          <span class="text-[9px] px-1.5 py-0.5 rounded-full bg-blue-500/15 text-blue-400/70">advanced</span>
+          <span class="text-(length:--font-text-secondary) font-medium" :class="ollamaSelected ? 'text-secondary' : 'text-foreground/70'">ollama</span>
+          <span class="text-(length:--font-text-secondary) px-1.5 py-0.5 rounded-full bg-blue-500/15 text-blue-400/70">advanced</span>
         </div>
         <div class="flex items-center gap-1.5">
           <span 
-            class="text-[9px] px-1.5 py-0.5 rounded-full font-medium"
+            class="text-(length:--font-text-secondary) px-1.5 py-0.5 rounded-full font-medium"
             :class="{
               'bg-emerald-500/20 text-emerald-400': ollamaStatus === 'ready',
               'bg-red-500/20 text-red-400': ollamaStatus === 'not-found',
@@ -103,7 +103,7 @@ const ollamaSelected = computed(() => props.preferredProvider === 'ollama')
           @click="emit('toggle-dropdown')"
           class="model-selector-btn w-full flex items-center justify-between px-3 py-2 bg-muted/50 hover:bg-muted rounded-lg border border-input transition-colors"
         >
-          <span class="font-mono text-[10px] text-foreground truncate">{{ selectedModel }}</span>
+          <span class="font-mono text-(length:--font-text-secondary) text-foreground truncate">{{ selectedModel }}</span>
           <ChevronDown 
             :size="12" 
             class="text-foreground/50 transition-transform shrink-0"
@@ -128,7 +128,7 @@ const ollamaSelected = computed(() => props.preferredProvider === 'ollama')
                   v-for="model in availableModels" 
                   :key="model"
                   @click="emit('select-model', model)"
-                  class="w-full flex items-center justify-between px-3 py-2 text-[11px] font-mono hover:bg-muted transition-colors"
+                  class="w-full flex items-center justify-between px-3 py-2 text-(length:--font-text-secondary) font-mono hover:bg-muted transition-colors"
                   :class="{ 'bg-muted': selectedModel === model }"
                 >
                   <span class="text-foreground truncate">{{ model }}</span>
@@ -141,7 +141,7 @@ const ollamaSelected = computed(() => props.preferredProvider === 'ollama')
       </div>
 
     <!-- hint text -->
-    <p class="text-[10px] text-foreground/50 pt-1">
+    <p class="text-(length:--font-text-secondary) text-foreground/50 pt-1">
       <template v-if="chromeSelected">built-in chrome ai. fast & private.</template>
       <template v-else>
         local ollama models. 
