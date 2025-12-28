@@ -14,7 +14,7 @@ export interface Theme {
   shadow: string
 }
 
-export type ThemeName = 'default' | 'light' | 'cyberpunk' | 'catppuccin' | 'gruvbox'
+export type ThemeName = 'light' | 'cyberpunk' | 'catppuccin' | 'gruvbox'
 export type ThemeListener = (themeName: string, theme: Theme) => void
 
 export interface ThemeColors {
@@ -111,6 +111,17 @@ export interface EmailSummary {
   time_ms?: number
   cached?: boolean
   model?: string
+}
+
+// unified per-email session data (summary, replies, chat in one store)
+export interface EmailSession {
+  emailId: string
+  summary: EmailSummary | null
+  replySuggestions: ReplySuggestion[] | null
+  chatMessages: AppChatMessage[]
+  metadata: EmailMetadata | null
+  timestamp: number
+  ttl: number
 }
 
 export interface ParsedLLMSummary {
