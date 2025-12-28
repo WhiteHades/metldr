@@ -87,14 +87,19 @@ defineExpose({
 
 <template>
   <div class="chat-thread flex h-full min-h-0 flex-col bg-background">
-    <div v-if="isThreadEmpty && !chatDisabled" class="flex h-full flex-col items-center justify-end px-3 pb-4">
+    <div v-if="isThreadEmpty && !chatDisabled" class="flex h-full flex-col px-3 pb-4">
+      <div class="flex-1 flex items-center justify-center">
+        <div class="empty-state text-center">
+          <p class="text-sm text-muted-foreground/60">ask anything about this page</p>
+        </div>
+      </div>
       <div class="composer w-full">
         <div class="composer-bar">
           <textarea
             ref="textareaRef"
             v-model="chatInput"
             @keydown="handleKeydown"
-            :placeholder="isViewingEmailThread ? 'Ask about this email...' : 'What do you want to know?'"
+            placeholder="..."
             :disabled="chatDisabled"
             rows="1"
             class="composer-input"
@@ -144,13 +149,13 @@ defineExpose({
           </div>
 
           <template v-for="(msg, i) in chatMessages" :key="i">
-            <div v-if="msg.role === 'user'" class="flex justify-end">
+            <div v-if="msg.role === 'user'" class="flex justify-end message-appear">
               <div class="user-message">
                 {{ msg.content }}
               </div>
             </div>
             
-            <div v-else class="flex flex-col items-start gap-1">
+            <div v-else class="flex flex-col items-start gap-1 message-appear">
               <div class="assistant-message">
                 <div class="chat-markdown" v-html="renderMarkdown(msg.content)"></div>
               </div>
@@ -179,7 +184,7 @@ defineExpose({
               ref="textareaRef"
               v-model="chatInput"
               @keydown="handleKeydown"
-              :placeholder="isViewingEmailThread ? 'Ask about this email...' : 'What do you want to know?'"
+              placeholder="..."
               :disabled="chatDisabled"
               rows="1"
               class="composer-input"
@@ -226,23 +231,23 @@ defineExpose({
   align-items: flex-end;
   gap: 6px;
   padding: 8px 10px;
-  background: hsl(var(--muted) / 0.6);
+  background: color-mix(in oklch, var(--color-card) 60%, transparent);
   border-radius: 20px;
-  border: 1px solid hsl(var(--border) / 0.4);
+  border: 1px solid color-mix(in oklch, var(--color-border) 40%, transparent);
   transition: background 150ms ease, border-color 150ms ease;
 }
 
 .composer-bar:focus-within {
-  background: hsl(var(--muted) / 0.8);
-  border-color: hsl(var(--border) / 0.6);
+  background: color-mix(in oklch, var(--color-card) 80%, transparent);
+  border-color: color-mix(in oklch, var(--color-border) 60%, transparent);
 }
 
 .composer-input {
   flex: 1;
   resize: none;
   background: transparent;
-  color: hsl(var(--foreground));
-  font-size: 12px;
+  color: var(--color-foreground);
+  font-size: var(--font-text-body);
   line-height: 1.5;
   outline: none;
   border: none;
@@ -252,7 +257,7 @@ defineExpose({
 }
 
 .composer-input::placeholder {
-  color: hsl(var(--muted-foreground) / 0.7);
+  color: color-mix(in oklch, var(--color-muted-foreground) 70%, transparent);
 }
 
 .composer-input:focus {
@@ -293,7 +298,7 @@ defineExpose({
 }
 
 .chat-markdown :deep(code) {
-  background: hsl(var(--muted));
+  background: var(--color-card);
   padding: 0.1em 0.3em;
   border-radius: 3px;
   font-family: ui-monospace, monospace;
@@ -301,7 +306,7 @@ defineExpose({
 }
 
 .chat-markdown :deep(a) {
-  color: hsl(var(--primary));
+  color: var(--color-primary);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -316,35 +321,34 @@ defineExpose({
   padding-left: 1.2em;
 }
 
-/* user message bubble */
 .user-message {
   max-width: 85%;
-  border-radius: 16px 16px 4px 16px;
-  background: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--primary) / 0.85));
-  color: hsl(var(--primary-foreground));
-  padding: 10px 14px;
-  font-size: 12px;
+  border-radius: 14px 14px 4px 14px;
+  background: color-mix(in oklch, var(--color-primary) 15%, transparent);
+  border: 1px solid color-mix(in oklch, var(--color-primary) 25%, transparent);
+  color: var(--color-foreground);
+  padding: 8px 12px;
+  font-size: var(--font-text-body);
   line-height: 1.5;
-  box-shadow: 0 2px 8px hsl(var(--primary) / 0.25);
 }
 
-/* assistant message bubble */
 .assistant-message {
   max-width: 92%;
-  border-radius: 16px 16px 16px 4px;
-  background: hsl(var(--muted) / 0.5);
-  border: 1px solid hsl(var(--border) / 0.3);
-  padding: 10px 14px;
-  font-size: 12px;
+  border-radius: 14px 14px 14px 4px;
+  background: color-mix(in oklch, var(--color-muted) 60%, transparent);
+  border: 1px solid var(--color-border);
+  padding: 8px 12px;
+  font-size: var(--font-text-body);
   line-height: 1.6;
+  color: var(--color-foreground);
 }
 
 .timing-badge {
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 9px;
-  color: hsl(var(--muted-foreground) / 0.7);
+  font-size: var(--font-text-small);
+  color: color-mix(in oklch, var(--color-muted-foreground) 70%, transparent);
   padding-left: 4px;
 }
 
@@ -354,15 +358,15 @@ defineExpose({
   align-items: center;
   gap: 4px;
   padding: 12px 16px;
-  background: hsl(var(--muted) / 0.5);
-  border: 1px solid hsl(var(--border) / 0.3);
+  background: color-mix(in oklch, var(--color-card) 70%, transparent);
+  border: 1px solid color-mix(in oklch, var(--color-border) 30%, transparent);
   border-radius: 16px 16px 16px 4px;
 }
 
 .typing-indicator .dot {
   width: 6px;
   height: 6px;
-  background: hsl(var(--primary));
+  background: var(--color-primary);
   border-radius: 50%;
   animation: bounce 1.4s infinite ease-in-out both;
 }
@@ -388,5 +392,29 @@ defineExpose({
     transform: scale(1);
     opacity: 1;
   }
+}
+
+.message-appear {
+  animation: messageSlideIn 0.25s ease-out forwards;
+}
+
+@keyframes messageSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.empty-state {
+  animation: fadeIn 0.3s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 </style>
