@@ -3,18 +3,6 @@ import { formatTime } from '../utils/text'
 import type { Theme, ThemeName, ThemeListener, Summary, IntentStyle } from '../types'
 
 export const THEME_COLORS: Record<ThemeName, Theme> = {
-  default: {
-    primary: 'oklch(0.55 0.12 240)',
-    secondary: 'oklch(0.50 0.10 280)',
-    accent: 'oklch(0.53 0.11 190)',
-    bg: 'oklch(0.14 0.01 265)',
-    bgSecondary: 'oklch(0.18 0.01 265)',
-    text: 'oklch(0.75 0.01 265)',
-    textMuted: 'oklch(0.50 0.01 265)',
-    border: 'oklch(0.28 0.01 265 / 0.3)',
-    borderSubtle: 'oklch(0.28 0.01 265 / 0.15)',
-    shadow: 'oklch(0 0 0 / 0.15)',
-  },
   light: {
     primary: 'oklch(0.38 0.20 240)',
     secondary: 'oklch(0.42 0.16 280)',
@@ -144,8 +132,8 @@ const CONFIDENCE_COLORS: Record<string, string> = {
 }
 
 export class UIService {
-  static currentThemeName: ThemeName = 'default'
-  static currentTheme: Theme = THEME_COLORS.default
+  static currentThemeName: ThemeName = 'catppuccin'
+  static currentTheme: Theme = THEME_COLORS.catppuccin
   static listeners: ThemeListener[] = []
 
   static ANIMATION_STYLE_ID = 'metldr-animations'
@@ -154,19 +142,19 @@ export class UIService {
   static async loadFromStorage(): Promise<string> {
     try {
       const result = await chrome.storage.local.get('theme') as { theme?: string }
-      const themeName = (result.theme || 'default') as ThemeName
+      const themeName = (result.theme || 'catppuccin') as ThemeName
       this.setTheme(themeName)
       return themeName
     } catch (error) {
       console.error('metldr: failed to load theme from storage:', error)
-      this.currentThemeName = 'default'
-      this.currentTheme = THEME_COLORS.default
-      return 'default'
+      this.currentThemeName = 'catppuccin'
+      this.currentTheme = THEME_COLORS.catppuccin
+      return 'catppuccin'
     }
   }
 
   static setTheme(themeName: string): void {
-    const validName = (THEME_COLORS[themeName as ThemeName] ? themeName : 'default') as ThemeName
+    const validName = (THEME_COLORS[themeName as ThemeName] ? themeName : 'catppuccin') as ThemeName
     this.currentThemeName = validName
     this.currentTheme = THEME_COLORS[validName]
     this.notifyListeners()
@@ -301,31 +289,30 @@ export class UIService {
     button.style.cssText = `
       display: inline-flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
       margin: 12px 0;
       padding: 8px 14px;
       background: ${theme.bgSecondary};
       border: 1px solid ${theme.border};
       border-radius: 8px;
-      box-shadow: 0 2px 6px ${theme.shadow};
       cursor: pointer;
       opacity: 0;
       transform: scale(0.985);
-      transition: all 0.2s ease;
+      transition: all 0.15s ease;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      box-shadow: 0 2px 6px ${theme.shadow};
     `
     
     button.innerHTML = `
       <span style="
         color: ${theme.primary};
-        font-size: 12px;
+        font-size: 13px;
         font-weight: 600;
         letter-spacing: 0.01em;
       ">summarise email</span>
       <style>
         .metldr-summarize-btn:hover {
           border-color: ${theme.primary} !important;
-          background: ${theme.bg} !important;
         }
         .metldr-summarize-btn:active {
           transform: scale(0.97) !important;
