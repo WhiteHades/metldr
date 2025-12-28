@@ -206,11 +206,10 @@ export const databaseService = new DatabaseServiceClass()
 export const DB_CONFIGS = {
   cache: {
     name: 'metldr_cache',
-    version: 5,
+    version: 6,
     stores: [
-      { name: 'summaries', keyPath: 'emailId' },
+      { name: 'email_sessions', keyPath: 'emailId' },
       { name: 'page_cache', keyPath: 'url' },
-      { name: 'reply_suggestions', keyPath: 'emailId' },
       { name: 'tab_sessions', keyPath: 'url' }
     ]
   },
