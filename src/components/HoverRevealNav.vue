@@ -172,7 +172,9 @@ onMounted(() => {
 .tab-btn:hover {
   color: hsl(var(--foreground));
   background: hsl(var(--muted));
-  border-color: hsl(var(--border));
+  border-color: hsl(var(--primary) / 0.5);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px hsl(var(--primary) / 0.15);
 }
 
 .tab-btn.active {
