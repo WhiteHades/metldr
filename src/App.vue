@@ -87,6 +87,9 @@ const {
   toggleWordPopup,
   loadProviderPreference,
   setProviderPreference,
+  loadFontSize,
+  setFontSize,
+  fontSize,
   setupSettingsWatcher,
   setupStorageListener
 } = useSettings()
@@ -245,6 +248,7 @@ onMounted(async () => {
   await loadWordPopupSetting()
   await loadSummaryPrefs()
   await loadProviderPreference()
+  await loadFontSize()
   await loadDictionarySettings()
   await initSelectedLanguages()
   
@@ -409,6 +413,8 @@ onUnmounted(() => {
           @clear-cache="clearCache"
           @refresh-ollama="retryDetection"
           @open-welcome="openWelcomePage"
+          :font-size="fontSize"
+          @update:font-size="setFontSize"
         />
 
         <!-- error state -->
