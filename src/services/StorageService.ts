@@ -8,6 +8,7 @@ type StorageKey =
   | 'dictionarySource'
   | 'dictDownloadProgress'
   | 'downloadingLanguages'
+  | 'fontSize'
 
 class StorageServiceClass {
   private cache: Map<string, { value: unknown; timestamp: number }> = new Map()
