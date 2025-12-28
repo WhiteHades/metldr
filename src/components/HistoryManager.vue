@@ -134,7 +134,7 @@ defineExpose({
       >
         <TrendingUp :size="12" :stroke-width="2" class="text-accent" />
         <span class="text-sm font-semibold tabular-nums text-accent">{{ stats.thisWeek }}</span>
-        <span class="text-[10px] text-accent/70">/wk</span>
+        <span class="text-(length:--font-text-small) text-accent/70">/wk</span>
       </div>
     </div>
 
@@ -142,14 +142,14 @@ defineExpose({
       <div class="flex items-center justify-between mb-3 px-1">
         <div class="flex items-center gap-2">
           <Zap :size="12" :stroke-width="2.5" class="text-muted-foreground" />
-          <h3 class="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <h3 class="text-(length:--font-text-small) font-semibold uppercase tracking-wider text-muted-foreground">
             Recent
           </h3>
         </div>
         <button 
           v-if="history.length > 0"
           @click="clearHistory"
-          class="flex items-center gap-1 text-[10px] text-muted-foreground/50 hover:text-error/60 transition-colors"
+          class="flex items-center gap-1 text-(length:--font-text-small) text-muted-foreground/50 hover:text-error/60 transition-colors"
         >
           <Trash2 :size="10" />
           clear
@@ -188,13 +188,13 @@ defineExpose({
             <p class="text-sm line-clamp-2 mb-1.5 font-medium leading-relaxed text-foreground/85">
               {{ item.summary?.summary || 'No summary available' }}
             </p>
-            <div class="flex items-center gap-2 text-[11px]">
+            <div class="flex items-center gap-2 text-(length:--font-text-small)">
               <span class="text-muted-foreground">
                 {{ formatTimestamp(item.timestamp) }}
               </span>
               <span 
                 v-if="item.summary?.cached" 
-                class="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-accent/10 text-accent"
+                class="flex items-center gap-1 px-2 py-0.5 rounded-full text-(length:--font-text-small) font-medium bg-accent/10 text-accent"
               >
                 <Database :size="9" :stroke-width="2.5" />
                 cached
