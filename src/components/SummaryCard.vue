@@ -40,15 +40,15 @@ const hasContent = computed(() => props.pageSummary || props.summaryLoading || p
 <template>
   <div class="shrink-0 p-2 pb-0">
     <!-- Prompt toast -->
-    <div v-if="summaryPrompt" class="absolute right-2 bottom-2 max-w-xs rounded-lg border border-warning/50 bg-warning/10 px-3 py-2 text-[10px] shadow-lg z-10">
+    <div v-if="summaryPrompt" class="absolute right-2 bottom-2 max-w-xs rounded-lg border border-warning/50 bg-warning/10 px-3 py-2 text-(length:--font-text-small) shadow-lg z-10">
       <div class="flex items-start gap-2">
         <div class="flex-1 min-w-0">
           <div class="font-medium text-foreground truncate">summarise this page?</div>
           <div class="text-foreground/70 truncate">{{ summaryPrompt.reason }}</div>
         </div>
         <div class="flex gap-1 shrink-0">
-          <button class="px-2 py-1 rounded text-[10px] text-foreground/70 hover:bg-muted transition-colors" @click="emit('decline-prompt')">no</button>
-          <button class="px-2 py-1 rounded text-[10px] bg-warning/30 border border-warning/50 text-warning-foreground hover:bg-warning/40 transition-colors" @click="emit('accept-prompt')">yes</button>
+          <button class="px-2 py-1 rounded text-(length:--font-text-small) text-foreground/70 hover:bg-muted transition-colors" @click="emit('decline-prompt')">no</button>
+          <button class="px-2 py-1 rounded text-(length:--font-text-small) bg-warning/30 border border-warning/50 text-warning-foreground hover:bg-warning/40 transition-colors" @click="emit('accept-prompt')">yes</button>
         </div>
       </div>
     </div>
@@ -66,10 +66,10 @@ const hasContent = computed(() => props.pageSummary || props.summaryLoading || p
           class="text-primary/60 shrink-0 transition-transform"
         />
         <div class="flex-1 min-w-0">
-          <h3 class="text-[12px] font-medium text-foreground truncate leading-tight">
+          <h3 class="text-(length:--font-text-body) font-medium text-foreground truncate leading-tight">
             {{ pageSummary.title || 'untitled' }}
           </h3>
-          <p v-if="summaryCollapsed" class="text-[10px] text-foreground/60 truncate">
+          <p v-if="summaryCollapsed" class="text-(length:--font-text-small) text-foreground/60 truncate">
             {{ pageSummary.bullets.length }} key points · {{ pageSummary.readTime || 'n/a' }} read
           </p>
         </div>
@@ -88,49 +88,33 @@ const hasContent = computed(() => props.pageSummary || props.summaryLoading || p
         <div v-if="!summaryCollapsed" class="summary-content overflow-hidden">
           <div class="px-3 pb-3 pt-1 border-t border-border">
             <!-- metadata -->
-            <p v-if="pageSummary.publication || pageSummary.author" class="text-[10px] text-foreground/60 mb-2">
+            <p v-if="pageSummary.publication || pageSummary.author" class="text-(length:--font-text-small) text-foreground/60 mb-2">
               {{ pageSummary.publication }}{{ pageSummary.author ? ` · ${pageSummary.author}` : '' }}
             </p>
             
             <!-- bullets -->
             <ul class="space-y-1.5">
-              <li v-for="(bullet, i) in pageSummary.bullets" :key="i" class="flex gap-2 text-[11px] leading-relaxed">
+              <li v-for="(bullet, i) in pageSummary.bullets" :key="i" class="flex gap-2 text-(length:--font-text-body) leading-relaxed">
                 <span class="text-primary shrink-0 mt-0.5">•</span>
                 <span class="text-foreground markdown-content" v-html="renderMarkdown(bullet)"></span>
               </li>
             </ul>
             
             <div class="flex items-center justify-between pt-2 mt-2 border-t border-border">
-              <span class="text-[10px] text-foreground/60">{{ pageSummary.readTime || 'n/a' }} read</span>
+              <span class="text-(length:--font-text-small) text-foreground/60">{{ pageSummary.readTime || 'n/a' }} read</span>
               <div 
                 v-if="pageSummary.timing"
                 class="timing-badge group relative cursor-help"
               >
-                <div class="flex items-center gap-1.5 text-[10px] text-foreground/60 hover:text-foreground transition-colors">
-                  <!-- AI provider badge -->
-                  <span 
-                    v-if="pageSummary.timing.provider === 'chrome-ai'"
-                    class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-linear-to-r from-blue-500/20 to-purple-500/20 border border-blue-500/30 text-blue-400"
-                    title="Using Chrome Built-in AI"
-                  >
-                    <Sparkles :size="8" />
-                    <span class="text-[8px] font-medium">Chrome AI</span>
-                  </span>
-                  <span 
-                    v-else-if="pageSummary.timing.provider === 'ollama' || pageSummary.timing.model"
-                    class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-green-500/15 border border-green-500/30 text-green-400"
-                    title="Using Ollama Local AI"
-                  >
-                    <Server :size="8" />
-                    <span class="text-[8px] font-medium">Ollama</span>
-                  </span>
+                <div class="flex items-center gap-1.5 text-(length:--font-text-small) text-foreground/60 hover:text-foreground transition-colors">
                   <span>{{ formatTime(pageSummary.timing.total) }}</span>
+                  <span v-if="pageSummary.timing.model" class="opacity-60">· {{ pageSummary.timing.model }}</span>
                   <span v-if="pageSummary.timing.cached" class="text-primary">· cached</span>
                 </div>
                 <!-- hover breakdown tooltip -->
                 <div class="timing-tooltip absolute bottom-full right-0 mb-2 px-2.5 py-2 rounded-lg bg-popover border border-border shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-150 z-50 min-w-40">
-                  <div class="text-[10px] font-medium text-foreground mb-1.5 uppercase tracking-wide">time breakdown</div>
-                  <div class="space-y-1 text-[10px]">
+                  <div class="text-(length:--font-text-small) font-medium text-foreground mb-1.5 uppercase tracking-wide">time breakdown</div>
+                  <div class="space-y-1 text-(length:--font-text-small)">
                     <div class="flex justify-between gap-3">
                       <span class="text-foreground/70">extraction</span>
                       <span class="text-foreground font-mono">{{ formatTime(pageSummary.timing.extraction || 0) }}</span>
@@ -169,7 +153,7 @@ const hasContent = computed(() => props.pageSummary || props.summaryLoading || p
     <!-- loading state -->
     <div v-else-if="summaryLoading" class="flex items-center gap-2.5 p-3 rounded-lg bg-muted border border-border">
       <Loader2 class="w-4 h-4 animate-spin text-primary" />
-      <span class="text-[11px] text-foreground">analysing...</span>
+      <span class="text-(length:--font-text-small) text-foreground">analysing...</span>
     </div>
 
     <!-- error state with retry button -->
@@ -177,14 +161,14 @@ const hasContent = computed(() => props.pageSummary || props.summaryLoading || p
       <div class="flex items-center gap-2.5 p-3 rounded-lg bg-destructive/15 border border-destructive/30">
         <AlertCircle :size="13" class="text-destructive shrink-0" />
         <div class="flex-1 min-w-0">
-          <p class="text-[11px] text-foreground">{{ summaryError }}</p>
+          <p class="text-(length:--font-text-small) text-foreground">{{ summaryError }}</p>
         </div>
       </div>
       <Button 
         v-if="!isEmailClient"
         @click="emit('manual-summary')"
         :disabled="summaryLoading"
-        class="w-full text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted/60"
+        class="w-full text-(length:--font-text-small) text-muted-foreground hover:text-foreground hover:bg-muted/60"
         variant="ghost"
       >
         <Zap :size="14" class="mr-2" />
@@ -197,19 +181,21 @@ const hasContent = computed(() => props.pageSummary || props.summaryLoading || p
       <!-- Gmail inbox (not viewing thread) -->
       <div v-if="isEmailClient && !isViewingEmailThread" class="flex items-center gap-2.5 p-3 rounded-lg bg-muted border border-border">
         <FileText :size="13" class="text-foreground/50 shrink-0" />
-        <p class="text-[11px] text-foreground">email summaries appear inline in gmail</p>
+        <p class="text-(length:--font-text-small) text-foreground">email summaries appear inline in gmail</p>
       </div>
       <!-- Regular page - show summarise button -->
-      <Button 
+      <div 
         v-else-if="!isViewingEmailThread"
-        @click="emit('manual-summary')"
-        :disabled="summaryLoading"
-        class="w-full"
-        variant="outline"
+        @click="!summaryLoading && emit('manual-summary')"
+        :class="[
+          'flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-all duration-150',
+          summaryLoading 
+            ? 'bg-muted/50 border border-border pointer-events-none' 
+            : 'bg-primary/15 border border-primary/40 hover:bg-primary/25 hover:border-primary/60'
+        ]"
       >
-        <Zap :size="14" class="mr-2" />
-        summarise this page
-      </Button>
+        <span class="text-sm font-semibold text-primary">summarise this page</span>
+      </div>
     </div>
   </div>
 </template>
