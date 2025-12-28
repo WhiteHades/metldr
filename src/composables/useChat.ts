@@ -59,23 +59,32 @@ export function useChat() {
     chatLoading.value = true
     
     try {
-      // build context from page summary
       let contextText = pageSummary.value?.fullContent || ''
       
-      // for gmail, try to fetch email content from content script if no fullContent
       if (!contextText) {
         try {
           const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
-          if (tabs[0]?.url?.includes('mail.google.com') && tabs[0].id) {
+          const tab = tabs[0]
+          if (!tab?.id || !tab.url) throw new Error('no active tab')
+          
+          if (tab.url.includes('mail.google.com')) {
             log.log('no fullContent, fetching email from content script')
-            const response = await chrome.tabs.sendMessage(tabs[0].id, { type: 'GET_EMAIL_CONTENT' }) as { 
-              success: boolean; 
-              content?: string; 
-              metadata?: { subject?: string; from?: string } 
-            } | undefined
+            
+            let response: { success: boolean; content?: string; metadata?: { subject?: string; from?: string } } | undefined
+            
+            try {
+              response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_EMAIL_CONTENT' })
+            } catch {
+              log.log('content script not ready, injecting and retrying')
+              await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                files: ['content.js']
+              })
+              await new Promise(r => setTimeout(r, 500))
+              response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_EMAIL_CONTENT' })
+            }
             
             if (response?.success && response.content) {
-              // build email context with metadata
               let emailContext = ''
               if (response.metadata?.subject) {
                 emailContext += `Subject: ${response.metadata.subject}\n`
@@ -87,9 +96,25 @@ export function useChat() {
               contextText = emailContext
               log.log('fetched email content', contextText.length)
             }
+          } else {
+            log.log('no fullContent, extracting article from page')
+            const extractResponse = await chrome.runtime.sendMessage({
+              type: 'EXTRACT_ONLY',
+              tabId: tab.id
+            }) as { success: boolean; data?: { title?: string; author?: string; content?: string } } | undefined
+            
+            if (extractResponse?.success && extractResponse.data?.content) {
+              const d = extractResponse.data
+              let articleContext = 'ARTICLE METADATA:\n'
+              if (d.title) articleContext += `- Title: "${d.title}"\n`
+              if (d.author) articleContext += `- Author: ${d.author}\n`
+              articleContext += '\n---\nARTICLE CONTENT:\n\n' + d.content
+              contextText = articleContext
+              log.log('fetched article content', contextText.length)
+            }
           }
         } catch (err) {
-          log.log('failed to fetch email content', (err as Error).message)
+          log.log('failed to fetch page content', (err as Error).message)
         }
       }
       
