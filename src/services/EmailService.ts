@@ -66,7 +66,7 @@ export class EmailService {
 
           if (emailId) {
             await cacheService.setEmailSummary(emailId, chromeResult)
-            this._generateRepliesBackground(emailId, emailContent, chromeResult, metadata)
+            await this.generateReplySuggestions(emailId, emailContent, chromeResult, metadata)
           }
           return chromeResult
         }
@@ -86,7 +86,7 @@ export class EmailService {
 
             if (emailId) {
               await cacheService.setEmailSummary(emailId, chromeResult)
-              this._generateRepliesBackground(emailId, emailContent, chromeResult, metadata)
+              await this.generateReplySuggestions(emailId, emailContent, chromeResult, metadata)
             }
             return chromeResult
           }
@@ -106,7 +106,7 @@ export class EmailService {
 
       if (emailId) {
         await cacheService.setEmailSummary(emailId, summary)
-        this._generateRepliesBackground(emailId, emailContent, summary, metadata)
+        await this.generateReplySuggestions(emailId, emailContent, summary, metadata)
       }
 
       return summary
@@ -213,7 +213,7 @@ export class EmailService {
 
         for (const { tone, label, length } of tones) {
           const result = await aiGateway.chrome.write({
-            prompt: `Write a ${label.toLowerCase()} reply to this email: ${snippet.substring(0, 1000)}`,
+            prompt: `Write a ${label.toLowerCase()} reply to this email. Do NOT include subject lines. Email: ${snippet.substring(0, 1000)}`,
             context,
             tone,
             length
@@ -297,9 +297,8 @@ export class EmailService {
       const cached = await cacheService.getReplySuggestions(emailId) as ReplySuggestion[] | null
       if (cached) return cached
 
-      const snippet = emailContent.length > 4000
-        ? emailContent.substring(0, 3000) + '\n...[truncated]...\n' + emailContent.substring(emailContent.length - 1000)
-        : emailContent
+      // use full email content for better context-aware replies
+      const snippet = emailContent
 
       const preferChrome = aiGateway.getPreference() === 'chrome-ai'
 
