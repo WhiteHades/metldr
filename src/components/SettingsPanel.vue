@@ -25,6 +25,7 @@ interface Props {
   downloadedLanguages: string[]
   selectedLanguages: string[]
   downloadProgress: Record<string, DownloadProgressItem>
+  fontSize: 'small' | 'medium' | 'large'
 }
 
 const props = defineProps<Props>()
@@ -43,6 +44,7 @@ const emit = defineEmits<{
   'refresh-ollama': []
   'clear-cache': []
   'open-welcome': []
+  'update:fontSize': [size: 'small' | 'medium' | 'large']
 }>()
 
 const themeStore = useThemeStore()
@@ -74,22 +76,22 @@ const themeStore = useThemeStore()
             <div class="flex items-center justify-center w-6 h-6 rounded-md bg-primary/25">
               <FileText :size="12" class="text-primary" />
             </div>
-            <span class="text-[12px] font-medium text-foreground tracking-wide">auto-summarise</span>
+            <span class="text-(length:--font-text-secondary) font-medium text-foreground tracking-wide">auto-summarise</span>
           </div>
           <Toggle 
             :model-value="summaryMode === 'auto'"
             @update:model-value="(v: boolean) => emit('update:summaryMode', v ? 'auto' : 'manual')"
           />
         </div>
-        <p class="text-[10px] text-foreground/60">when enabled, pages matching the allowlist will be summarised automatically.</p>
+        <p class="text-(length:--font-text-secondary) text-foreground/60">when enabled, pages matching the allowlist will be summarised automatically.</p>
 
         <div v-if="summaryMode === 'auto'" class="space-y-3 pt-2 border-t border-border">
-          <label class="text-[11px] text-foreground/80 flex items-center gap-2">
-            <span class="shrink-0 text-[10px] w-20">min words</span>
+          <label class="text-(length:--font-text-secondary) text-foreground/80 flex items-center gap-2">
+            <span class="shrink-0 text-(length:--font-text-secondary) w-20">min words</span>
             <Input 
               type="number" 
               min="0" 
-              class="w-full h-7 text-[11px]" 
+              class="w-full h-7 text-(length:--font-text-secondary)" 
               :model-value="minAutoWords"
               @update:model-value="(v) => emit('update:minAutoWords', Number(v))"
             />
@@ -98,11 +100,11 @@ const themeStore = useThemeStore()
           <div class="grid grid-cols-2 gap-3">
             <div>
               <div class="flex items-center justify-between mb-1">
-                <span class="text-[11px] text-foreground/80">allowlist</span>
-                <span class="text-[10px] text-foreground/50">one per line</span>
+                <span class="text-(length:--font-text-secondary) text-foreground/80">allowlist</span>
+                <span class="text-(length:--font-text-secondary) text-foreground/50">one per line</span>
               </div>
               <Textarea 
-                class="w-full h-28 text-[11px] resize-none"
+                class="w-full h-28 text-(length:--font-text-secondary) resize-none"
                 :model-value="allowlistInput"
                 @update:model-value="(v) => emit('update:allowlistInput', String(v))"
                 placeholder="example.com"
@@ -110,11 +112,11 @@ const themeStore = useThemeStore()
             </div>
             <div>
               <div class="flex items-center justify-between mb-1">
-                <span class="text-[11px] text-foreground/80">denylist</span>
-                <span class="text-[10px] text-foreground/50">one per line</span>
+                <span class="text-(length:--font-text-secondary) text-foreground/80">denylist</span>
+                <span class="text-(length:--font-text-secondary) text-foreground/50">one per line</span>
               </div>
               <Textarea 
-                class="w-full h-28 text-[11px] resize-none"
+                class="w-full h-28 text-(length:--font-text-secondary) resize-none"
                 :model-value="denylistInput"
                 @update:model-value="(v) => emit('update:denylistInput', String(v))"
                 placeholder="dashboard"
@@ -131,7 +133,7 @@ const themeStore = useThemeStore()
             <div class="flex items-center justify-center w-6 h-6 rounded-md bg-secondary/25">
               <BookOpen :size="12" class="text-secondary" />
             </div>
-            <span class="text-[12px] font-medium text-foreground tracking-wide">word lookup</span>
+            <span class="text-(length:--font-text-secondary) font-medium text-foreground tracking-wide">word lookup</span>
           </div>
           <Toggle 
             :model-value="wordPopupEnabled"
@@ -146,9 +148,9 @@ const themeStore = useThemeStore()
           <div class="flex items-center justify-center w-6 h-6 rounded-md bg-accent/25">
             <Database :size="12" class="text-accent" />
           </div>
-          <span class="text-[12px] font-medium text-foreground tracking-wide">dictionaries</span>
+          <span class="text-(length:--font-text-secondary) font-medium text-foreground tracking-wide">dictionaries</span>
         </div>
-        <p class="text-[10px] text-foreground/50 mb-3">select languages for word lookup. undownloaded languages will download when enabled.</p>
+        <p class="text-(length:--font-text-secondary) text-foreground/50 mb-3">select languages for word lookup. undownloaded languages will download when enabled.</p>
         
         <ScrollArea class="h-40 w-full">
           <div class="space-y-1 pr-4">
@@ -162,18 +164,18 @@ const themeStore = useThemeStore()
                 :checked="selectedLanguages.includes(lang.code)"
                 class="h-4 w-4 pointer-events-none"
               />
-              <span class="text-[11px] text-foreground/80 flex-1">{{ lang.name }}</span>
+              <span class="text-(length:--font-text-secondary) text-foreground/80 flex-1">{{ lang.name }}</span>
               
               <!-- status badges -->
               <div v-if="downloadProgress[lang.code]" class="flex items-center gap-1">
                 <Loader2 :size="10" class="animate-spin text-amber-400" />
-                <span class="text-[9px] text-amber-400">
+                <span class="text-(length:--font-text-secondary) text-amber-400">
                   {{ Number(downloadProgress[lang.code].progress || 0).toFixed(0) }}%
                 </span>
               </div>
               <span 
                 v-else-if="downloadedLanguages.includes(lang.code)"
-                class="text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400/80"
+                class="text-(length:--font-text-secondary) px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400/80"
               >
                 ready
               </span>
@@ -198,7 +200,7 @@ const themeStore = useThemeStore()
           <div class="flex items-center justify-center w-6 h-6 rounded-md bg-primary/20">
             <Palette :size="12" class="text-primary" />
           </div>
-          <span class="text-[12px] font-medium text-foreground tracking-wide">theme</span>
+          <span class="text-(length:--font-text-secondary) font-medium text-foreground tracking-wide">theme</span>
         </div>
         <div class="grid grid-cols-3 gap-2">
           <button
@@ -217,7 +219,34 @@ const themeStore = useThemeStore()
               <div class="w-3 h-3 rounded-full" :style="{ background: themeData.secondary }"></div>
               <div class="w-3 h-3 rounded-full" :style="{ background: themeData.accent }"></div>
             </div>
-            <span class="text-[10px] text-foreground/70">{{ themeData.name }}</span>
+            <span class="text-(length:--font-text-secondary) text-foreground/70">{{ themeData.name }}</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- font size -->
+      <div class="rounded-xl bg-card p-4 border border-border">
+        <div class="flex items-center gap-2.5 mb-3">
+          <div class="flex items-center justify-center w-6 h-6 rounded-md bg-secondary/20">
+            <span class="text-secondary text-[10px] font-bold">Aa</span>
+          </div>
+          <span class="text-(length:--font-text-secondary) font-medium text-foreground tracking-wide">text size</span>
+        </div>
+        <div class="grid grid-cols-3 gap-2">
+          <button
+            v-for="size in ['small', 'medium', 'large'] as const"
+            :key="size"
+            @click="emit('update:fontSize', size)"
+            class="flex items-center justify-center py-2 rounded-lg transition-all capitalize"
+            :class="[
+              fontSize === size 
+                ? 'bg-muted ring-1 ring-border text-foreground' 
+                : 'hover:bg-muted/50 text-foreground/70'
+            ]"
+          >
+            <span :class="[
+              size === 'small' ? 'text-[11px]' : size === 'medium' ? 'text-[13px]' : 'text-[15px]'
+            ]">{{ size }}</span>
           </button>
         </div>
       </div>
@@ -231,9 +260,9 @@ const themeStore = useThemeStore()
             <div class="flex items-center justify-center w-6 h-6 rounded-md bg-destructive/20">
               <Trash2 :size="12" class="text-destructive" />
             </div>
-            <span class="text-[12px] font-medium text-foreground tracking-wide">cache</span>
+            <span class="text-(length:--font-text-secondary) font-medium text-foreground tracking-wide">cache</span>
           </div>
-          <button @click="emit('clear-cache')" class="px-2 py-1 rounded text-[11px] text-destructive/70 hover:text-destructive hover:bg-destructive/10 transition-colors">
+          <button @click="emit('clear-cache')" class="px-2 py-1 rounded text-(length:--font-text-secondary) text-destructive/70 hover:text-destructive hover:bg-destructive/10 transition-colors">
             clear
           </button>
         </div>
@@ -246,9 +275,9 @@ const themeStore = useThemeStore()
             <div class="flex items-center justify-center w-6 h-6 rounded-md bg-info/20">
               <HelpCircle :size="12" class="text-info" />
             </div>
-            <span class="text-[12px] font-medium text-foreground tracking-wide">help</span>
+            <span class="text-(length:--font-text-secondary) font-medium text-foreground tracking-wide">help</span>
           </div>
-          <button @click="emit('open-welcome')" class="px-2 py-1 rounded text-[11px] text-foreground/70 hover:text-foreground hover:bg-muted transition-colors">
+          <button @click="emit('open-welcome')" class="px-2 py-1 rounded text-(length:--font-text-secondary) text-foreground/70 hover:text-foreground hover:bg-muted transition-colors">
             open guide
           </button>
         </div>
