@@ -6,6 +6,7 @@ import { logger } from '@/services/LoggerService'
 const log = logger.createScoped('useSettings')
 
 export type AIProviderPreference = 'chrome-ai' | 'ollama'
+export type FontSizePreference = 'small' | 'medium' | 'large'
 
 const summaryMode = ref<'manual' | 'auto'>('manual')
 const allowlistInput = ref<string>(SummaryPrefs.ALLOWLIST.join('\n'))
@@ -13,6 +14,7 @@ const denylistInput = ref<string>(SummaryPrefs.DENYLIST.join('\n'))
 const minAutoWords = ref<number>(SummaryPrefs.DEFAULT_PREFS.minAutoWords)
 const wordPopupEnabled = ref<boolean>(true)
 const preferredProvider = ref<AIProviderPreference>('chrome-ai')
+const fontSize = ref<FontSizePreference>('medium')
 
 export function useSettings() {
   async function loadSummaryPrefs(): Promise<void> {
@@ -76,6 +78,37 @@ export function useSettings() {
     }
   }
 
+  async function loadFontSize(): Promise<void> {
+    try {
+      const size = await storageService.get<FontSizePreference>('fontSize', 'medium')
+      if (size === 'small' || size === 'medium' || size === 'large') {
+        fontSize.value = size
+        applyFontSize(size)
+      }
+    } catch (error) {
+      log.error('failed to load font size preference', error)
+    }
+  }
+
+  async function setFontSize(size: FontSizePreference): Promise<void> {
+    fontSize.value = size
+    applyFontSize(size)
+    try {
+      await storageService.set('fontSize', size)
+    } catch (error) {
+      log.error('failed to save font size preference', error)
+    }
+  }
+
+  function applyFontSize(size: FontSizePreference): void {
+    // medium is default, so remove attribute for medium
+    if (size === 'medium') {
+      document.documentElement.removeAttribute('data-font-size')
+    } else {
+      document.documentElement.setAttribute('data-font-size', size)
+    }
+  }
+
   async function toggleWordPopup(newValue?: boolean): Promise<void> {
     wordPopupEnabled.value = newValue ?? !wordPopupEnabled.value
     
@@ -133,6 +166,14 @@ export function useSettings() {
           preferredProvider.value = pref
         }
       }
+
+      if (changes.fontSize?.newValue) {
+        const size = changes.fontSize.newValue as string
+        if (size === 'small' || size === 'medium' || size === 'large') {
+          fontSize.value = size
+          applyFontSize(size)
+        }
+      }
     })
   }
 
@@ -143,6 +184,7 @@ export function useSettings() {
     minAutoWords,
     wordPopupEnabled,
     preferredProvider,
+    fontSize,
     
     loadSummaryPrefs,
     saveSummaryPrefs,
@@ -150,6 +192,8 @@ export function useSettings() {
     toggleWordPopup,
     loadProviderPreference,
     setProviderPreference,
+    loadFontSize,
+    setFontSize,
     setupSettingsWatcher,
     setupStorageListener
   }
