@@ -1,5 +1,6 @@
 import { gsap } from 'gsap'
 import { UIService } from './UIService'
+import { emailExtractor } from './EmailExtractor'
 import { languageService } from '../services/LanguageService'
 import type { 
   InboxSDK, 
@@ -174,9 +175,11 @@ export class ReplyPanel {
       const detectedLang = await languageService.detect(emailContext?.body || emailContext?.subject || '')
       console.log('metldr: using language for replies:', detectedLang)
       
+      // build context with full email body for better replies
+      const emailBody = emailContext?.body || ''
       const sharedContext = emailContext 
-        ? `This is a reply to an email. Subject: ${emailContext.subject || 'unknown'}. From: ${emailContext.from || 'unknown'}`
-        : 'This is an email reply.'
+        ? `You are writing a REPLY to an email (not a new email). From: ${emailContext.from || 'unknown'}. Subject: ${emailContext.subject || 'unknown'}. NEVER include "Subject:" lines - this is a reply.`
+        : 'You are writing an email REPLY. NEVER include Subject lines.'
 
       const replies: ReplySuggestion[] = []
       const tones: Array<{ tone: 'formal' | 'neutral' | 'casual', label: string }> = [
@@ -200,10 +203,10 @@ export class ReplyPanel {
           })
 
           try {
-            const body = await writer.write(
-              `Write a ${label} email reply`, 
-              { context: emailContext?.body || '' }
-            )
+            const prompt = emailBody 
+              ? `Write a ${label} reply to this email. Do NOT include subject lines.`
+              : `Write a ${label} email reply`
+            const body = await writer.write(prompt, { context: emailBody })
             
             if (body && body.length > 10) {
               replies.push({
@@ -229,19 +232,16 @@ export class ReplyPanel {
     }
   }
 
-  // get email context from emailExtractor's last extracted content
+  // get email context from emailExtractor's last extracted content (same data used for summaries)
   private getEmailContext(): { subject?: string; from?: string; body?: string } | null {
     try {
-      // access emailExtractor's last extracted content
-      const extractor = (window as unknown as { emailExtractor?: { getLastExtracted?: () => unknown } }).emailExtractor
-      if (extractor?.getLastExtracted) {
-        const data = extractor.getLastExtracted() as { content?: string; metadata?: { subject?: string; from?: string } } | null
-        if (data) {
-          return {
-            subject: data.metadata?.subject,
-            from: data.metadata?.from,
-            body: data.content?.substring(0, 1000)
-          }
+      // emailExtractor stores the last extracted email content used for summaries
+      const data = emailExtractor.getLastExtracted()
+      if (data) {
+        return {
+          subject: data.metadata?.subject,
+          from: data.metadata?.from,
+          body: data.content ?? undefined
         }
       }
     } catch { /* ignore */ }
