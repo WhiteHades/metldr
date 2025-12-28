@@ -219,28 +219,36 @@ const expandedFaq = ref(null);
 
 const faqs = [
   {
-    question: 'what is ollama and why do i need it?',
-    answer: 'ollama is a free tool that runs ai models locally on your computer. unlike cloud-based ai, everything stays on your machine - your data never leaves your device. this means complete privacy and no subscription costs.'
+    question: 'what is gemini nano and do i need it?',
+    answer: "gemini nano is google's on-device ai model built into chrome 138+. it's the recommended option because it requires zero setup - just enable the flags and you're ready. if you have an older browser or prefer running your own models, use ollama instead."
   },
   {
-    question: 'how do i install a model?',
-    answer: 'after installing ollama, open a terminal and run a pull command like `ollama pull gemma3:1b`. this downloads the ai model to your computer. smaller models (1b-2b) are faster, while larger ones (3b-4b) are smarter but slower.'
+    question: 'chrome ai says "unavailable" - how do i fix it?',
+    answer: 'this usually means the flags are not enabled or you need to restart chrome. go to `chrome://flags`, search for "gemini nano" and enable all 4 flags: `#optimization-guide-on-device-model` (set to BypassPerfRequirement), `#prompt-api-for-gemini-nano`, `#summarization-api-for-gemini-nano`, and `#writer-api-for-gemini-nano`. then fully quit and reopen chrome.'
   },
   {
-    question: 'why isn\'t the extension connecting?',
-    answer: 'make sure ollama is running and you\'ve completed the cors setup (step 2 above). after setting the environment variable, you need to quit and restart ollama. the extension auto-detects ollama every 2 seconds.'
+    question: 'gemini nano download is stuck or failed',
+    answer: 'the model is ~1.5GB and downloads in the background. if it seems stuck, try: 1) paste `chrome://components` in the address bar, 2) find "Optimization Guide On Device Model", 3) click "Check for update". you can also try disabling and re-enabling the flags, then restarting chrome.'
+  },
+  {
+    question: 'what is ollama and when should i use it?',
+    answer: "ollama runs open-source ai models locally on your computer. use it if: you have chrome < 138, gemini nano is not available on your device, or you want to use specific models like llama, mistral, or deepseek. it requires manual setup but gives you more control."
+  },
+  {
+    question: 'why is ollama not connecting?',
+    answer: "make sure ollama is running and you've completed the cors setup (step 2 in the ollama section). after setting the environment variable, you need to fully quit and restart ollama. the extension auto-detects ollama every 2 seconds."
   },
   {
     question: 'is my data sent anywhere?',
-    answer: 'no. all processing happens locally on your computer. the extension communicates only with ollama running on localhost. no data is sent to any external servers - your browsing stays completely private.'
+    answer: 'no. with both gemini nano and ollama, all processing happens locally on your computer. gemini nano runs inside chrome, ollama runs on localhost. no data is ever sent to external servers - your browsing stays completely private.'
   },
   {
     question: 'how do i summarise gmail emails?',
-    answer: 'when viewing an email thread in gmail, you\'ll see a "metldr - summarise email" button. click it to generate a summary with key points, action items, and important dates. you can enable auto-summarisation in the extension settings.'
+    answer: 'when viewing an email thread in gmail, you will see a "metldr - summarise email" button. click it to generate a summary with key points, action items, and important dates. you can enable auto-summarisation in the extension settings.'
   },
   {
-    question: 'can i use a different ai model?',
-    answer: 'yes! you can install any ollama-compatible model using `ollama pull [model-name]`. popular choices include llama, mistral, and qwen. the extension will detect all installed models and let you switch between them.'
+    question: 'which option is faster?',
+    answer: "gemini nano is typically faster for most tasks since it's optimised for chrome. ollama speed depends on your chosen model - 1b-2b models are fast, 3b+ models are slower but smarter. if you have a dedicated gpu, ollama can be very fast."
   }
 ];
 
@@ -522,6 +530,7 @@ onUnmounted(() => {
                 <li><code>#optimization-guide-on-device-model</code> → <strong>Enabled BypassPerfRequirement</strong></li>
                 <li><code>#prompt-api-for-gemini-nano</code> → <strong>Enabled</strong></li>
                 <li><code>#summarization-api-for-gemini-nano</code> → <strong>Enabled</strong></li>
+                <li><code>#writer-api-for-gemini-nano</code> → <strong>Enabled</strong></li>
               </ul>
             </div>
           </div>
@@ -540,6 +549,19 @@ onUnmounted(() => {
                 recheck status
               </Button>
             </div>
+          </div>
+
+          <div class="troubleshoot-box">
+            <div class="troubleshoot-header">
+              <HelpCircle :size="16" />
+              <span>requirements & troubleshooting</span>
+            </div>
+            <ul class="troubleshoot-list">
+              <li><strong>storage:</strong> 22GB+ free space on chrome profile drive</li>
+              <li><strong>hardware:</strong> 4GB+ VRAM (GPU) or 16GB RAM + 4 CPU cores</li>
+              <li><strong>download stuck?</strong> paste <code>chrome://components</code> → find "Optimization Guide On Device Model" → click "Check for update"</li>
+              <li><strong>check model status:</strong> paste <code>chrome://on-device-internals</code></li>
+            </ul>
           </div>
         </div>
       </section>
@@ -1531,11 +1553,57 @@ onUnmounted(() => {
   color: #4ade80;
 }
 
-/* recheck button inline */
 .recheck-btn-inline {
   margin-top: 12px;
   font-size: 13px !important;
   gap: 8px !important;
+}
+
+.troubleshoot-box {
+  margin-top: 20px;
+  padding: 16px;
+  background: rgba(139, 92, 246, 0.08);
+  border: 1px solid rgba(139, 92, 246, 0.2);
+  border-radius: 10px;
+}
+
+.troubleshoot-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #a78bfa;
+  margin-bottom: 12px;
+}
+
+.troubleshoot-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.troubleshoot-list li {
+  margin-bottom: 8px;
+  line-height: 1.5;
+}
+
+.troubleshoot-list li:last-child {
+  margin-bottom: 0;
+}
+
+.troubleshoot-list strong {
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.troubleshoot-list code {
+  background: rgba(139, 92, 246, 0.2);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  color: #c4b5fd;
 }
 
 /* spinning animation */
