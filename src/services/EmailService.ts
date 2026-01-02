@@ -16,6 +16,10 @@ import type {
   ParsedReplies
 } from '../types'
 
+import { ragService } from './rag/RagService'
+
+// ... imports
+
 export class EmailService {
   static async summarize(
     emailContent: string, 
@@ -24,9 +28,19 @@ export class EmailService {
     force = false
   ): Promise<EmailSummary> {
     const startTime = Date.now()
+    
+    if (emailId && emailContent) {
+      ragService.indexChunks(emailContent, {
+        sourceId: emailId,
+        sourceUrl: `email://${emailId}`,
+        sourceType: 'email',
+        title: (metadata as any)?.subject || 'Email Thread'
+      }).catch(err => console.warn('[EmailService] Chunk indexing failed', err))
+    }
 
     try {
       if (force && emailId) {
+// ... existing code ...
         try {
           await cacheService.deleteReplySuggestions(emailId)
         } catch (err) {
@@ -64,9 +78,14 @@ export class EmailService {
           chromeResult.cached = false
           chromeResult.model = 'gemini-nano'
 
+          // fire-and-forget: enrich and generate replies in background (don't block response)
           if (emailId) {
-            await cacheService.setEmailSummary(emailId, chromeResult)
-            await this.generateReplySuggestions(emailId, emailContent, chromeResult, metadata)
+            cacheService.setEmailSummary(emailId, chromeResult).catch(() => {})
+            // run enrichment + replies in background
+            this._enrichWithLocalModels(chromeResult, emailContent)
+              .then(() => { if (emailId) cacheService.setEmailSummary(emailId, chromeResult) })
+              .catch(() => {})
+            this.generateReplySuggestions(emailId, emailContent, chromeResult, metadata).catch(() => {})
           }
           return chromeResult
         }
@@ -84,9 +103,13 @@ export class EmailService {
             chromeResult.cached = false
             chromeResult.model = 'gemini-nano'
 
+            // fire-and-forget: background tasks
             if (emailId) {
-              await cacheService.setEmailSummary(emailId, chromeResult)
-              await this.generateReplySuggestions(emailId, emailContent, chromeResult, metadata)
+              cacheService.setEmailSummary(emailId, chromeResult).catch(() => {})
+              this._enrichWithLocalModels(chromeResult, emailContent)
+                .then(() => { if (emailId) cacheService.setEmailSummary(emailId, chromeResult) })
+                .catch(() => {})
+              this.generateReplySuggestions(emailId, emailContent, chromeResult, metadata).catch(() => {})
             }
             return chromeResult
           }
@@ -105,8 +128,11 @@ export class EmailService {
       summary.model = model
 
       if (emailId) {
-        await cacheService.setEmailSummary(emailId, summary)
-        await this.generateReplySuggestions(emailId, emailContent, summary, metadata)
+        cacheService.setEmailSummary(emailId, summary).catch(() => {})
+        this._enrichWithLocalModels(summary, emailContent)
+          .then(() => { if (emailId) cacheService.setEmailSummary(emailId, summary) })
+          .catch(() => {})
+        this.generateReplySuggestions(emailId, emailContent, summary, metadata).catch(() => {})
       }
 
       return summary
@@ -116,7 +142,6 @@ export class EmailService {
     }
   }
 
-  // try chrome ai prompt api for email summary
   static async _tryChromeSummary(snippet: string, metadata: EmailMetadata | null, facts: ExtractedFacts): Promise<EmailSummary | null> {
     try {
       const caps = await aiGateway.chrome.getCapabilities()
@@ -136,7 +161,6 @@ export class EmailService {
 
       if (!result.ok) return null
 
-      // parse JSON from response
       const jsonMatch = result.content?.match(/\{[\s\S]*\}/)
       if (!jsonMatch) return null
 
@@ -785,5 +809,57 @@ Respond with JSON matching the schema. Be precise with intent classification.`
     if (metadata.emailCount) lines.push(`Message Count: ${metadata.emailCount}`)
 
     return lines.join('\n') + '\n\n'
+  }
+
+  // enrich email summary with local ML models (runs in parallel, non-blocking)
+  static async _enrichWithLocalModels(summary: EmailSummary, emailContent: string): Promise<EmailSummary> {
+    const snippet = emailContent.length > 1000 ? emailContent.slice(0, 1000) : emailContent
+    
+    try {
+      // run classification and ner in parallel (sentiment model not bundled)
+      const [classifyResult, nerResult] = await Promise.allSettled([
+        aiGateway.classify(snippet, [
+          'action-required', 'informational', 'scheduling', 
+          'billing', 'shipping', 'inquiry', 'feedback', 'spam'
+        ], true),
+        aiGateway.extractEntities(snippet)
+      ])
+
+      // extract classification tags (top 3 with score > 0.3)
+      if (classifyResult.status === 'fulfilled') {
+        const { labels, scores } = classifyResult.value
+        summary.tags = labels
+          .map((label, i) => ({ label, score: scores[i] }))
+          .filter(t => t.score > 0.3)
+          .slice(0, 3)
+      }
+
+      // extract NER entities (people, organizations, dates)
+      if (nerResult.status === 'fulfilled') {
+        const entities = nerResult.value.entities
+          .filter(e => ['PER', 'ORG', 'LOC', 'DATE', 'MISC'].includes(e.entity.replace('B-', '').replace('I-', '')))
+          .slice(0, 10)
+        summary.entities = entities.map(e => ({
+          word: e.word,
+          entity: e.entity.replace('B-', '').replace('I-', ''),
+          score: e.score
+        }))
+      }
+
+      // determine overall confidence
+      const hasGoodTags = summary.tags && summary.tags.length > 0 && summary.tags[0].score > 0.5
+      const hasEntities = summary.entities && summary.entities.length > 0
+      summary.confidence = hasGoodTags && hasEntities ? 'high' : hasGoodTags || hasEntities ? 'medium' : 'low'
+
+      console.log('[EmailService] Enriched with local models:', {
+        tags: summary.tags?.length || 0,
+        entities: summary.entities?.length || 0
+      })
+    } catch (err) {
+      console.warn('[EmailService] Local model enrichment failed:', (err as Error).message)
+      summary.confidence = 'low'
+    }
+
+    return summary
   }
 }

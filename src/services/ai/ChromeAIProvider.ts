@@ -15,14 +15,61 @@ export class ChromeAIProvider extends AIProvider {
   private cacheTimestamp = 0
   private readonly CACHE_TTL = 30000
 
-  // chrome ai apis don't work in service workers
+  // chrome ai apis don't work in service workers directly, but we relay via offscreen
   private isServiceWorker(): boolean {
-    // service workers have no window object and have specific properties
     return typeof window === 'undefined' && typeof self !== 'undefined' && 'registration' in self
+  }
+
+  // relay request through offscreen document (has window context)
+  private async relayToOffscreen(action: string, payload: any): Promise<any> {
+    try {
+      // ensure offscreen doc exists
+      const hasDoc = await chrome.offscreen?.hasDocument()
+      if (!hasDoc) {
+        await chrome.offscreen?.createDocument({
+          url: 'offscreen.html',
+          reasons: [chrome.offscreen.Reason.DOM_SCRAPING],
+          justification: 'Run Chrome AI APIs'
+        })
+        await new Promise(r => setTimeout(r, 200))
+      }
+      
+      let ready = false
+      for (let i = 0; i < 15; i++) {
+        try {
+          const pong = await chrome.runtime.sendMessage({ target: 'offscreen', type: 'PING' })
+          if (pong?.status === 'pong') {
+            ready = true
+            break
+          }
+        } catch {
+          await new Promise(r => setTimeout(r, 200))
+        }
+      }
+      
+      if (!ready) {
+        return { ok: false, error: 'Offscreen document not ready after retries' }
+      }
+      
+      return await chrome.runtime.sendMessage({
+        target: 'offscreen',
+        type: 'CHROME_AI',
+        action,
+        payload
+      })
+    } catch (err) {
+      console.error('[ChromeAI] Offscreen relay failed:', err)
+      return { ok: false, error: (err as Error).message }
+    }
   }
 
   async isAvailable(): Promise<boolean> {
     if (this.isServiceWorker()) {
+      // relay to offscreen to check
+      const result = await this.relayToOffscreen('capabilities', {})
+      if (result?.ok && result.capabilities) {
+        return Object.values(result.capabilities).some(v => v)
+      }
       return false
     }
     try {
@@ -75,8 +122,12 @@ export class ChromeAIProvider extends AIProvider {
   }
 
   async getCapabilities(): Promise<ProviderCapabilities> {
-    // chrome ai not available in service workers
+    // in service worker: relay to offscreen
     if (this.isServiceWorker()) {
+      const result = await this.relayToOffscreen('capabilities', {})
+      if (result?.ok && result.capabilities) {
+        return result.capabilities
+      }
       return { complete: false, summarize: false, translate: false, detectLanguage: false, write: false, rewrite: false }
     }
 
@@ -102,6 +153,16 @@ export class ChromeAIProvider extends AIProvider {
   async complete(request: AICompleteRequest): Promise<AICompleteResponse> {
     const start = performance.now()
     
+    // relay to offscreen in service worker context
+    if (this.isServiceWorker()) {
+      const result = await this.relayToOffscreen('complete', {
+        systemPrompt: request.systemPrompt,
+        userPrompt: request.userPrompt,
+        temperature: request.temperature
+      })
+      return { ...result, timing: Math.round(performance.now() - start) }
+    }
+    
     try {
       if (typeof LanguageModel === 'undefined') {
         return { ok: false, error: 'LanguageModel API not available' }
@@ -120,8 +181,8 @@ export class ChromeAIProvider extends AIProvider {
         initialPrompts: [{ role: 'system', content: request.systemPrompt }],
         temperature: request.temperature ?? 0.7,
         topK: 3,
-        expectedInputs: [{ type: 'text', languages: supportedLanguages }],
-        expectedOutputs: [{ type: 'text', languages: [detectedLang] }]
+        expectedInputLanguages: supportedLanguages,
+        outputLanguage: detectedLang
       })
 
       try {
@@ -143,6 +204,17 @@ export class ChromeAIProvider extends AIProvider {
 
   async summarize(request: AISummarizeRequest): Promise<AISummarizeResponse> {
     const start = performance.now()
+
+    // relay to offscreen in service worker context
+    if (this.isServiceWorker()) {
+      const result = await this.relayToOffscreen('summarize', {
+        content: request.content,
+        context: request.context,
+        type: request.type,
+        length: request.length
+      })
+      return { ...result, timing: Math.round(performance.now() - start) }
+    }
 
     try {
       if (typeof Summarizer === 'undefined') {
