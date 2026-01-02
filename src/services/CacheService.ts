@@ -36,9 +36,9 @@ export interface TabSessionEntry {
 }
 
 export class CacheService {
-  private isExpired(entry: { timestamp?: number; ttl?: number }): boolean {
-    if (!entry.timestamp || !entry.ttl) return false
-    return Date.now() > entry.timestamp + entry.ttl
+  // ttl disabled - keep all data forever (storage is minimal)
+  private isExpired(_entry: { timestamp?: number; ttl?: number }): boolean {
+    return false
   }
 
   async getEmailSession(emailId: string): Promise<EmailSession | null> {

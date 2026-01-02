@@ -1,6 +1,7 @@
 import { AIProvider, NullProvider, type ProviderCapabilities } from './AIProvider'
 import { chromeAIProvider } from './ChromeAIProvider'
 import { ollamaProvider } from './OllamaProvider'
+import { localModels } from './LocalModelProvider'
 import { storageService } from '../StorageService'
 import { logger } from '../LoggerService'
 import type {
@@ -8,6 +9,7 @@ import type {
   AITranslateRequest, AITranslateResponse, AIDetectLanguageRequest, AIDetectLanguageResponse,
   AIWriteRequest, AIWriteResponse, AIRewriteRequest, AIRewriteResponse
 } from '../../types/chrome-ai'
+import type { ClassifyResponse, NERResponse, LocalTask } from '../../types/local-models'
 
 const log = logger.createScoped('AIGateway')
 
@@ -170,6 +172,41 @@ class AIGatewayService {
 
   get chrome(): typeof chromeAIProvider { return chromeAIProvider }
   get ollama(): typeof ollamaProvider { return ollamaProvider }
+  get local(): typeof localModels { return localModels }
+
+  // =========================================================================
+  // LOCAL MODEL ANALYSIS (always uses transformers.js)
+  // =========================================================================
+
+  async classify(text: string, labels: string[], multiLabel = false): Promise<ClassifyResponse> {
+    return localModels.classify(text, labels, multiLabel)
+  }
+
+  async extractEntities(text: string): Promise<NERResponse> {
+    return localModels.extractEntities(text)
+  }
+
+
+
+  async embed(text: string, isQuery = false): Promise<Float32Array> {
+    const embedding = await localModels.embed(text, isQuery)
+    return new Float32Array(embedding)
+  }
+
+  async embedBatch(texts: string[], isQuery = false): Promise<Float32Array[]> {
+    const embeddings = await localModels.embedBatch(texts, isQuery)
+    return embeddings.map(e => new Float32Array(e))
+  }
+
+  // initialize local models (call during extension startup)
+  async initializeLocalModels(tasks: LocalTask[] = ['embed']): Promise<void> {
+    try {
+      await localModels.preload(tasks)
+      log.log('Local models initialized')
+    } catch (err) {
+      log.warn('Local model initialization failed:', err)
+    }
+  }
 }
 
 export const aiGateway = new AIGatewayService()

@@ -1,7 +1,9 @@
 import { OllamaService } from './OllamaService'
 import { cacheService } from './CacheService'
-import { aiGateway, AIPrompts } from './ai'
+import { aiGateway, AIPrompts, mapReduceService } from './ai'
 import type { ExtractedData, SummaryTiming, PageSummary, ChatMessage, PageContext, ChatResult } from '../types'
+
+import { ragService } from './rag/RagService'
 
 export class PageService {
 
@@ -11,6 +13,15 @@ export class PageService {
     const { title, url, content, author, publishDate, publication, wordCount, readTime, extractionTime } = extractedData    
     timing.extraction = extractionTime || 0
     
+    if (url && content) {
+      ragService.indexChunks(content, {
+        sourceId: url,
+        sourceUrl: url,
+        sourceType: 'article',
+        title: title || 'Untitled Article'
+      }).catch(err => console.warn('[PageService] Chunk indexing failed', err))
+    }
+
     if (!force && url) {
       const cached = await cacheService.getPageSummary(url) as PageSummary | null
       if (cached) {
@@ -27,28 +38,40 @@ export class PageService {
 
     const fullContent = metadata + content
     const llmStart = performance.now()
+// ... existing code ...
 
     console.log('[PageService] summarizing, length:', fullContent.length)
 
-    const result = await aiGateway.summarize({
-      content: fullContent,
-      context: `This article is titled "${title}"`,
-      type: 'key-points',
-      length: 'medium'
-    })
+    let summaryText: string
+    let usedMapReduce = false
+
+    // use map-reduce for long content that exceeds LLM context
+    if (mapReduceService.needsMapReduce(fullContent)) {
+      console.log('[PageService] using map-reduce for long content')
+      const mrResult = await mapReduceService.summarize(content, `Article titled "${title}"`)
+      summaryText = mrResult.summary
+      usedMapReduce = true
+      console.log('[PageService] map-reduce complete:', { chunks: mrResult.chunkCount, timing: mrResult.timing })
+    } else {
+      const result = await aiGateway.summarize({
+        content: fullContent,
+        context: `This article is titled "${title}"`,
+        type: 'key-points',
+        length: 'medium'
+      })
+      
+      if (!result.ok) throw new Error(result.error || 'summarization failed')
+      summaryText = result.summary || ''
+      console.log('[PageService] direct summarization result:', { ok: result.ok, provider: result.provider, len: summaryText.length })
+    }
 
     timing.llm = Math.round(performance.now() - llmStart)
 
-    console.log('[PageService] result:', { ok: result.ok, provider: result.provider, len: result.summary?.length })
-
-    if (!result.ok) throw new Error(result.error || 'summarization failed')
-
-    const bullets = this._parseBullets(result.summary || '')
+    const bullets = this._parseBullets(summaryText)
 
     timing.total = Math.round(performance.now() - startTotal)
     timing.cached = false
-    timing.model = result.provider === 'chrome-ai' ? 'gemini-nano' : 'ollama'
-    timing.provider = result.provider
+    timing.model = usedMapReduce ? 'map-reduce' : 'gemini-nano'
 
     const summary: PageSummary = {
       title, author, publishDate, publication,
@@ -94,11 +117,25 @@ export class PageService {
         contextText.slice(-tailLen)
     }
 
-    const systemPrompt = contextText 
-      ? AIPrompts.chat.withContext({ content: contextText })
-      : AIPrompts.chat.noContext
-
+    // RAG: Perform Hybrid Search across *all* indexed knowledge (emails, pdfs, other pages)
+    // We do this if we have a user message (which we do)
     const lastUserMsg = messages.filter(m => m.role === 'user').pop()?.content || ''
+    
+    let ragContext = ''
+    if (lastUserMsg) {
+      try {
+        ragContext = await ragService.searchWithContext(lastUserMsg, 3)
+        if (ragContext) {
+          ragContext = '\n\nRELEVANT KNOWLEDGE FROM OTHER DOCUMENTS:\n' + ragContext
+        }
+      } catch (err) {
+        console.warn('[PageService] RAG search failed', err)
+      }
+    }
+
+    const systemPrompt = (contextText 
+      ? AIPrompts.chat.withContext({ content: contextText }) // Context from *current* page
+      : AIPrompts.chat.noContext) + ragContext // + Context from *other* docs
 
     // use aiGateway.complete which respects provider preference
     const result = await aiGateway.complete({

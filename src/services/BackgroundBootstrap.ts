@@ -7,6 +7,7 @@ import { PageService } from './PageService'
 import { SummaryPrefs } from '../utils/summaryPrefs'
 import { aiGateway } from './ai'
 import { logger } from './LoggerService'
+import { ragService } from './rag/RagService'
 import type {
   EmailSummaryMessage,
   GetReplySuggestionsMessage,
@@ -55,6 +56,9 @@ export class BackgroundBootstrap {
     } catch (err) {
       log.error('dictionary init failed', (err as Error).message)
     }
+    
+    // model preloading now happens from side panel/welcome page context (service worker can't create iframe)
+    // this._preloadEmbeddingModel()
     
     this.isInitialized = true
 
@@ -116,6 +120,21 @@ export class BackgroundBootstrap {
 
       if (msg.type === 'SET_EMAIL_CACHE') {
         this._onSetEmailCache(msg as SetEmailCacheMessage, respond)
+        return true
+      }
+
+      if (msg.type === 'RAG_INDEX') {
+        this._onRagIndex(msg as { type: string; entry: import('../types').VectorEntry }, respond)
+        return true
+      }
+
+      if (msg.type === 'RAG_INDEX_CHUNKS') {
+        this._onRagIndexChunks(msg as { type: string; text: string; metadata: any }, respond)
+        return true
+      }
+
+      if (msg.type === 'RAG_SEARCH') {
+        this._onRagSearch(msg as { type: string; query: string; limit?: number }, respond)
         return true
       }
 
@@ -530,5 +549,48 @@ export class BackgroundBootstrap {
         respond({ success: false })
       }
     })()
+  }
+
+  static _onRagIndex(msg: { type: string; entry: import('../types').VectorEntry }, respond: ResponseCallback): void {
+    (async () => {
+      try {
+        await ragService.index(msg.entry)
+        respond({ success: true })
+      } catch (err) {
+        log.error('onRagIndex', (err as Error).message)
+        respond({ success: false, error: (err as Error).message })
+      }
+    })()
+  }
+
+  static _onRagIndexChunks(msg: { type: string; text: string; metadata: any }, respond: ResponseCallback): void {
+    (async () => {
+      try {
+        await ragService.indexChunks(msg.text, msg.metadata)
+        respond({ success: true })
+      } catch (err) {
+        log.error('onRagIndexChunks', (err as Error).message)
+        respond({ success: false, error: (err as Error).message })
+      }
+    })()
+  }
+
+  static _onRagSearch(msg: { type: string; query: string; limit?: number }, respond: ResponseCallback): void {
+    (async () => {
+      try {
+        const results = await ragService.search(msg.query, msg.limit || 10)
+        respond({ success: true, results })
+      } catch (err) {
+        log.error('onRagSearch', (err as Error).message)
+        respond({ success: false, error: (err as Error).message, results: [] })
+      }
+    })()
+  }
+
+  static _preloadEmbeddingModel(): void {
+    // preload embedding model via LocalModelProvider (creates sandbox iframe automatically)
+    aiGateway.initializeLocalModels(['embed'])
+      .then(() => log.log('Embedding model preloaded'))
+      .catch(err => log.warn('Model preload failed', err.message))
   }
 }
