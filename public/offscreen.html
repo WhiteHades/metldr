@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>MeTLDR Offscreen</title>
+    <style>
+      iframe { display: none; }
+    </style>
+  </head>
+  <body>
+    <!-- Host for the GPU sandbox when running in background -->
+    <iframe id="sandbox-frame" src="sandbox.html" allow="cross-origin-isolated"></iframe>
+    <script type="module" src="offscreen.js"></script>
+  </body>
+</html>
