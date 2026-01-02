@@ -111,6 +111,10 @@ export interface EmailSummary {
   time_ms?: number
   cached?: boolean
   model?: string
+  // local model enrichments
+  tags?: { label: string; score: number }[]
+  entities?: { word: string; entity: string; score: number }[]
+  confidence?: 'high' | 'medium' | 'low'
 }
 
 // unified per-email session data (summary, replies, chat in one store)
@@ -692,4 +696,26 @@ export interface FetchResponse {
   replies?: ReplySuggestion[]
   suggestions?: ReplySuggestion[]
   contextInvalidated?: boolean
+}
+
+// rag & pdf
+export interface VectorEntry {
+  id: string
+  type: 'email' | 'page' | 'pdf' | 'article'
+  content: string
+  metadata: Record<string, unknown>
+  timestamp: number
+}
+
+export interface SearchResult {
+  entry: VectorEntry
+  score: number
+  matchType?: 'semantic' | 'keyword' | 'hybrid'
+}
+
+export interface PdfChunk {
+  text: string
+  pageStart: number
+  pageEnd: number
+  tokenCountEstimate: number
 }

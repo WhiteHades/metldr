@@ -140,6 +140,8 @@ declare global {
       topK?: number
       expectedInputs?: Array<{ type: 'text' | 'image' | 'audio'; languages?: string[] }>
       expectedOutputs?: Array<{ type: 'text'; languages: string[] }>
+      expectedInputLanguages?: string[]
+      outputLanguage?: string
       signal?: AbortSignal
       monitor?: (m: { addEventListener: (event: string, cb: (e: { loaded: number }) => void) => void }) => void
     }): Promise<LanguageModelSession>
