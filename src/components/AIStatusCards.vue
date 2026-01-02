@@ -47,7 +47,6 @@ const ollamaSelected = computed(() => props.preferredProvider === 'ollama')
     >
       <div class="flex items-center gap-2">
         <span class="text-(length:--font-text-secondary) font-medium" :class="chromeSelected ? 'text-primary' : 'text-foreground/70'">gemini nano</span>
-        <span class="text-(length:--font-text-secondary) px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400/70">easy</span>
       </div>
       <span 
         class="text-(length:--font-text-secondary) px-1.5 py-0.5 rounded-full font-medium"
@@ -75,7 +74,6 @@ const ollamaSelected = computed(() => props.preferredProvider === 'ollama')
       >
         <div class="flex items-center gap-2">
           <span class="text-(length:--font-text-secondary) font-medium" :class="ollamaSelected ? 'text-secondary' : 'text-foreground/70'">ollama</span>
-          <span class="text-(length:--font-text-secondary) px-1.5 py-0.5 rounded-full bg-blue-500/15 text-blue-400/70">advanced</span>
         </div>
         <div class="flex items-center gap-1.5">
           <span 

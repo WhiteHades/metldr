@@ -2,13 +2,15 @@
 import { ref, computed, nextTick, watch, onMounted } from 'vue'
 import { formatTime, stripThinking } from '@/utils/text'
 import { marked } from 'marked'
-import { ArrowUp, Square, Trash2, Loader2 } from 'lucide-vue-next'
+import { ArrowUp, Square, Trash2, Loader2, MessageSquare } from 'lucide-vue-next'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui'
 import type { AppChatMessage } from '@/types'
 
 interface Props {
   chatMessages: AppChatMessage[]
   chatLoading: boolean
   chatDisabled: boolean
+  disabledReason?: string // e.g. 'email' or 'local-pdf'
   isViewingEmailThread: boolean
 }
 
@@ -89,8 +91,8 @@ defineExpose({
   <div class="chat-thread flex h-full min-h-0 flex-col bg-background">
     <div v-if="isThreadEmpty && !chatDisabled" class="flex h-full flex-col px-3 pb-4">
       <div class="flex-1 flex items-center justify-center">
-        <div class="empty-state text-center">
-          <p class="text-sm text-muted-foreground/60">ask anything about this page</p>
+        <div class="empty-state text-center flex flex-col items-center justify-center">
+          <MessageSquare :size="48" class="text-muted-foreground/40 mb-2" stroke-width="1.5" />
         </div>
       </div>
       <div class="composer w-full">
@@ -99,21 +101,26 @@ defineExpose({
             ref="textareaRef"
             v-model="chatInput"
             @keydown="handleKeydown"
-            placeholder="..."
+            placeholder="ask anything about this page..."
             :disabled="chatDisabled"
             rows="1"
             class="composer-input"
           />
           
           <div class="flex items-center gap-1 shrink-0">
-            <button
-              v-if="chatMessages.length > 0"
-              @click="handleClear"
-              class="w-7 h-7 rounded-md flex items-center justify-center text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-all duration-150"
-              title="Clear chat"
-            >
-              <Trash2 :size="13" />
-            </button>
+            <TooltipProvider v-if="chatMessages.length > 0">
+              <Tooltip>
+                <TooltipTrigger as-child>
+                  <button
+                    @click="handleClear"
+                    class="w-7 h-7 rounded-md flex items-center justify-center text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-all duration-150"
+                  >
+                    <Trash2 :size="13" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>clear chat</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
             
             <div class="relative w-7 h-7">
               <button
@@ -144,8 +151,14 @@ defineExpose({
         :class="{ 'opacity-40 pointer-events-none': chatDisabled }"
       >
         <div class="space-y-3">
-          <div v-if="chatDisabled" class="flex flex-col items-center justify-center h-24">
-            <p class="text-xs text-muted-foreground">open an email to chat</p>
+          <div v-if="chatDisabled" class="flex flex-col items-center justify-center py-8 px-4 text-center">
+            <template v-if="disabledReason === 'local-pdf'">
+              <p class="text-xs text-muted-foreground">use the file picker to open the PDF first</p>
+              <p class="text-xs text-muted-foreground/60 mt-1">chrome doesn't allow direct access to local files</p>
+            </template>
+            <template v-else>
+              <p class="text-xs text-muted-foreground">open an email to chat</p>
+            </template>
           </div>
 
           <template v-for="(msg, i) in chatMessages" :key="i">
@@ -184,21 +197,26 @@ defineExpose({
               ref="textareaRef"
               v-model="chatInput"
               @keydown="handleKeydown"
-              placeholder="..."
+              placeholder="ask anything about this page..."
               :disabled="chatDisabled"
               rows="1"
               class="composer-input"
             />
             
             <div class="flex items-center gap-1 shrink-0">
-              <button
-                v-if="chatMessages.length > 0"
-                @click="handleClear"
-                class="w-7 h-7 rounded-md flex items-center justify-center text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-all duration-150"
-                title="Clear chat"
-              >
-                <Trash2 :size="13" />
-              </button>
+              <TooltipProvider v-if="chatMessages.length > 0">
+                <Tooltip>
+                  <TooltipTrigger as-child>
+                    <button
+                      @click="handleClear"
+                      class="w-7 h-7 rounded-md flex items-center justify-center text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-all duration-150"
+                    >
+                      <Trash2 :size="13" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>clear chat</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
               
               <div class="relative w-7 h-7">
                 <button

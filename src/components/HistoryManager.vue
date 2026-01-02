@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { FileText, Clock, Zap, Loader2, ChevronRight, TrendingUp, Trash2, Database } from 'lucide-vue-next'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui'
 import type { HistoryItem } from '@/types'
 import { databaseService, DB_CONFIGS } from '@/services/DatabaseService'
 import { logger } from '@/services/LoggerService'
@@ -113,30 +114,38 @@ defineExpose({
 <template>
   <div class="space-y-3">
     <!-- stats row -->
-    <div class="flex items-center gap-2 px-1">
-      <div 
-        class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-primary/10 border border-primary/20 cursor-help"
-        title="total emails summarized"
-      >
-        <FileText :size="12" :stroke-width="2" class="text-primary" />
-        <span class="text-sm font-semibold tabular-nums text-primary">{{ stats.total }}</span>
+    <TooltipProvider>
+      <div class="flex items-center gap-2 px-1">
+        <Tooltip>
+          <TooltipTrigger as-child>
+            <div class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-primary/10 border border-primary/20 cursor-help">
+              <FileText :size="12" :stroke-width="2" class="text-primary" />
+              <span class="text-sm font-semibold tabular-nums text-primary">{{ stats.total }}</span>
+            </div>
+          </TooltipTrigger>
+          <TooltipContent>total emails summarised</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger as-child>
+            <div class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-secondary/10 border border-secondary/20 cursor-help">
+              <Clock :size="12" :stroke-width="2" class="text-secondary" />
+              <span class="text-sm font-semibold tabular-nums text-secondary">{{ stats.timeSaved >= 60 ? Math.round(stats.timeSaved / 60) + 'h' : Math.round(stats.timeSaved) + 'm' }}</span>
+            </div>
+          </TooltipTrigger>
+          <TooltipContent>estimated reading time saved</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger as-child>
+            <div class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-accent/10 border border-accent/20 cursor-help">
+              <TrendingUp :size="12" :stroke-width="2" class="text-accent" />
+              <span class="text-sm font-semibold tabular-nums text-accent">{{ stats.thisWeek }}</span>
+              <span class="text-(length:--font-text-small) text-accent/70">/wk</span>
+            </div>
+          </TooltipTrigger>
+          <TooltipContent>summaries this week</TooltipContent>
+        </Tooltip>
       </div>
-      <div 
-        class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-secondary/10 border border-secondary/20 cursor-help"
-        title="estimated reading time saved"
-      >
-        <Clock :size="12" :stroke-width="2" class="text-secondary" />
-        <span class="text-sm font-semibold tabular-nums text-secondary">{{ stats.timeSaved >= 60 ? Math.round(stats.timeSaved / 60) + 'h' : Math.round(stats.timeSaved) + 'm' }}</span>
-      </div>
-      <div 
-        class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-accent/10 border border-accent/20 cursor-help"
-        title="summaries this week"
-      >
-        <TrendingUp :size="12" :stroke-width="2" class="text-accent" />
-        <span class="text-sm font-semibold tabular-nums text-accent">{{ stats.thisWeek }}</span>
-        <span class="text-(length:--font-text-small) text-accent/70">/wk</span>
-      </div>
-    </div>
+    </TooltipProvider>
 
     <div>
       <div class="flex items-center justify-between mb-3 px-1">

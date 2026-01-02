@@ -4,7 +4,7 @@ import { SUPPORTED_LANGUAGES } from '@/utils/storage'
 import { 
   FileText, BookOpen, Database, Trash2, HelpCircle, X, Cpu, Zap, Palette, Loader2
 } from 'lucide-vue-next'
-import { Toggle, ScrollArea, Checkbox, Textarea, Input } from '@/components/ui'
+import { Toggle, ScrollArea, Checkbox, Textarea, Input, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui'
 import AIStatusCards from './AIStatusCards.vue'
 import type { DropdownPos, DownloadProgressItem } from '@/types'
 import type { AIProviderPreference } from '@/composables/useSettings'
@@ -129,12 +129,19 @@ const themeStore = useThemeStore()
       <!-- word lookup toggle -->
       <div class="rounded-xl bg-card p-4 border border-border">
         <div class="flex items-center justify-between">
-          <div class="flex items-center gap-2.5 group relative cursor-help" title="show definitions on text selection">
-            <div class="flex items-center justify-center w-6 h-6 rounded-md bg-secondary/25">
-              <BookOpen :size="12" class="text-secondary" />
-            </div>
-            <span class="text-(length:--font-text-secondary) font-medium text-foreground tracking-wide">word lookup</span>
-          </div>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger as-child>
+                <div class="flex items-center gap-2.5 cursor-help">
+                  <div class="flex items-center justify-center w-6 h-6 rounded-md bg-secondary/25">
+                    <BookOpen :size="12" class="text-secondary" />
+                  </div>
+                  <span class="text-(length:--font-text-secondary) font-medium text-foreground tracking-wide">word lookup</span>
+                </div>
+              </TooltipTrigger>
+              <TooltipContent>show definitions on text selection</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
           <Toggle 
             :model-value="wordPopupEnabled"
             @update:model-value="(v: boolean) => emit('toggle-word-popup', v)"
@@ -181,14 +188,19 @@ const themeStore = useThemeStore()
               </span>
               
               <!-- delete button -->
-              <button
-                v-if="downloadedLanguages.includes(lang.code)"
-                @click.stop="emit('delete-language', lang.code)"
-                class="p-1 rounded hover:bg-muted text-foreground/30 hover:text-destructive transition-colors"
-                title="delete dictionary"
-              >
-                <X :size="10" />
-              </button>
+              <TooltipProvider v-if="downloadedLanguages.includes(lang.code)">
+                <Tooltip>
+                  <TooltipTrigger as-child>
+                    <button
+                      @click.stop="emit('delete-language', lang.code)"
+                      class="p-1 rounded hover:bg-muted text-foreground/30 hover:text-destructive transition-colors"
+                    >
+                      <X :size="10" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>delete dictionary</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             </div>
           </div>
         </ScrollArea>
@@ -251,22 +263,26 @@ const themeStore = useThemeStore()
         </div>
       </div>
 
-      <div 
-        class="rounded-xl bg-card p-4 border border-border group cursor-help"
-        title="clear cached summaries"
-      >
-        <div class="flex items-center justify-between">
-          <div class="flex items-center gap-2.5">
-            <div class="flex items-center justify-center w-6 h-6 rounded-md bg-destructive/20">
-              <Trash2 :size="12" class="text-destructive" />
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger as-child>
+            <div class="rounded-xl bg-card p-4 border border-border cursor-help">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2.5">
+                  <div class="flex items-center justify-center w-6 h-6 rounded-md bg-destructive/20">
+                    <Trash2 :size="12" class="text-destructive" />
+                  </div>
+                  <span class="text-(length:--font-text-secondary) font-medium text-foreground tracking-wide">cache</span>
+                </div>
+                <button @click.stop="emit('clear-cache')" class="px-2 py-1 rounded text-(length:--font-text-secondary) text-destructive/70 hover:text-destructive hover:bg-destructive/10 transition-colors">
+                  clear
+                </button>
+              </div>
             </div>
-            <span class="text-(length:--font-text-secondary) font-medium text-foreground tracking-wide">cache</span>
-          </div>
-          <button @click="emit('clear-cache')" class="px-2 py-1 rounded text-(length:--font-text-secondary) text-destructive/70 hover:text-destructive hover:bg-destructive/10 transition-colors">
-            clear
-          </button>
-        </div>
-      </div>
+          </TooltipTrigger>
+          <TooltipContent>clear cached summaries</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
 
       <!-- help -->
       <div class="rounded-xl bg-card p-4 border border-border">

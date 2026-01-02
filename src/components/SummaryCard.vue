@@ -5,7 +5,7 @@ import { marked } from 'marked'
 import { 
   ChevronDown, ChevronUp, RefreshCw, Zap, Sparkles, Server, AlertCircle, FileText, Loader2 
 } from 'lucide-vue-next'
-import { Button } from '@/components/ui'
+import { Button, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui'
 import type { AppPageSummary, SummaryPromptData } from '@/types'
 
 interface Props {
@@ -26,6 +26,7 @@ const emit = defineEmits<{
   'manual-summary': []
   'accept-prompt': []
   'decline-prompt': []
+  'open-local-pdf': []
 }>()
 
 function renderMarkdown(text: string): string {
@@ -73,14 +74,20 @@ const hasContent = computed(() => props.pageSummary || props.summaryLoading || p
             {{ pageSummary.bullets.length }} key points · {{ pageSummary.readTime || 'n/a' }} read
           </p>
         </div>
-        <button 
-          @click.stop="emit('refresh')" 
-          class="flex items-center justify-center w-7 h-7 rounded-md hover:bg-primary/10 shrink-0 transition-colors"
-          :disabled="summaryLoading"
-          title="regenerate summary"
-        >
-          <RefreshCw :size="12" :class="[summaryLoading ? 'animate-spin' : '', 'text-primary']" />
-        </button>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger as-child>
+              <button 
+                @click.stop="emit('refresh')" 
+                class="flex items-center justify-center w-7 h-7 rounded-md hover:bg-primary/10 shrink-0 transition-colors"
+                :disabled="summaryLoading"
+              >
+                <RefreshCw :size="12" :class="[summaryLoading ? 'animate-spin' : '', 'text-primary']" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>regenerate summary</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       </div>
       
       <!-- Collapsible content -->
@@ -102,48 +109,50 @@ const hasContent = computed(() => props.pageSummary || props.summaryLoading || p
             
             <div class="flex items-center justify-between pt-2 mt-2 border-t border-border">
               <span class="text-(length:--font-text-small) text-foreground/60">{{ pageSummary.readTime || 'n/a' }} read</span>
-              <div 
-                v-if="pageSummary.timing"
-                class="timing-badge group relative cursor-help"
-              >
-                <div class="flex items-center gap-1.5 text-(length:--font-text-small) text-foreground/60 hover:text-foreground transition-colors">
-                  <span>{{ formatTime(pageSummary.timing.total) }}</span>
-                  <span v-if="pageSummary.timing.model" class="opacity-60">· {{ pageSummary.timing.model }}</span>
-                  <span v-if="pageSummary.timing.cached" class="text-primary">· cached</span>
+                <div v-if="pageSummary.timing">
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger as-child>
+                        <div class="flex items-center gap-1.5 text-(length:--font-text-small) text-foreground/60 hover:text-foreground transition-colors cursor-help">
+                          <span>{{ formatTime(pageSummary.timing.total) }}</span>
+                          <span v-if="pageSummary.timing.model" class="opacity-60">· {{ pageSummary.timing.model }}</span>
+                          <span v-if="pageSummary.timing.cached" class="text-primary">· cached</span>
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent class="min-w-40 p-2.5">
+                        <div class="text-(length:--font-text-small) font-medium text-foreground mb-1.5 uppercase tracking-wide">time breakdown</div>
+                        <div class="space-y-1 text-(length:--font-text-small)">
+                          <div class="flex justify-between gap-3">
+                            <span class="text-foreground/70">extraction</span>
+                            <span class="text-foreground font-mono">{{ formatTime(pageSummary.timing.extraction || 0) }}</span>
+                          </div>
+                          <div class="flex justify-between gap-3">
+                            <span class="text-foreground/70">llm</span>
+                            <span class="text-foreground font-mono">{{ formatTime(pageSummary.timing.llm || 0) }}</span>
+                          </div>
+                          <div class="flex justify-between gap-3 pt-1 border-t border-zinc-800">
+                            <span class="text-foreground">total</span>
+                            <span class="text-primary font-mono font-medium">{{ formatTime(pageSummary.timing.total) }}</span>
+                          </div>
+                          <div v-if="pageSummary.timing.provider" class="flex items-center justify-between pt-1 border-t border-zinc-800">
+                            <span class="text-foreground/60">provider</span>
+                            <span 
+                              :class="[
+                                'font-medium',
+                                pageSummary.timing.provider === 'chrome-ai' ? 'text-blue-400' : 'text-green-400'
+                              ]"
+                            >
+                              {{ pageSummary.timing.provider === 'chrome-ai' ? 'Chrome AI' : 'Ollama' }}
+                            </span>
+                          </div>
+                          <div v-if="pageSummary.timing.model" class="pt-1 text-foreground/60 truncate">
+                            {{ pageSummary.timing.model }}
+                          </div>
+                        </div>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                 </div>
-                <!-- hover breakdown tooltip -->
-                <div class="timing-tooltip absolute bottom-full right-0 mb-2 px-2.5 py-2 rounded-lg bg-popover border border-border shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-150 z-50 min-w-40">
-                  <div class="text-(length:--font-text-small) font-medium text-foreground mb-1.5 uppercase tracking-wide">time breakdown</div>
-                  <div class="space-y-1 text-(length:--font-text-small)">
-                    <div class="flex justify-between gap-3">
-                      <span class="text-foreground/70">extraction</span>
-                      <span class="text-foreground font-mono">{{ formatTime(pageSummary.timing.extraction || 0) }}</span>
-                    </div>
-                    <div class="flex justify-between gap-3">
-                      <span class="text-foreground/70">llm</span>
-                      <span class="text-foreground font-mono">{{ formatTime(pageSummary.timing.llm || 0) }}</span>
-                    </div>
-                    <div class="flex justify-between gap-3 pt-1 border-t border-border">
-                      <span class="text-foreground">total</span>
-                      <span class="text-primary font-mono font-medium">{{ formatTime(pageSummary.timing.total) }}</span>
-                    </div>
-                    <div v-if="pageSummary.timing.provider" class="flex items-center justify-between pt-1 border-t border-border">
-                      <span class="text-foreground/60">provider</span>
-                      <span 
-                        :class="[
-                          'font-medium',
-                          pageSummary.timing.provider === 'chrome-ai' ? 'text-blue-400' : 'text-green-400'
-                        ]"
-                      >
-                        {{ pageSummary.timing.provider === 'chrome-ai' ? 'Chrome AI' : 'Ollama' }}
-                      </span>
-                    </div>
-                    <div v-if="pageSummary.timing.model" class="pt-1 text-foreground/60 truncate">
-                      {{ pageSummary.timing.model }}
-                    </div>
-                  </div>
-                </div>
-              </div>
             </div>
           </div>
         </div>
@@ -158,22 +167,42 @@ const hasContent = computed(() => props.pageSummary || props.summaryLoading || p
 
     <!-- error state with retry button -->
     <div v-else-if="summaryError" class="space-y-2">
-      <div class="flex items-center gap-2.5 p-3 rounded-lg bg-destructive/15 border border-destructive/30">
-        <AlertCircle :size="13" class="text-destructive shrink-0" />
-        <div class="flex-1 min-w-0">
-          <p class="text-(length:--font-text-small) text-foreground">{{ summaryError }}</p>
+      <!-- special state for local PDFs -->
+      <div v-if="summaryError === 'LOCAL_PDF_CLICK_TO_OPEN'" class="space-y-2">
+        <div class="flex items-center gap-2.5 p-3 rounded-lg bg-primary/10 border border-primary/30">
+          <FileText :size="16" class="text-primary shrink-0" />
+          <div class="flex-1 min-w-0">
+            <p class="text-(length:--font-text-body) font-medium text-foreground">Local PDF detected</p>
+            <p class="text-(length:--font-text-small) text-foreground/60">Click below to select and analyze</p>
+          </div>
         </div>
+        <Button 
+          @click="emit('open-local-pdf')"
+          class="w-full bg-primary text-primary-foreground hover:bg-primary/90"
+        >
+          <FileText :size="14" class="mr-2" />
+          Open PDF File
+        </Button>
       </div>
-      <Button 
-        v-if="!isEmailClient"
-        @click="emit('manual-summary')"
-        :disabled="summaryLoading"
-        class="w-full text-(length:--font-text-small) text-muted-foreground hover:text-foreground hover:bg-muted/60"
-        variant="ghost"
-      >
-        <Zap :size="14" class="mr-2" />
-        try summarising anyway
-      </Button>
+      <!-- regular error -->
+      <template v-else>
+        <div class="flex items-center gap-2.5 p-3 rounded-lg bg-destructive/15 border border-destructive/30">
+          <AlertCircle :size="13" class="text-destructive shrink-0" />
+          <div class="flex-1 min-w-0">
+            <p class="text-(length:--font-text-small) text-foreground">{{ summaryError }}</p>
+          </div>
+        </div>
+        <Button 
+          v-if="!isEmailClient"
+          @click="emit('manual-summary')"
+          :disabled="summaryLoading"
+          class="w-full text-(length:--font-text-small) text-muted-foreground hover:text-foreground hover:bg-muted/60"
+          variant="ghost"
+        >
+          <Zap :size="14" class="mr-2" />
+          try summarising anyway
+        </Button>
+      </template>
     </div>
 
     <!-- no page state with summarise button -->
@@ -226,14 +255,7 @@ const hasContent = computed(() => props.pageSummary || props.summaryLoading || p
   text-underline-offset: 2px;
 }
 
-.timing-tooltip::after {
-  content: '';
-  position: absolute;
-  top: 100%;
-  right: 12px;
-  border: 5px solid transparent;
-  border-top-color: oklch(from var(--b2) l c h);
-}
+
 
 .summary-content {
   will-change: height, opacity;
