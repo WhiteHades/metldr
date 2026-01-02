@@ -22,9 +22,10 @@ import ChatPanel from '@/components/ChatPanel.vue'
 import OllamaSetup from '@/components/OllamaSetup.vue'
 import SettingsPanel from '@/components/SettingsPanel.vue'
 import HoverRevealNav from '@/components/HoverRevealNav.vue'
+import SearchPanel from '@/components/SearchPanel.vue'
 
 import { ScrollArea } from '@/components/ui'
-import { Loader2, RefreshCw, X, FileText, BarChart3, Settings } from 'lucide-vue-next'
+import { Loader2, RefreshCw, X, FileText, BarChart3, Settings, Search } from 'lucide-vue-next'
 
 // Theme store
 const themeStore = useThemeStore()
@@ -59,9 +60,11 @@ const {
   isEmailClient,
   isViewingEmailThread,
   chatDisabled,
+  chatDisabledReason,
   fetchCurrentPageSummary,
   resetSummaryState,
-  refreshCurrentTabUrl
+  refreshCurrentTabUrl,
+  openLocalPdf
 } = usePageSummary()
 
 // Chat
@@ -313,6 +316,7 @@ onUnmounted(() => {
       :active-tab="activeTab"
       :tabs="[
         { key: 'summary', icon: FileText, label: 'Summary' },
+        { key: 'search', icon: Search, label: 'Search' },
         { key: 'stats', icon: BarChart3, label: 'Stats' },
         { key: 'settings', icon: Settings, label: 'Settings' }
       ]"
@@ -360,6 +364,7 @@ onUnmounted(() => {
             @manual-summary="triggerManualSummary"
             @accept-prompt="acceptSummaryPrompt"
             @decline-prompt="declineSummaryPrompt"
+            @open-local-pdf="() => openLocalPdf(doSaveTabSession)"
           />
 
           <!-- Chat panel -->
@@ -369,6 +374,7 @@ onUnmounted(() => {
             :chat-messages="chatMessages"
             :chat-loading="chatLoading"
             :chat-disabled="chatDisabled"
+            :disabled-reason="chatDisabledReason"
             :is-viewing-email-thread="isViewingEmailThread"
             @send="sendChatMessage"
             @clear="clearChat"
@@ -416,6 +422,11 @@ onUnmounted(() => {
           :font-size="fontSize"
           @update:font-size="setFontSize"
         />
+
+        <!-- search tab -->
+        <ScrollArea v-else-if="activeTab === 'search'" class="h-full">
+          <SearchPanel />
+        </ScrollArea>
 
         <!-- error state -->
         <div v-else-if="ollamaStatus === 'error'" class="flex flex-col items-center justify-center h-full p-6">

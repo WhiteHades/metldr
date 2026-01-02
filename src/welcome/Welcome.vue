@@ -4,12 +4,13 @@ import { useThemeStore } from '../stores/theme';
 import { getOsType, getSetupCommands } from '../utils/platformUtils';
 import { gsap } from 'gsap';
 import { 
-  Download, Cpu, Sparkles, Check, Copy, 
+  Download, Cpu, Check, Copy, Bot,
   ChevronRight, ChevronDown, ExternalLink, Zap, Shield, Globe,
   FileText, MessageCircle, Mail, Reply, BookOpen, Languages, HelpCircle,
   Command, AppWindow, Terminal, Loader2, AlertCircle, CheckCircle2, Cloud, RefreshCw
 } from 'lucide-vue-next';
-import { Button } from '../components/ui';
+import { Button, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../components/ui';
+
 
 const themeStore = useThemeStore();
 const detectedOs = ref(getOsType());
@@ -209,6 +210,7 @@ const recommendedModels = [
   { name: 'gemma3n:e4b', size: '4b', desc: 'edge optimised', speed: 'moderate' },
 ];
 
+
 const heroRef = ref(null);
 const featuresRef = ref(null);
 const stepsRef = ref(null);
@@ -216,55 +218,396 @@ const modelsRef = ref(null);
 const ctaRef = ref(null);
 const faqRef = ref(null);
 const expandedFaq = ref(null);
+const searchQuery = ref('');
+const activeCategory = ref('all');
+const copiedText = ref('');
+const activeSection = ref('hero');
 
-const faqs = [
+const navSections = [
+  { id: 'hero', label: 'home' },
+  { id: 'features', label: 'features' },
+  { id: 'setup', label: 'setup' },
+  { id: 'troubleshooting', label: 'help' }
+];
+
+const NAV_HEIGHT = 80;
+
+function scrollToSection(sectionId) {
+  let target;
+  switch (sectionId) {
+    case 'hero': target = heroRef.value; break;
+    case 'features': target = featuresRef.value; break;
+    case 'setup': target = document.querySelector('.setup-section'); break;
+    case 'troubleshooting': target = faqRef.value; break;
+    default: return;
+  }
+  if (target) {
+    activeSection.value = sectionId;
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
+
+function setupSectionObserver() {
+  const sections = [
+    { id: 'hero', el: heroRef.value },
+    { id: 'features', el: featuresRef.value },
+    { id: 'setup', el: document.querySelector('.setup-section') },
+    { id: 'troubleshooting', el: faqRef.value }
+  ];
+  
+  const observer = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          const section = sections.find(s => s.el === entry.target);
+          if (section) activeSection.value = section.id;
+        }
+      });
+    },
+    { threshold: 0.3, rootMargin: '-50px 0px -50% 0px' }
+  );
+  
+  sections.forEach(s => {
+    if (s.el) observer.observe(s.el);
+  });
+  
+  return observer;
+}
+
+let sectionObserver = null;
+
+const categories = [
+  { id: 'all', label: 'all', icon: null },
+  { id: 'chrome-ai', label: 'chrome ai', icon: Bot },
+  { id: 'ollama', label: 'ollama', icon: Cpu },
+  { id: 'webgpu', label: 'webgpu / rag', icon: Zap },
+  { id: 'pdf', label: 'pdfs', icon: FileText },
+  { id: 'gmail', label: 'gmail', icon: Mail },
+  { id: 'general', label: 'general', icon: HelpCircle }
+];
+
+const troubleshootingItems = [
+  // chrome ai
   {
-    question: 'what is gemini nano and do i need it?',
-    answer: "gemini nano is google's on-device ai model built into chrome 138+. it's the recommended option because it requires zero setup - just enable the flags and you're ready. if you have an older browser or prefer running your own models, use ollama instead."
+    category: 'chrome-ai',
+    question: 'chrome ai says "unavailable" or "not ready"',
+    answer: `enable these 4 flags in [[chrome://flags]]:
+
+• [[#optimization-guide-on-device-model]] → set to **BypassPerfRequirement**
+• [[#prompt-api-for-gemini-nano]] → Enabled
+• [[#summarization-api-for-gemini-nano]] → Enabled
+• [[#writer-api-for-gemini-nano]] → Enabled
+
+then **fully quit chrome** (check task manager) and reopen. the model downloads automatically (~1.5GB).`
   },
   {
-    question: 'chrome ai says "unavailable" - how do i fix it?',
-    answer: 'this usually means the flags are not enabled or you need to restart chrome. go to `chrome://flags`, search for "gemini nano" and enable all 4 flags: `#optimization-guide-on-device-model` (set to BypassPerfRequirement), `#prompt-api-for-gemini-nano`, `#summarization-api-for-gemini-nano`, and `#writer-api-for-gemini-nano`. then fully quit and reopen chrome.'
+    category: 'chrome-ai',
+    question: 'gemini nano download stuck or failed',
+    answer: `the model downloads in the background. if stuck:
+
+1. go to [[chrome://components]]
+2. find "Optimization Guide On Device Model"
+3. click "Check for update"
+
+still stuck? try: disable all 4 flags → restart chrome → re-enable flags → restart again.`
   },
   {
-    question: 'gemini nano download is stuck or failed',
-    answer: 'the model is ~1.5GB and downloads in the background. if it seems stuck, try: 1) paste `chrome://components` in the address bar, 2) find "Optimization Guide On Device Model", 3) click "Check for update". you can also try disabling and re-enabling the flags, then restarting chrome.'
+    category: 'chrome-ai',
+    question: 'chrome ai works but responses are slow',
+    answer: `gemini nano is optimised but first responses can be slow while the model loads. subsequent responses are faster. if consistently slow:
+
+• close other heavy tabs
+• check [[chrome://gpu]] - hardware acceleration should be enabled
+• ensure you have 8GB+ RAM available`
+  },
+  // ollama
+  {
+    category: 'ollama',
+    question: 'ollama not connecting (red status)',
+    answer: `check these in order:
+
+1. **ollama running?** run \`ollama serve\` or check system tray
+2. **cors enabled?** you need the environment variable set:
+
+**linux/mac:**
+\`\`\`
+OLLAMA_ORIGINS=chrome-extension://* ollama serve
+\`\`\`
+
+**windows (powershell as admin):**
+\`\`\`
+[Environment]::SetEnvironmentVariable("OLLAMA_ORIGINS", "chrome-extension://*", "User")
+\`\`\`
+
+3. **fully restart ollama** after setting cors (not just the terminal)`
   },
   {
-    question: 'what is ollama and when should i use it?',
-    answer: "ollama runs open-source ai models locally on your computer. use it if: you have chrome < 138, gemini nano is not available on your device, or you want to use specific models like llama, mistral, or deepseek. it requires manual setup but gives you more control."
+    category: 'ollama',
+    question: 'ollama connected but no models available',
+    answer: `you need to pull a model first. recommended:
+
+\`\`\`
+ollama pull llama3.2:1b
+\`\`\`
+
+other options:
+• \`ollama pull gemma3:1b\` - ultra-fast, lightweight
+• \`ollama pull qwen2.5:3b\` - good balance of speed and quality
+• \`ollama pull llama3.2:3b\` - best quality, slower
+
+after pulling, refresh the extension.`
   },
   {
-    question: 'why is ollama not connecting?',
-    answer: "make sure ollama is running and you've completed the cors setup (step 2 in the ollama section). after setting the environment variable, you need to fully quit and restart ollama. the extension auto-detects ollama every 2 seconds."
+    category: 'ollama',
+    question: 'ollama responses very slow',
+    answer: `performance depends on your hardware and model size:
+
+• **1b-2b models** - should be fast on any modern machine
+• **3b+ models** - need good CPU or GPU
+
+speed tips:
+• use smaller models (\`llama3.2:1b\`, \`gemma3:1b\`)
+• enable GPU acceleration: check \`ollama ps\` for GPU usage
+• close other GPU-heavy apps
+• linux users: ensure nvidia drivers are installed`
+  },
+  // webgpu
+  {
+    category: 'webgpu',
+    question: 'webgpu not working / "no gpu adapter found"',
+    answer: `webgpu accelerates rag embeddings but needs setup on linux:
+
+1. enable flags in [[chrome://flags]]:
+   • [[#enable-unsafe-webgpu]] → Enabled
+   • [[#enable-webgpu-developer-features]] → Enabled
+
+2. **linux only** - launch chrome with:
+\`\`\`
+google-chrome --enable-features=Vulkan,UseSkiaRenderer --enable-unsafe-webgpu
+\`\`\`
+
+3. check [[chrome://gpu]] - WebGPU should show "Hardware accelerated"
+
+**fallback:** if webgpu fails, the extension uses wasm (slower but works everywhere).`
   },
   {
-    question: 'is my data sent anywhere?',
-    answer: 'no. with both gemini nano and ollama, all processing happens locally on your computer. gemini nano runs inside chrome, ollama runs on localhost. no data is ever sent to external servers - your browsing stays completely private.'
+    category: 'webgpu',
+    question: 'rag/search not finding relevant results',
+    answer: `rag indexing happens automatically when you visit pages. if search isn't working:
+
+• **wait for indexing** - check console for "[RagService] Indexed X chunks"
+• **page too short** - very short pages may not index
+• **try different queries** - use keywords from the content
+
+the search tab shows all indexed content. if empty, pages haven't been indexed yet.`
+  },
+  // pdf
+  {
+    category: 'pdf',
+    question: 'local pdf not working / can\'t summarise',
+    answer: `chrome blocks direct access to \`file://\` urls for security.
+
+**solution:** click the "open pdf file" button and select your pdf with the file picker. this grants explicit permission.
+
+**online pdfs** (https://) work automatically - no file picker needed.`
   },
   {
-    question: 'how do i summarise gmail emails?',
-    answer: 'when viewing an email thread in gmail, you will see a "metldr - summarise email" button. click it to generate a summary with key points, action items, and important dates. you can enable auto-summarisation in the extension settings.'
+    category: 'pdf',
+    question: 'pdf summary is incomplete or wrong',
+    answer: `pdf extraction depends on how the pdf was created:
+
+• **scanned pdfs** - may not have extractable text (ocr not supported yet)
+• **complex layouts** - tables and multi-column text may extract poorly
+• **very long pdfs** - content may be truncated for model limits
+
+tip: check the "full content" in the extension to see what was extracted.`
+  },
+  // gmail
+  {
+    category: 'gmail',
+    question: 'gmail summary button not appearing',
+    answer: `the button appears when viewing an individual email thread. checklist:
+
+• **viewing a thread?** click into an email, not just the inbox list
+• **content script loaded?** refresh gmail after installing the extension
+• **permissions granted?** check the extension has access to mail.google.com
+
+if still missing, open devtools → console and look for errors.`
   },
   {
-    question: 'which option is faster?',
-    answer: "gemini nano is typically faster for most tasks since it's optimised for chrome. ollama speed depends on your chosen model - 1b-2b models are fast, 3b+ models are slower but smarter. if you have a dedicated gpu, ollama can be very fast."
+    category: 'gmail',
+    question: 'gmail summary is inaccurate',
+    answer: `ai summaries are best-effort interpretations. for better results:
+
+• ensure the full email thread is visible (not collapsed)
+• longer email threads provide more context
+• gemini nano is generally better for gmail than small ollama models
+
+**action items and dates** are extracted with ai - double-check important items.`
+  },
+  // general
+  {
+    category: 'general',
+    question: 'is my data sent to any servers?',
+    answer: `**no.** metldr is 100% local:
+
+• **gemini nano** - runs inside chrome, no network requests
+• **ollama** - runs on localhost (your machine only)
+• **rag embeddings** - processed locally with bundled models
+• **no analytics** - we don't track anything
+
+your browsing data never leaves your computer.`
+  },
+  {
+    category: 'general',
+    question: 'extension not loading / blank side panel',
+    answer: `try these fixes in order:
+
+1. **hard refresh**: right-click extension icon → "reload"
+2. **reinstall**: remove and re-add from [[chrome://extensions]]
+3. **check console**: open devtools on the side panel (right-click → inspect)
+4. **conflicts**: disable other extensions temporarily
+
+if issue persists, create an issue on github with console errors.`
+  },
+  {
+    category: 'general',
+    question: 'how do i update the extension?',
+    answer: `for store versions: automatic updates enabled by default.
+
+for development builds:
+\`\`\`
+git pull
+npm install
+npm run build
+\`\`\`
+
+then go to [[chrome://extensions]] and click "reload" on metldr.`
   }
 ];
+
+const filteredItems = computed(() => {
+  let items = troubleshootingItems;
+  
+  if (activeCategory.value !== 'all') {
+    items = items.filter(item => item.category === activeCategory.value);
+  }
+  
+  if (searchQuery.value.trim()) {
+    const query = searchQuery.value.toLowerCase();
+    items = items.filter(item => 
+      item.question.toLowerCase().includes(query) ||
+      item.answer.toLowerCase().includes(query)
+    );
+  }
+  
+  return items;
+});
 
 function toggleFaq(index) {
   expandedFaq.value = expandedFaq.value === index ? null : index;
 }
 
-function formatFaqText(text) {
-  // convert backticks to styled code
-  let formatted = text.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
-  // convert button text to styled badge
-  formatted = formatted.replace(
-    /"metldr - summarise email"/g,
-    '<span class="button-badge">metldr - summarise email</span>'
-  );
-  return formatted;
+function copyToClipboardInline(text) {
+  navigator.clipboard.writeText(text).then(() => {
+    copiedText.value = text;
+    setTimeout(() => { copiedText.value = ''; }, 2000);
+  });
+}
+
+function openChromeUrl(url) {
+  if (typeof chrome !== 'undefined' && chrome.tabs) {
+    chrome.tabs.create({ url });
+  } else {
+    navigator.clipboard.writeText(url);
+    copiedText.value = url;
+    setTimeout(() => { copiedText.value = ''; }, 2000);
+  }
+}
+
+function formatAnswer(text) {
+  let html = text;
+  
+  html = html.replace(/\[\[((chrome:\/\/[^\]]+))\]\]/g, (_, url) => {
+    return `<a href="#" class="chrome-link" data-url="${url}">${url}</a>`;
+  });
+  
+  html = html.replace(/\[\[(#[^\]]+)\]\]/g, (_, flag) => {
+    return `<a href="#" class="chrome-link" data-url="chrome://flags/${flag}">${flag}</a>`;
+  });
+  
+  html = html.replace(/```([^`]+)```/g, (_, code) => {
+    const escapedCode = code.trim().replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return `<div class="code-block"><pre>${escapedCode}</pre><button class="copy-btn" data-copy="${escapedCode.replace(/"/g, '&quot;')}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>`;
+  });
+  
+  html = html.replace(/`([^`]+)`/g, (_, code) => {
+    return `<code class="inline-code">${code}<button class="inline-copy" data-copy="${code.replace(/"/g, '&quot;')}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></code>`;
+  });
+  
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  
+  const lines = html.split('\n');
+  let inList = false;
+  let result = [];
+  
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const bulletMatch = line.match(/^• (.+)$/);
+    const numMatch = line.match(/^\d+\. (.+)$/);
+    
+    if (bulletMatch || numMatch) {
+      if (!inList) {
+        result.push('<ul>');
+        inList = true;
+      }
+      result.push(`<li>${bulletMatch ? bulletMatch[1] : numMatch[1]}</li>`);
+    } else {
+      if (inList) {
+        result.push('</ul>');
+        inList = false;
+      }
+      if (line.trim()) {
+        result.push(line);
+      } else if (result.length > 0 && !result[result.length - 1].endsWith('</ul>')) {
+        result.push('<br>');
+      }
+    }
+  }
+  if (inList) result.push('</ul>');
+  
+  html = result.join('');
+  
+  // clean up excessive br tags
+  html = html.replace(/(<br>){2,}/g, '<br>');
+  html = html.replace(/<\/ul><br>/g, '</ul>');
+  
+  return html;
+}
+
+// handle clicks on dynamic elements
+function handleAnswerClick(event) {
+  const target = event.target;
+  
+  // handle chrome:// links
+  if (target.classList.contains('chrome-link')) {
+    event.preventDefault();
+    const url = target.dataset.url;
+    openChromeUrl(url);
+    return;
+  }
+  
+  // handle copy buttons
+  if (target.classList.contains('copy-btn') || target.classList.contains('inline-copy') || target.closest('.copy-btn') || target.closest('.inline-copy')) {
+    event.preventDefault();
+    const btn = target.closest('.copy-btn') || target.closest('.inline-copy') || target;
+    const text = btn.dataset.copy;
+    if (text) {
+      copyToClipboardInline(text);
+      btn.classList.add('copied');
+      setTimeout(() => btn.classList.remove('copied'), 2000);
+    }
+  }
 }
 
 function copyToClipboard(text, key) {
@@ -351,16 +694,56 @@ onMounted(async () => {
     ease: 'power2.out',
     repeat: -1
   });
+  
+  // setup section observer for navigation
+  setTimeout(() => {
+    sectionObserver = setupSectionObserver();
+  }, 500);
 });
 
 onUnmounted(() => {
   stopProgressPolling();
+  if (sectionObserver) sectionObserver.disconnect();
 });
 </script>
 
 <template>
   <div class="welcome-page">
     <div class="bg-pattern"></div>
+    
+    <!-- top nav bar -->
+    <nav class="top-nav">
+      <div class="nav-pill">
+        <button @click="scrollToSection('hero')" :class="{ active: activeSection === 'hero' }">home</button>
+        <button @click="scrollToSection('features')" :class="{ active: activeSection === 'features' }">features</button>
+        <button @click="scrollToSection('setup')" :class="{ active: activeSection === 'setup' }">setup</button>
+        <button @click="scrollToSection('troubleshooting')" :class="{ active: activeSection === 'troubleshooting' }">help</button>
+      </div>
+    </nav>
+    
+    <!-- side navigation dots -->
+    <div class="side-nav">
+      <button 
+        v-for="section in navSections" 
+        :key="section.id"
+        @click="scrollToSection(section.id)"
+        class="nav-dot"
+        :class="{ active: activeSection === section.id }"
+      >
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger as-child>
+              <div class="w-full h-full flex items-center justify-center">
+                <span class="dot-indicator"></span>
+              </div>
+            </TooltipTrigger>
+            <TooltipContent side="left" :side-offset="10">
+              {{ section.label }}
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      </button>
+    </div>
     
     <!-- floating shapes -->
     <div class="shapes-container">
@@ -373,19 +756,14 @@ onUnmounted(() => {
       <!-- hero -->
       <section ref="heroRef" class="hero">
         <div class="hero-glow"></div>
-        
-        <div class="badge">
-          <div class="pulse-ring"></div>
-          <span>private & local ai</span>
-        </div>
-        
+      
         <h1 class="title">
           welcome to
           <span class="gradient-text">metldr</span>
         </h1>
         
         <p class="subtitle">
-          free & open source ai assistant that runs entirely on your machine. 
+          a free & open source ai assistant that runs entirely on your machine. 
           <strong>no cloud, no tracking, just you and your ai.</strong>
         </p>
         
@@ -716,7 +1094,7 @@ onUnmounted(() => {
                 <Cpu :size="20" />
                 <h3>pull a model</h3>
               </div>
-              <p>open a new terminal and run one of the commands below. "pulling" downloads the ai model to your computer. smaller models (1b-2b) are faster; larger models (3b-4b) are smarter but slower.</p>
+              <p>open a new terminal and run one of the commands below. "pulling" downloads the ai model to your computer. smaller models (1b-2b) are faster; larger models (3b-4b) are smarter but slower. copy any command below, paste it in your terminal, and hit enter. start with a small model - you can always add more later!</p>
             </div>
           </div>
         </div>
@@ -749,12 +1127,7 @@ onUnmounted(() => {
             </div>
           </div>
         </div>
-        
-        <div class="models-tip-glow">
-          <p class="models-tip">copy any command above, paste it in your terminal, and hit enter. start with a small model - you can always add more later!</p>
-        </div>
       </section>
-      
       <!-- cta -->
       <section ref="ctaRef" class="cta-section">
         <Button @click="getStarted" class="cta-btn h-auto">
@@ -764,14 +1137,56 @@ onUnmounted(() => {
         <p class="cta-hint">you can reopen this guide anytime from settings</p>
       </section>
       
-      <!-- faq -->
-      <section id="faq" ref="faqRef" class="faq-section">
-        <h2 class="section-title">frequently asked questions</h2>
+      <!-- troubleshooting -->
+      <section id="troubleshooting" ref="faqRef" class="faq-section">
+        <h2 class="section-title">troubleshooting</h2>
         
+        <!-- search and category nav -->
+        <div class="troubleshoot-controls">
+          <div class="search-wrapper">
+            <input 
+              v-model="searchQuery"
+              type="text"
+              placeholder="search issues..."
+              class="search-input"
+            />
+            <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"/>
+              <path d="m21 21-4.35-4.35"/>
+            </svg>
+            <button 
+              v-if="searchQuery"
+              @click="searchQuery = ''"
+              class="search-clear"
+            >×</button>
+          </div>
+          
+          <div class="category-nav">
+            <button
+              v-for="cat in categories"
+              :key="cat.id"
+              @click="activeCategory = cat.id"
+              class="category-pill"
+              :class="{ active: activeCategory === cat.id }"
+            >
+              <component v-if="cat.icon" :is="cat.icon" :size="14" />
+              <span>{{ cat.label }}</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- results count -->
+        <p class="results-count" v-if="searchQuery || activeCategory !== 'all'">
+          {{ filteredItems.length }} {{ filteredItems.length === 1 ? 'result' : 'results' }}
+          <span v-if="searchQuery">for "{{ searchQuery }}"</span>
+          <span v-if="activeCategory !== 'all'"> in {{ activeCategory }}</span>
+        </p>
+
+        <!-- items list -->
         <div class="faq-list">
           <div 
-            v-for="(faq, index) in faqs" 
-            :key="index"
+            v-for="(item, index) in filteredItems" 
+            :key="item.question"
             class="faq-item"
             :class="{ 'faq-expanded': expandedFaq === index }"
           >
@@ -779,10 +1194,8 @@ onUnmounted(() => {
               class="faq-question"
               @click="toggleFaq(index)"
             >
-              <div class="faq-icon">
-                <HelpCircle :size="18" />
-              </div>
-              <span>{{ faq.question }}</span>
+              <span class="faq-category-badge" :class="item.category">{{ item.category.replace('-', ' ') }}</span>
+              <span class="faq-question-text">{{ item.question }}</span>
               <ChevronDown 
                 :size="18" 
                 class="faq-chevron"
@@ -790,9 +1203,21 @@ onUnmounted(() => {
               />
             </button>
             <div class="faq-answer-wrapper" :class="{ 'answer-visible': expandedFaq === index }">
-              <p class="faq-answer" v-html="formatFaqText(faq.answer)"></p>
+              <div class="faq-answer" v-html="formatAnswer(item.answer)" @click="handleAnswerClick"></div>
             </div>
           </div>
+          
+          <!-- empty state -->
+          <div v-if="filteredItems.length === 0" class="empty-state">
+            <HelpCircle :size="32" class="empty-icon" />
+            <p>no matching issues found</p>
+            <button @click="searchQuery = ''; activeCategory = 'all'" class="reset-btn">show all</button>
+          </div>
+        </div>
+        
+        <!-- help footer -->
+        <div class="help-footer">
+          <p>still stuck? <a href="https://github.com/WhiteHades/metldr/issues" target="_blank" rel="noopener">open an issue on github</a> · we'll help you out</p>
         </div>
       </section>
       
@@ -818,6 +1243,98 @@ onUnmounted(() => {
   position: relative;
   overflow-x: hidden;
 }
+
+/* top nav bar */
+.top-nav {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100;
+}
+
+.nav-pill {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: rgba(18, 18, 24, 0.85);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 100px;
+  box-shadow: 
+    0 8px 32px rgba(0, 0, 0, 0.4),
+    0 0 0 1px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.nav-pill button {
+  padding: 8px 16px;
+  background: transparent;
+  border: none;
+  border-radius: 100px;
+  color: #a1a1aa;
+  font-family: 'IBM Plex Sans', inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.nav-pill button:hover {
+  color: #e4e4e7;
+}
+
+.nav-pill button.active {
+  background: rgba(139, 92, 246, 0.2);
+  color: #c4b5fd;
+}
+
+/* side navigation dots */
+.side-nav {
+  position: fixed;
+  right: 24px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.nav-dot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  flex-direction: row-reverse;
+}
+
+.dot-indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.2);
+  border: 2px solid rgba(255, 255, 255, 0.1);
+  transition: all 0.3s ease;
+}
+
+.nav-dot:hover .dot-indicator {
+  background: rgba(139, 92, 246, 0.4);
+  border-color: rgba(139, 92, 246, 0.5);
+  transform: scale(1.2);
+}
+
+.nav-dot.active .dot-indicator {
+  background: #a78bfa;
+  border-color: #a78bfa;
+  box-shadow: 0 0 12px rgba(139, 92, 246, 0.5);
+}
+
+
 
 .bg-pattern {
   position: fixed;
@@ -881,7 +1398,7 @@ onUnmounted(() => {
   z-index: 1;
   max-width: 1000px;
   margin: 0 auto;
-  padding: 60px 24px 40px;
+  padding: 100px 24px 40px; /* increased top padding for fixed nav */
 }
 
 /* hero */
@@ -889,6 +1406,7 @@ onUnmounted(() => {
   text-align: center;
   margin-bottom: 80px;
   position: relative;
+  scroll-margin-top: 80px;
 }
 
 .hero-glow {
@@ -998,6 +1516,7 @@ onUnmounted(() => {
 /* features */
 .features-section {
   margin-bottom: 80px;
+  scroll-margin-top: 80px;
 }
 
 .features-grid {
@@ -1082,6 +1601,7 @@ onUnmounted(() => {
 /* setup */
 .setup-section {
   margin-bottom: 32px;
+  scroll-margin-top: 80px;
 }
 
 .steps {
@@ -1511,16 +2031,66 @@ onUnmounted(() => {
 }
 
 .gemini-action-btn {
-  gap: 6px !important;
-  padding: 8px 16px !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px !important;
+  padding: 10px 24px !important;
+  font-family: 'IBM Plex Sans', inherit;
   font-size: 13px !important;
-  background: linear-gradient(135deg, #3b82f6, #8b5cf6) !important;
-  border: none !important;
-  color: white !important;
+  font-weight: 600;
+  border-radius: 100px !important;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  /* Default blueish/purple theme for download state */
+  background: rgba(59, 130, 246, 0.15) !important;
+  border: 1px solid rgba(59, 130, 246, 0.3) !important;
+  color: #60a5fa !important;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.1);
+}
+
+.gemini-action-btn:hover {
+  transform: translateY(-2px);
+  background: rgba(59, 130, 246, 0.25) !important;
+  border-color: rgba(59, 130, 246, 0.5) !important;
+  box-shadow: 0 8px 20px rgba(59, 130, 246, 0.2);
 }
 
 .gemini-action-btn.ready {
-  background: linear-gradient(135deg, #22c55e, #10b981) !important;
+  /* premium violet theme matching page aesthetic */
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.2) 0%, rgba(34, 211, 238, 0.15) 100%) !important;
+  border: 1px solid rgba(139, 92, 246, 0.4) !important;
+  color: #c4b5fd !important;
+  box-shadow: 
+    0 0 20px rgba(139, 92, 246, 0.2),
+    0 4px 16px rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  position: relative;
+  overflow: hidden;
+}
+
+.gemini-action-btn.ready::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(167, 139, 250, 0.15) 0%, rgba(34, 211, 238, 0.1) 100%);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.gemini-action-btn.ready:hover {
+  transform: translateY(-3px) scale(1.02);
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.3) 0%, rgba(34, 211, 238, 0.2) 100%) !important;
+  border-color: rgba(167, 139, 250, 0.6) !important;
+  box-shadow: 
+    0 0 32px rgba(139, 92, 246, 0.35),
+    0 8px 24px rgba(0, 0, 0, 0.25),
+    inset 0 1px 0 rgba(255, 255, 255, 0.15);
+  color: #ddd6fe !important;
+}
+
+.gemini-action-btn.ready:hover::before {
+  opacity: 1;
 }
 
 /* flag list */
@@ -1753,6 +2323,168 @@ onUnmounted(() => {
 
 .faq-section {
   margin-bottom: 60px;
+  scroll-margin-top: 80px;
+}
+
+/* quick tips header */
+.quick-tips {
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.15);
+  border-radius: 10px;
+  padding: 12px 16px;
+  margin-bottom: 20px;
+}
+
+.quick-tips p {
+  font-size: 13px;
+  color: #a1a1aa;
+  line-height: 1.6;
+}
+
+.quick-tips strong {
+  color: #fbbf24;
+}
+
+.tip-chrome-link {
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+}
+
+.tip-copy-icon {
+  font-size: 12px;
+}
+
+/* help footer */
+.help-footer {
+  margin-top: 24px;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
+  text-align: center;
+}
+
+.help-footer p {
+  font-size: 13px;
+  color: #71717a;
+}
+
+.help-footer a {
+  color: #a78bfa;
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.help-footer a:hover {
+  color: #c4b5fd;
+  text-decoration: underline;
+}
+
+/* troubleshoot controls */
+.troubleshoot-controls {
+  margin-bottom: 24px;
+}
+
+.search-wrapper {
+  position: relative;
+  margin-bottom: 16px;
+}
+
+.search-input {
+  width: 100%;
+  padding: 14px 44px 14px 44px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  color: #e4e4e7;
+  font-family: 'IBM Plex Sans', inherit;
+  font-size: 14px;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.search-input:focus {
+  border-color: rgba(139, 92, 246, 0.5);
+  background: rgba(139, 92, 246, 0.05);
+}
+
+.search-input::placeholder {
+  color: #71717a;
+}
+
+.search-icon {
+  position: absolute;
+  left: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #71717a;
+  pointer-events: none;
+}
+
+.search-clear {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  border-radius: 50%;
+  color: #a1a1aa;
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.search-clear:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #e4e4e7;
+}
+
+/* category nav */
+.category-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.category-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  color: #a1a1aa;
+  font-family: 'IBM Plex Sans', inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.category-pill:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #e4e4e7;
+}
+
+.category-pill.active {
+  background: rgba(139, 92, 246, 0.15);
+  border-color: rgba(139, 92, 246, 0.4);
+  color: #c4b5fd;
+}
+
+/* results count */
+.results-count {
+  font-size: 13px;
+  color: #71717a;
+  margin-bottom: 16px;
 }
 
 .faq-list {
@@ -1783,13 +2515,13 @@ onUnmounted(() => {
   width: 100%;
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 18px 20px;
+  gap: 12px;
+  padding: 16px 18px;
   background: none;
   border: none;
   color: #e4e4e7;
   font-family: 'IBM Plex Sans', inherit;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 500;
   text-align: left;
   cursor: pointer;
@@ -1800,26 +2532,49 @@ onUnmounted(() => {
   color: #ffffff;
 }
 
-.faq-question span {
+.faq-question-text {
   flex: 1;
 }
 
-.faq-icon {
-  width: 36px;
-  height: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(139, 92, 246, 0.15);
-  border-radius: 10px;
-  color: #a78bfa;
+/* category badge */
+.faq-category-badge {
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
   flex-shrink: 0;
-  transition: all 0.3s ease;
 }
 
-.faq-expanded .faq-icon {
-  background: rgba(139, 92, 246, 0.25);
-  color: #c4b5fd;
+.faq-category-badge.chrome-ai {
+  background: rgba(234, 179, 8, 0.15);
+  color: #fbbf24;
+}
+
+.faq-category-badge.ollama {
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+}
+
+.faq-category-badge.webgpu {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+}
+
+.faq-category-badge.pdf {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+}
+
+.faq-category-badge.gmail {
+  background: rgba(236, 72, 153, 0.15);
+  color: #f472b6;
+}
+
+.faq-category-badge.general {
+  background: rgba(139, 92, 246, 0.15);
+  color: #a78bfa;
 }
 
 .faq-chevron {
@@ -1843,26 +2598,175 @@ onUnmounted(() => {
 }
 
 .answer-visible {
-  max-height: 300px;
+  max-height: 600px;
   opacity: 1;
 }
 
 .faq-answer {
-  padding: 0 20px 20px 70px;
+  padding: 0 20px 20px 20px;
   font-size: 14px;
   color: #a1a1aa;
   line-height: 1.7;
 }
 
+.faq-answer strong {
+  color: #e4e4e7;
+  font-weight: 600;
+}
+
+.faq-answer ul {
+  margin: 12px 0;
+  padding-left: 0;
+  list-style: none;
+}
+
+.faq-answer li {
+  padding: 6px 0 6px 20px;
+  position: relative;
+}
+
+.faq-answer li::before {
+  content: '•';
+  position: absolute;
+  left: 0;
+  color: #a78bfa;
+}
+
+/* inline code with copy */
 .inline-code {
-  background: rgba(139, 92, 246, 0.15);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(139, 92, 246, 0.12);
   color: #c4b5fd;
-  padding: 2px 8px;
-  border-radius: 6px;
-  font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Consolas, monospace;
-  font-size: 12px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 11.5px;
   font-weight: 500;
-  border: 1px solid rgba(139, 92, 246, 0.25);
+  border: 1px solid rgba(139, 92, 246, 0.2);
+}
+
+.inline-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  background: none;
+  border: none;
+  color: #71717a;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.15s ease;
+}
+
+.inline-copy:hover {
+  color: #a78bfa;
+  background: rgba(139, 92, 246, 0.15);
+}
+
+.inline-copy.copied {
+  color: #34d399;
+}
+
+/* code blocks */
+.code-block {
+  position: relative;
+  margin: 12px 0;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.code-block pre {
+  margin: 0;
+  padding: 14px 50px 14px 16px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 13px;
+  color: #e4e4e7;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.code-block .copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  color: #71717a;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.code-block .copy-btn:hover {
+  background: rgba(139, 92, 246, 0.15);
+  border-color: rgba(139, 92, 246, 0.3);
+  color: #a78bfa;
+}
+
+.code-block .copy-btn.copied {
+  color: #34d399;
+  border-color: rgba(16, 185, 129, 0.3);
+}
+
+/* chrome:// links */
+.chrome-link {
+  color: #60a5fa;
+  text-decoration: none;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 12px;
+  background: rgba(59, 130, 246, 0.1);
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  transition: all 0.15s ease;
+}
+
+.chrome-link:hover {
+  background: rgba(59, 130, 246, 0.2);
+  border-color: rgba(59, 130, 246, 0.4);
+  color: #93c5fd;
+}
+
+/* empty state */
+.empty-state {
+  text-align: center;
+  padding: 48px 24px;
+  color: #71717a;
+}
+
+.empty-icon {
+  color: #52525b;
+  margin-bottom: 12px;
+}
+
+.empty-state p {
+  margin-bottom: 16px;
+  font-size: 14px;
+}
+
+.reset-btn {
+  padding: 10px 20px;
+  background: rgba(139, 92, 246, 0.15);
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  border-radius: 8px;
+  color: #a78bfa;
+  font-family: 'IBM Plex Sans', inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.reset-btn:hover {
+  background: rgba(139, 92, 246, 0.25);
+  border-color: rgba(139, 92, 246, 0.5);
 }
 
 .button-badge {
@@ -2243,5 +3147,210 @@ onUnmounted(() => {
   .chrome-ai-section.primary { padding: 32px 20px; }
   .status-action { width: 100%; }
   .status-action button { width: 100%; }
+  .local-models-grid { grid-template-columns: 1fr; }
+}
+
+/* local ml models section */
+.local-models-section {
+  margin-top: 48px;
+}
+
+.setup-badge.optional {
+  background: linear-gradient(135deg, rgba(34, 211, 238, 0.15), rgba(59, 130, 246, 0.15));
+  color: #67e8f9;
+}
+
+.local-models-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  background: rgba(17, 24, 39, 0.6);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  border-radius: 12px;
+  margin-bottom: 20px;
+}
+
+.status-count {
+  font-size: 14px;
+  color: #a1a1aa;
+  font-weight: 500;
+}
+
+.download-all-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(139, 92, 246, 0.2));
+  border: 1px solid rgba(59, 130, 246, 0.4);
+  border-radius: 8px;
+  color: #93c5fd;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.3s ease;
+}
+
+.download-all-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.3), rgba(139, 92, 246, 0.3));
+  border-color: rgba(59, 130, 246, 0.6);
+  transform: translateY(-1px);
+}
+
+.download-all-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.local-models-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.local-model-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  background: rgba(17, 24, 39, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
+  transition: all 0.3s ease;
+}
+
+.local-model-card:hover {
+  background: rgba(17, 24, 39, 0.7);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.local-model-card.model-ready {
+  border-color: rgba(34, 197, 94, 0.3);
+  background: rgba(34, 197, 94, 0.05);
+}
+
+.local-model-card.model-loading {
+  border-color: rgba(59, 130, 246, 0.4);
+  background: rgba(59, 130, 246, 0.05);
+}
+
+.local-model-card.model-required {
+  border-left: 3px solid rgba(139, 92, 246, 0.6);
+}
+
+.model-icon-wrap {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+.model-emoji {
+  font-size: 20px;
+}
+
+.model-check {
+  position: absolute;
+  bottom: -4px;
+  right: -4px;
+  width: 18px;
+  height: 18px;
+  background: #22c55e;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+}
+
+.model-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.model-header-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+
+.model-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e4e4e7;
+}
+
+.required-badge {
+  font-size: 9px;
+  padding: 2px 5px;
+  background: rgba(139, 92, 246, 0.2);
+  color: #c4b5fd;
+  border-radius: 4px;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.bundled-badge {
+  font-size: 9px;
+  padding: 2px 5px;
+  background: rgba(34, 197, 94, 0.2);
+  color: #86efac;
+  border-radius: 4px;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.model-bundled {
+  border-left: 3px solid rgba(34, 197, 94, 0.6);
+}
+
+.model-size-tag {
+  font-size: 11px;
+  color: #71717a;
+  font-weight: 500;
+}
+
+.model-usage {
+  font-size: 11px;
+  color: #a1a1aa;
+  margin: 0;
+}
+
+.model-progress {
+  color: #60a5fa;
+}
+
+.model-download-btn {
+  padding: 6px;
+  color: #71717a;
+  transition: all 0.2s ease;
+}
+
+.model-download-btn:hover {
+  color: #60a5fa;
+  background: rgba(59, 130, 246, 0.1);
+}
+
+.model-ready-icon {
+  color: #22c55e;
+}
+
+.local-models-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 12px 16px;
+  background: rgba(139, 92, 246, 0.08);
+  border: 1px solid rgba(139, 92, 246, 0.15);
+  border-radius: 8px;
+  font-size: 12px;
+  color: #a78bfa;
 }
 </style>
