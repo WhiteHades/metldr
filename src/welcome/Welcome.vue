@@ -687,14 +687,6 @@ onMounted(async () => {
     stagger: 0.3
   });
   
-  gsap.to('.pulse-ring', {
-    scale: 1.5,
-    opacity: 0,
-    duration: 2,
-    ease: 'power2.out',
-    repeat: -1
-  });
-  
   // setup section observer for navigation
   setTimeout(() => {
     sectionObserver = setupSectionObserver();
@@ -1433,13 +1425,6 @@ onUnmounted(() => {
   font-weight: 600;
   margin-bottom: 36px;
   position: relative;
-}
-
-.pulse-ring {
-  position: absolute;
-  inset: 0;
-  border-radius: 100px;
-  border: 2px solid rgba(139, 92, 246, 0.4);
 }
 
 .title {
