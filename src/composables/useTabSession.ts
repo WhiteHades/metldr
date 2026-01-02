@@ -90,6 +90,24 @@ export function useTabSession() {
     
     const session = await cacheService.getTabSession(normalizedUrl)
     if (session) {
+      // Check if this is a stale PDF session with empty/broken content
+      const isPdf = url.toLowerCase().endsWith('.pdf') || url.includes('.pdf?')
+      if (isPdf && session.pageSummary?.bullets) {
+        const looksEmpty = session.pageSummary.bullets.some((b: string) => 
+          b.toLowerCase().includes('empty') || 
+          b.toLowerCase().includes('no content') ||
+          b.toLowerCase().includes('no main points')
+        )
+        if (looksEmpty) {
+          log.log('stale PDF session detected, clearing for re-fetch')
+          // Don't load the stale session - return false so auto-fetch triggers
+          chatMessages.value = []
+          pageSummary.value = null
+          summaryCollapsed.value = false
+          return false
+        }
+      }
+      
       chatMessages.value = Array.isArray(session.chatMessages) ? session.chatMessages : []
       pageSummary.value = session.pageSummary || null
       summaryCollapsed.value = session.summaryCollapsed || false
@@ -160,7 +178,9 @@ export function useTabSession() {
       previousUrl = newUrl
       const hasSession = await loadTabSession(newUrl, chatMessages, pageSummary, summaryCollapsed)
       
-      if (!hasSession && summaryMode.value === 'auto') {
+      // Always auto-fetch for PDFs, otherwise respect summaryMode
+      const isPdf = newUrl.toLowerCase().endsWith('.pdf') || newUrl.includes('.pdf?')
+      if (!hasSession && (summaryMode.value === 'auto' || isPdf)) {
         fetchSummary(false, 'auto')
       }
     }
@@ -176,8 +196,10 @@ export function useTabSession() {
     refreshTabUrl().then(() => {
       if (currentTabUrl.value) {
         previousUrl = currentTabUrl.value
+        const isPdf = currentTabUrl.value.toLowerCase().endsWith('.pdf') || currentTabUrl.value.includes('.pdf?')
         loadTabSession(currentTabUrl.value, chatMessages, pageSummary, summaryCollapsed).then(hasSession => {
-          if (!hasSession && aiReady.value && summaryMode.value === 'auto') {
+          // Always auto-fetch for PDFs, otherwise respect summaryMode
+          if (!hasSession && aiReady.value && (summaryMode.value === 'auto' || isPdf)) {
             fetchSummary(false, 'auto')
           }
         })

@@ -118,7 +118,7 @@ export function useChat() {
         }
       }
       
-      const MAX_CONTEXT = 50000
+      const MAX_CONTEXT = 15000 // ~4k tokens - safe for gemini nano
       if (contextText.length > MAX_CONTEXT) {
         const headLen = Math.floor(MAX_CONTEXT * 0.6)
         const tailLen = MAX_CONTEXT - headLen

@@ -3,6 +3,7 @@ import { sendToBackground, withTiming } from './useMessaging'
 import type { AppPageSummary, SummaryPromptData, AppSummaryResponse, ExtractedData } from '@/types'
 import { logger } from '@/services/LoggerService'
 import { cacheService } from '@/services/CacheService'
+import { pdfService } from '@/services/pdf/PdfService'
 
 const log = logger.createScoped('PageSummary')
 
@@ -47,8 +48,25 @@ const isViewingEmailThread = computed(() => {
     return false
   }
 })
+// local PDF needing file picker (no fullContent yet)
+const isLocalPdfPending = computed(() => {
+  if (!currentTabUrl.value) return false
+  const url = currentTabUrl.value
+  const isPdf = url.toLowerCase().endsWith('.pdf') || url.includes('.pdf?')
+  const isLocal = url.startsWith('file://')
+  return isPdf && isLocal && !pageSummary.value?.fullContent
+})
 
-const chatDisabled = computed(() => isEmailClient.value && !isViewingEmailThread.value)
+const chatDisabled = computed(() => {
+  if (isLocalPdfPending.value) return true
+  return isEmailClient.value && !isViewingEmailThread.value
+})
+
+const chatDisabledReason = computed(() => {
+  if (isLocalPdfPending.value) return 'local-pdf'
+  if (isEmailClient.value && !isViewingEmailThread.value) return 'email'
+  return undefined
+})
 
 function parseBullets(text: string): string[] {
   const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0)
@@ -61,6 +79,18 @@ function parseBullets(text: string): string[] {
     return lines.filter(l => l.length > 15).slice(0, 3)
   }
   return bullets
+}
+
+// index content to RAG directly from side panel context (embeddings require page context)
+async function indexToRag(text: string, metadata: { sourceId: string; sourceUrl: string; sourceType: 'article' | 'email' | 'pdf'; title?: string }) {
+  try {
+    // dynamic import to avoid loading RAG service until needed
+    const { ragService } = await import('@/services/rag/RagService')
+    await ragService.indexChunks(text, metadata)
+    log.log('RAG indexing complete', metadata.sourceId.slice(0, 50))
+  } catch (err) {
+    log.warn('RAG indexing failed', (err as Error).message)
+  }
 }
 
 async function trySidePanelSummarize(content: string, context: string): Promise<{ ok: boolean; summary?: string; timing?: number }> {
@@ -123,6 +153,25 @@ export function usePageSummary() {
         return
       }
       
+      // Early PDF stale cache invalidation - check before normal cache path
+      const isPdfUrl = tab.url.toLowerCase().endsWith('.pdf') || tab.url.includes('.pdf?')
+      if (isPdfUrl && !force) {
+        const cached = await cacheService.getPageSummary(tab.url) as AppPageSummary | null
+        if (cached) {
+          const looksEmpty = cached.bullets?.some(b => 
+            b.toLowerCase().includes('empty') || 
+            b.toLowerCase().includes('no content') ||
+            b.toLowerCase().includes('no main points')
+          )
+          if (looksEmpty) {
+            log.log('PDF cache looks stale (early check), clearing')
+            await cacheService.deletePageSummary(tab.url)
+            // Also clear the session so it doesn't reload stale data
+            pageSummary.value = null
+          }
+        }
+      }
+      
       if (!force) {
         const cached = await cacheService.getPageSummary(tab.url) as AppPageSummary | null
         if (cached) {
@@ -138,6 +187,65 @@ export function usePageSummary() {
       
       summaryLoading.value = true
       summaryError.value = null
+      
+      
+      // PDF Detection: If URL ends with .pdf, use PdfService directly
+      const isPdf = tab.url.toLowerCase().endsWith('.pdf') || tab.url.includes('.pdf?')
+      if (isPdf) {
+        try {
+          log.log('detected PDF, using PdfService directly')
+          
+          const startTime = performance.now()
+          const pdfSummary = await pdfService.summarize(tab.url)
+          const timing = Math.round(performance.now() - startTime)
+          
+          const urlParts = tab.url.split('/')
+          const pdfFilename = decodeURIComponent(urlParts[urlParts.length - 1] || 'PDF Document')
+          
+          const bullets = parseBullets(pdfSummary)
+          const summaryData: AppPageSummary = {
+            title: pdfFilename.replace('.pdf', ''),
+            author: undefined,
+            publishDate: undefined,
+            publication: undefined,
+            bullets: bullets.length ? bullets : [pdfSummary.slice(0, 200) + '...'],
+            readTime: undefined,
+            fullContent: pdfSummary,
+            wordCount: pdfSummary.split(/\\s+/).length,
+            timestamp: Date.now(),
+            timing: { llm: timing, total: timing, cached: false, model: 'pdf-recursive', provider: 'ollama' }
+          }
+          
+          pageSummary.value = summaryData
+          pageMetadata.value = { title: summaryData.title || 'PDF', url: tab.url }
+          summaryError.value = null
+          
+          await cacheService.setPageSummary(tab.url, summaryData, 3600)
+          log.log('PDF summary cached', { pages: 'unknown', timing })
+          
+          indexToRag(pdfSummary, { sourceId: tab.url, sourceUrl: tab.url, sourceType: 'pdf', title: summaryData.title })
+          
+          if (saveTabSession) await saveTabSession()
+          summaryLoading.value = false
+          return
+        } catch (err) {
+          const errMsg = (err as Error).message
+          log.error('PdfService failed', errMsg)
+          
+          // handle local PDF - show file picker button
+          if (errMsg === 'LOCAL_PDF_NEEDS_PICKER' || errMsg === 'LOCAL_PDF_NEEDS_PERMISSION' || errMsg === 'ENABLE_FILE_ACCESS') {
+            const urlParts = tab.url.split('/')
+            const filename = decodeURIComponent(urlParts[urlParts.length - 1] || 'PDF Document')
+            pageSummary.value = null // clear stale summary so error state shows
+            summaryError.value = 'LOCAL_PDF_CLICK_TO_OPEN'
+            pageMetadata.value = { title: filename.replace('.pdf', ''), url: tab.url }
+          } else {
+            summaryError.value = `PDF processing failed: ${errMsg}`
+          }
+          summaryLoading.value = false
+          return
+        }
+      }
       
       const extractResponse = await sendToBackground({
         type: 'EXTRACT_ONLY',
@@ -187,6 +295,8 @@ export function usePageSummary() {
         await cacheService.setPageSummary(tab.url, summaryData, 3600)
         log.log('cached summary for', tab.url.slice(0, 50))
         
+        indexToRag(fullContent, { sourceId: tab.url, sourceUrl: tab.url, sourceType: 'article', title: extracted.title })
+        
         if (saveTabSession) await saveTabSession()
         summaryLoading.value = false
         return
@@ -221,6 +331,10 @@ export function usePageSummary() {
       
       if (response.summary) {
         await cacheService.setPageSummary(tab.url, response.summary, 3600)
+        
+        if (response.summary.fullContent) {
+          indexToRag(response.summary.fullContent, { sourceId: tab.url, sourceUrl: tab.url, sourceType: 'article', title: response.summary.title })
+        }
       }
       
       if (saveTabSession) {
@@ -270,6 +384,50 @@ export function usePageSummary() {
     }
   }
 
+  // open file picker for local PDFs (requires user gesture/button click)
+  async function openLocalPdf(saveTabSession?: () => Promise<void>): Promise<void> {
+    try {
+      summaryLoading.value = true
+      summaryError.value = null
+      
+      const result = await pdfService.openAndSummarize()
+      
+      const bullets = parseBullets(result.summary)
+      const summaryData: AppPageSummary = {
+        title: result.filename.replace('.pdf', ''),
+        author: undefined,
+        publishDate: undefined,
+        publication: undefined,
+        bullets: bullets.length ? bullets : [result.summary.slice(0, 200) + '...'],
+        readTime: undefined,
+        fullContent: result.fullText, // store full text, not summary (for chat context)
+        wordCount: result.fullText.split(/\s+/).length,
+        timestamp: Date.now(),
+        timing: { llm: 0, total: 0, cached: false, model: 'pdf-recursive', provider: 'ollama' }
+      }
+      
+      pageSummary.value = summaryData
+      pageMetadata.value = { title: summaryData.title || 'PDF', url: currentTabUrl.value || '' }
+      
+      if (currentTabUrl.value) {
+        await cacheService.setPageSummary(currentTabUrl.value, summaryData, 3600)
+        // index full text to RAG for chat/search
+        indexToRag(result.fullText, { sourceId: currentTabUrl.value, sourceUrl: currentTabUrl.value, sourceType: 'pdf', title: summaryData.title })
+      }
+      
+      if (saveTabSession) await saveTabSession()
+    } catch (err) {
+      if ((err as Error).name === 'AbortError') {
+        summaryError.value = 'File selection cancelled'
+      } else {
+        log.error('openLocalPdf failed', (err as Error).message)
+        summaryError.value = `PDF processing failed: ${(err as Error).message}`
+      }
+    } finally {
+      summaryLoading.value = false
+    }
+  }
+
   return {
     pageSummary,
     pageMetadata,
@@ -283,12 +441,15 @@ export function usePageSummary() {
     isEmailClient,
     isViewingEmailThread,
     chatDisabled,
+    chatDisabledReason,
     
     fetchCurrentPageSummary,
     triggerManualSummary,
     acceptSummaryPrompt,
     declineSummaryPrompt,
     resetSummaryState,
-    refreshCurrentTabUrl
+    refreshCurrentTabUrl,
+    openLocalPdf
   }
 }
+
