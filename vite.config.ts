@@ -6,6 +6,39 @@ import { resolve } from 'node:path'
 
 const isContentBuild = process.env.BUILD_TARGET === 'content'
 
+
+const copyWasmAssets = () => ({
+  name: 'copy-wasm-assets',
+  closeBundle() {
+    if (!isContentBuild) {
+      const assetsDir = resolve('dist/assets')
+      if (!existsSync(assetsDir)) {
+         // mkdirSync(assetsDir, { recursive: true })
+      }
+
+      const filesToCopy = [
+        { src: 'node_modules/pdfjs-dist/build/pdf.worker.min.mjs', dest: 'dist/assets/pdf.worker.min.js' },
+        { src: 'node_modules/voy-search/voy_search_bg.wasm', dest: 'dist/assets/voy_search_bg.wasm' },
+      ]
+
+      filesToCopy.forEach(({ src, dest }) => {
+        try {
+          const sourcePath = resolve(src)
+          const destPath = resolve(dest)
+          if (existsSync(sourcePath)) {
+            copyFileSync(sourcePath, destPath)
+            console.log(`Copied ${src} to ${dest}`)
+          } else {
+             console.warn(`Source file not found: ${src}`)
+          }
+        } catch (e) {
+             console.error(`Failed to copy ${src}:`, e)
+        }
+      })
+    }
+  }
+})
+
 const copyInboxSDKPlugin = () => ({
   name: 'copy-inboxsdk-pageworld',
   closeBundle() {
@@ -30,7 +63,7 @@ console.warn = (...args: unknown[]) => {
 }
 
 export default defineConfig({
-  plugins: isContentBuild ? [] : [vue(), tailwindcss(), copyInboxSDKPlugin()],
+  plugins: isContentBuild ? [] : [vue(), tailwindcss(), copyInboxSDKPlugin(), copyWasmAssets()],
   resolve: {
     alias: {
       '@': resolve(__dirname, './src')

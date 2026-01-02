@@ -254,4 +254,5 @@ AGENTS.md
 PROJECT.md
 templates/
 dictionary-data/
+public/models/
 # End of https://www.toptal.com/developers/gitignore/api/node,vue,macos,windows,linux,visualstudiocode

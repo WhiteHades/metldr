@@ -4,7 +4,11 @@
   "name": "MeTLDR",
   "description": "Local and private AI assistant powered by Ollama with offline dictionary",
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; media-src 'self';"
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' http://localhost:11434 http://127.0.0.1:11434; style-src 'self' 'unsafe-inline'; font-src 'self';",
+    "sandbox": "sandbox allow-scripts allow-forms allow-popups allow-modals; script-src 'self' 'unsafe-inline' 'unsafe-eval'; object-src 'self'; connect-src 'self';"
+  },
+  "sandbox": {
+    "pages": ["sandbox.html"]
   },
   "action": {
     "default_title": "metldr - click to open"
@@ -24,7 +28,8 @@
   "content_scripts": [
     {
       "matches": [
-        "<all_urls>"
+        "<all_urls>",
+        "file://*/*"
       ],
       "js": [
         "content.js"
@@ -39,7 +44,8 @@
     "contextMenus",
     "scripting",
     "activeTab",
-    "tabs"
+    "tabs",
+    "offscreen"
   ],
   "host_permissions": [
     "http://localhost:11434/*",
@@ -53,7 +59,11 @@
         "pageWorld.js",
         "assets/*.js",
         "assets/*.css",
-        "welcome.html"
+        "assets/*.wasm",
+        "welcome.html",
+        "sandbox.html",
+        "gpu-bridge.js",
+        "models/*"
       ],
       "matches": [
         "<all_urls>"

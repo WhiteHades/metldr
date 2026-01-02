@@ -5,12 +5,17 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "npm run build:main && npm run build:content",
+    "build": "npm run build:main && npm run build:content && npm run build:sandbox && npm run build:offscreen && npm run build:models",
     "build:main": "vite build",
     "build:content": "cross-env BUILD_TARGET=content vite build",
+    "build:sandbox": "npx esbuild src/sandbox/gpu-bridge.ts --bundle --outfile=dist/gpu-bridge.js --format=esm --target=esnext --minify && cp public/sandbox.html dist/sandbox.html && mkdir -p dist/assets && cp node_modules/@huggingface/transformers/dist/ort-wasm-simd-threaded.jsep.* dist/assets/ && cp node_modules/voy-search/voy_search_bg.wasm dist/assets/",
+    "build:offscreen": "npx esbuild src/offscreen/offscreen.ts --bundle --outfile=dist/offscreen.js --format=esm --target=esnext --minify && cp public/offscreen.html dist/offscreen.html",
+    "build:models": "[ -d public/models ] && cp -r public/models dist/ || echo 'No models to copy (run npm run download:models first)'",
+    "download:models": "node scripts/download-models.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@huggingface/transformers": "^3.8.1",
     "@inboxsdk/core": "^2.2.11",
     "@mozilla/readability": "^0.6.0",
     "@radix-icons/vue": "^1.0.0",
@@ -23,12 +28,14 @@
     "lucide-vue-next": "^0.553.0",
     "marked": "^17.0.1",
     "motion-v": "^1.7.4",
+    "pdfjs-dist": "^5.4.449",
     "pinia": "^3.0.4",
     "radix-vue": "^1.9.17",
     "reka-ui": "^2.7.0",
     "streamdown-vue": "^1.0.29",
     "tailwind-merge": "^3.4.0",
     "tailwindcss": "^4.1.17",
+    "voy-search": "^0.6.3",
     "vue": "^3.5.22",
     "vue-stick-to-bottom": "^0.1.0"
   },
