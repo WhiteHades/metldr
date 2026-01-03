@@ -29,10 +29,17 @@ const emit = defineEmits<{
   'open-local-pdf': []
 }>()
 
+// configure marked for block parsing
+marked.setOptions({
+  breaks: true,
+  gfm: true
+})
+
 function renderMarkdown(text: string): string {
   if (!text) return ''
   const cleaned = stripThinking(text)
-  return marked.parseInline(cleaned) as string
+  // use full parse for block-level elements (code blocks, lists, etc)
+  return marked.parse(cleaned, { async: false }) as string
 }
 
 const hasContent = computed(() => props.pageSummary || props.summaryLoading || props.summaryError)
@@ -253,6 +260,59 @@ const hasContent = computed(() => props.pageSummary || props.summaryLoading || p
   color: oklch(from var(--p) l c h);
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+
+.markdown-content :deep(p) {
+  margin: 0 0 0.5em 0;
+}
+
+.markdown-content :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+.markdown-content :deep(ul),
+.markdown-content :deep(ol) {
+  margin: 0.4em 0;
+  padding-left: 1.2em;
+}
+
+.markdown-content :deep(li) {
+  margin: 0.2em 0;
+}
+
+.markdown-content :deep(h1),
+.markdown-content :deep(h2),
+.markdown-content :deep(h3) {
+  font-weight: 600;
+  margin: 0.6em 0 0.3em 0;
+  line-height: 1.3;
+}
+
+.markdown-content :deep(h1) { font-size: 1.15em; }
+.markdown-content :deep(h2) { font-size: 1.05em; }
+.markdown-content :deep(h3) { font-size: 1em; }
+
+.markdown-content :deep(pre) {
+  background: color-mix(in oklch, var(--color-background) 60%, var(--color-muted));
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  overflow-x: auto;
+  margin: 0.5em 0;
+  font-size: 0.85em;
+}
+
+.markdown-content :deep(:not(pre) > code) {
+  background: color-mix(in oklch, var(--color-muted) 50%, transparent);
+  padding: 0.15em 0.35em;
+  border-radius: 4px;
+}
+
+.markdown-content :deep(blockquote) {
+  border-left: 3px solid var(--color-primary);
+  margin: 0.5em 0;
+  padding-left: 0.8em;
+  color: var(--color-muted-foreground);
 }
 
 
