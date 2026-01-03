@@ -1,6 +1,12 @@
 import { gsap } from 'gsap'
-import { formatTime } from '../utils/text'
+import { marked } from 'marked'
+import { formatTime, stripThinking } from '../utils/text'
 import type { Theme, ThemeName, ThemeListener, Summary, IntentStyle } from '../types'
+
+marked.setOptions({
+  breaks: true,
+  gfm: true
+})
 
 export const THEME_COLORS: Record<ThemeName, Theme> = {
   light: {
@@ -131,6 +137,19 @@ const CONFIDENCE_COLORS: Record<string, string> = {
   low: '#ef4444'
 }
 
+const FALLBACK_BADGE_COLORS: IntentStyle[] = [
+  { bg: '#8b5cf6', text: '#ffffff' },
+  { bg: '#06b6d4', text: '#ffffff' },
+  { bg: '#f97316', text: '#ffffff' },
+  { bg: '#14b8a6', text: '#ffffff' },
+  { bg: '#ec4899', text: '#ffffff' },
+  { bg: '#84cc16', text: '#1a2e05' },
+  { bg: '#a855f7', text: '#ffffff' },
+  { bg: '#0ea5e9', text: '#ffffff' },
+  { bg: '#f43f5e', text: '#ffffff' },
+  { bg: '#22c55e', text: '#ffffff' },
+]
+
 export class UIService {
   static currentThemeName: ThemeName = 'catppuccin'
   static currentTheme: Theme = THEME_COLORS.catppuccin
@@ -207,6 +226,70 @@ export class UIService {
           box-shadow: 0 0 16px currentColor, 0 0 24px currentColor, 0 0 32px currentColor;
         }
       }
+
+      /* markdown styling for email summaries */
+      .metldr-markdown strong,
+      .metldr-markdown b {
+        font-weight: 600;
+      }
+      .metldr-markdown em,
+      .metldr-markdown i {
+        font-style: italic;
+      }
+      .metldr-markdown code {
+        font-family: ui-monospace, 'SF Mono', Menlo, Monaco, monospace;
+        font-size: 0.9em;
+        padding: 0.15em 0.35em;
+        border-radius: 4px;
+        background: rgba(128, 128, 128, 0.15);
+      }
+      .metldr-markdown a {
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+      .metldr-markdown p {
+        margin: 0 0 0.5em 0;
+      }
+      .metldr-markdown p:last-child {
+        margin-bottom: 0;
+      }
+      .metldr-markdown ul,
+      .metldr-markdown ol {
+        margin: 0.4em 0;
+        padding-left: 1.2em;
+      }
+      .metldr-markdown li {
+        margin: 0.2em 0;
+      }
+      .metldr-markdown h1,
+      .metldr-markdown h2,
+      .metldr-markdown h3 {
+        font-weight: 600;
+        margin: 0.6em 0 0.3em 0;
+        line-height: 1.3;
+      }
+      .metldr-markdown h1 { font-size: 1.2em; }
+      .metldr-markdown h2 { font-size: 1.1em; }
+      .metldr-markdown h3 { font-size: 1em; }
+      .metldr-markdown pre {
+        border-radius: 6px;
+        padding: 8px 10px;
+        overflow-x: auto;
+        margin: 0.5em 0;
+        font-size: 0.85em;
+        background: rgba(128, 128, 128, 0.1);
+        border: 1px solid rgba(128, 128, 128, 0.2);
+      }
+      .metldr-markdown pre code {
+        background: transparent;
+        padding: 0;
+      }
+      .metldr-markdown blockquote {
+        margin: 0.5em 0;
+        padding-left: 0.8em;
+        border-left: 3px solid currentColor;
+        opacity: 0.8;
+      }
     `
     document.head.appendChild(style)
   }
@@ -240,6 +323,12 @@ export class UIService {
     const div = document.createElement('div')
     div.textContent = text
     return div.innerHTML
+  }
+
+  static renderMarkdown(text: string): string {
+    if (!text) return ''
+    const cleaned = stripThinking(text)
+    return marked.parse(cleaned, { async: false }) as string
   }
 
   static formatTime(ms: number): string {
@@ -416,11 +505,21 @@ export class UIService {
   }
 
   static _buildSummaryHTML(theme: Theme, summaryText: string, actions: string[], dates: string[], confidence: string, confColor: string, modelName: string, summary: Summary, threadId: string, intent: string | null): string {
-    const intentKey = intent?.toLowerCase()
-    const intentStyle = (intentKey && INTENT_COLORS[intentKey]) ? INTENT_COLORS[intentKey] : { bg: theme.bgSecondary, text: theme.textMuted }
-    const intentBadge = intent ? `
+    let fallbackIdx = 0
+    const intentBadges = intent 
+      ? intent.split('/').map(tag => tag.trim()).filter(Boolean).map(tag => {
+          const tagKey = tag.toLowerCase()
+          let style = INTENT_COLORS[tagKey]
+          if (!style) {
+            style = FALLBACK_BADGE_COLORS[fallbackIdx % FALLBACK_BADGE_COLORS.length]
+            fallbackIdx++
+          }
+          return `<span title="email type: ${this.escapeHtml(tag)}" style="font-size: 10px; color: ${style.text}; background: ${style.bg}; padding: 2px 6px; border-radius: 4px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em; cursor: help;">${this.escapeHtml(tag)}</span>`
+        }).join('')
+      : ''
+    const intentBadge = intentBadges ? `
       <span style="color: ${theme.borderSubtle}; font-size: 11px; opacity: 0.5;">•</span>
-      <span title="email type: ${this.escapeHtml(intent)}" style="font-size: 10px; color: ${intentStyle.text}; background: ${intentStyle.bg}; padding: 2px 6px; border-radius: 4px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em; cursor: help;">${this.escapeHtml(intent)}</span>
+      <div style="display: flex; gap: 4px; flex-wrap: wrap;">${intentBadges}</div>
     ` : ''
     
     return `
@@ -437,7 +536,7 @@ export class UIService {
         </div>
         <button class="metldr-regenerate-btn" data-thread-id="${threadId}" title="regenerate summary" style="position: absolute; top: -14px; right: 16px; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; background: ${theme.bgSecondary}; border: 0.5px solid ${theme.borderSubtle}; border-radius: 50%; color: ${theme.primary}; font-size: 15px; font-weight: 600; cursor: pointer; transition: all 0.2s cubic-bezier(0.22, 1, 0.36, 1); box-shadow: 0 4px 12px ${theme.shadow}, inset 0 1px 0 ${theme.borderSubtle}; z-index: 1; padding: 0; -webkit-font-smoothing: antialiased;">↻</button>
         <div style="width: 100%; box-sizing: border-box; background: ${theme.bg}; border: 0.5px solid ${theme.border}; border-radius: 16px; padding: 16px; padding-top: 20px; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', system-ui, sans-serif; box-shadow: 0 8px 32px ${theme.shadow}, inset 0 1px 0 ${theme.borderSubtle}; position: relative; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; transition: all 0.3s cubic-bezier(0.22, 1, 0.36, 1);">
-          ${summaryText ? `<div class="metldr-summary-item" style="background: ${theme.bgSecondary}; border-radius: 8px; padding: 10px; margin-bottom: ${actions.length > 0 || dates.length > 0 ? '6px' : '0'}; font-size: 13px; line-height: 1.5; color: ${theme.text}; font-weight: 400; -webkit-font-smoothing: antialiased;">${this.escapeHtml(summaryText)}</div>` : ''}
+          ${summaryText ? `<div class="metldr-summary-item metldr-markdown" style="background: ${theme.bgSecondary}; border-radius: 8px; padding: 10px; margin-bottom: ${actions.length > 0 || dates.length > 0 ? '6px' : '0'}; font-size: 13px; line-height: 1.5; color: ${theme.text}; font-weight: 400; -webkit-font-smoothing: antialiased;">${this.renderMarkdown(summaryText)}</div>` : ''}
           ${actions.length > 0 ? `
             <div class="metldr-summary-item" style="margin-bottom: ${dates.length > 0 ? '6px' : '0'}; padding: 10px; background: ${theme.bgSecondary}; border-radius: 8px;">
               <div style="font-size: 10px; color: ${theme.secondary}; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; margin-bottom: 8px;">action items</div>
