@@ -9,6 +9,7 @@ import type { AppChatMessage } from '@/types'
 interface Props {
   chatMessages: AppChatMessage[]
   chatLoading: boolean
+  chatIndexing?: boolean
   chatDisabled: boolean
   disabledReason?: string // e.g. 'email' or 'local-pdf'
   isViewingEmailThread: boolean
@@ -33,10 +34,13 @@ function focusInput() {
   textareaRef.value?.focus()
 }
 
-function scrollToBottom() {
+function scrollToBottom(smooth = false) {
   nextTick(() => {
     if (viewportRef.value) {
-      viewportRef.value.scrollTop = viewportRef.value.scrollHeight
+      viewportRef.value.scrollTo({
+        top: viewportRef.value.scrollHeight,
+        behavior: smooth ? 'smooth' : 'instant'
+      })
     }
   })
 }
@@ -48,18 +52,25 @@ function autoResize() {
   }
 }
 
-watch(() => props.chatMessages.length, scrollToBottom)
-watch(() => props.chatLoading, scrollToBottom)
+watch(() => props.chatMessages.length, () => scrollToBottom(true))
+watch(() => props.chatLoading, () => scrollToBottom())
 watch(chatInput, autoResize)
 
 onMounted(() => {
   autoResize()
 })
 
+// configure marked for better output
+marked.setOptions({
+  breaks: true,
+  gfm: true
+})
+
 function renderMarkdown(text: string): string {
   if (!text) return ''
   const cleaned = stripThinking(text)
-  return marked.parseInline(cleaned) as string
+  // use full parse for block-level elements (code blocks, lists, etc)
+  return marked.parse(cleaned, { async: false }) as string
 }
 
 function handleSend() {
@@ -152,7 +163,10 @@ defineExpose({
       >
         <div class="space-y-3">
           <div v-if="chatDisabled" class="flex flex-col items-center justify-center py-8 px-4 text-center">
-            <template v-if="disabledReason === 'local-pdf'">
+            <template v-if="disabledReason === 'system'">
+              <p class="text-xs text-muted-foreground">chat unavailable on system pages</p>
+            </template>
+            <template v-else-if="disabledReason === 'local-pdf'">
               <p class="text-xs text-muted-foreground">use the file picker to open the PDF first</p>
               <p class="text-xs text-muted-foreground/60 mt-1">chrome doesn't allow direct access to local files</p>
             </template>
@@ -169,7 +183,10 @@ defineExpose({
             </div>
             
             <div v-else class="flex flex-col items-start gap-1 message-appear">
-              <div class="assistant-message">
+              <div 
+                class="assistant-message"
+                :class="{ streaming: chatLoading && i === chatMessages.length - 1 && !msg.timing }"
+              >
                 <div class="chat-markdown" v-html="renderMarkdown(msg.content)"></div>
               </div>
               <div v-if="msg.timing" class="timing-badge">
@@ -179,8 +196,18 @@ defineExpose({
             </div>
           </template>
           
-          <!-- typing indicator -->
-          <div v-if="chatLoading" class="flex items-start gap-2">
+          <!-- indexing indicator -->
+          <div v-if="chatIndexing" class="flex items-start gap-2">
+            <div class="indexing-indicator">
+              <Loader2 :size="14" class="animate-spin text-primary" />
+              <span class="text-xs text-muted-foreground">analyzing document...</span>
+            </div>
+          </div>
+          
+          <div 
+            v-if="chatLoading && !chatIndexing && !(chatMessages.length > 0 && chatMessages[chatMessages.length - 1]?.role === 'assistant' && !chatMessages[chatMessages.length - 1]?.timing)" 
+            class="flex items-start gap-2"
+          >
             <div class="typing-indicator">
               <span class="dot"></span>
               <span class="dot"></span>
@@ -330,13 +357,65 @@ defineExpose({
 }
 
 .chat-markdown :deep(p) {
-  margin: 0;
+  margin: 0 0 0.5em 0;
+}
+
+.chat-markdown :deep(p:last-child) {
+  margin-bottom: 0;
 }
 
 .chat-markdown :deep(ul),
 .chat-markdown :deep(ol) {
   margin: 0.4em 0;
   padding-left: 1.2em;
+}
+
+.chat-markdown :deep(li) {
+  margin: 0.2em 0;
+}
+
+.chat-markdown :deep(h1),
+.chat-markdown :deep(h2),
+.chat-markdown :deep(h3) {
+  font-weight: 600;
+  margin: 0.6em 0 0.3em 0;
+  line-height: 1.3;
+}
+
+.chat-markdown :deep(h1) { font-size: 1.2em; }
+.chat-markdown :deep(h2) { font-size: 1.1em; }
+.chat-markdown :deep(h3) { font-size: 1em; }
+
+.chat-markdown :deep(pre) {
+  background: color-mix(in oklch, var(--color-background) 60%, var(--color-muted));
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  overflow-x: auto;
+  margin: 0.5em 0;
+  font-size: 0.85em;
+}
+
+.chat-markdown :deep(code) {
+  font-family: ui-monospace, 'SF Mono', Menlo, Monaco, monospace;
+  font-size: 0.9em;
+}
+
+.chat-markdown :deep(:not(pre) > code) {
+  background: color-mix(in oklch, var(--color-muted) 50%, transparent);
+  padding: 0.15em 0.35em;
+  border-radius: 4px;
+}
+
+.chat-markdown :deep(blockquote) {
+  border-left: 3px solid var(--color-primary);
+  margin: 0.5em 0;
+  padding-left: 0.8em;
+  color: var(--color-muted-foreground);
+}
+
+.chat-markdown :deep(strong) {
+  font-weight: 600;
 }
 
 .user-message {
@@ -359,6 +438,21 @@ defineExpose({
   font-size: var(--font-text-body);
   line-height: 1.6;
   color: var(--color-foreground);
+}
+
+/* streaming animation - blinking cursor */
+.assistant-message.streaming .chat-markdown::after {
+  content: '▋';
+  display: inline;
+  animation: cursor-blink 0.7s steps(1) infinite;
+  color: var(--color-primary);
+  font-weight: 300;
+  margin-left: 1px;
+}
+
+@keyframes cursor-blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
 }
 
 .timing-badge {
@@ -434,5 +528,15 @@ defineExpose({
 @keyframes fadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
+}
+
+.indexing-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: color-mix(in oklch, var(--color-primary) 8%, transparent);
+  border: 1px solid color-mix(in oklch, var(--color-primary) 20%, transparent);
+  border-radius: 14px 14px 14px 4px;
 }
 </style>
