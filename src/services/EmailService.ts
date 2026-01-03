@@ -576,58 +576,117 @@ export class EmailService {
     metadata: EmailMetadata | null, 
     model: string
   ): Promise<EmailSummary> {
+    // comprehensive intent categories organized by domain
     const intentCategories = [
-      'Invoice', 'Receipt', 'Payment', 'Refund', 'Subscription',
-      'Meeting Request', 'Calendar Invite', 'Reminder', 'Reschedule', 'Cancellation',
-      'Flight Booking', 'Hotel Reservation', 'Travel Itinerary', 'Ticket', 'Reservation',
-      'Order Confirmation', 'Shipping Update', 'Delivery Notice', 'Tracking', 'Return/Exchange',
-      'Account Alert', 'Security Alert', 'Password Reset', 'Verification', 'Login Notification',
-      'Task Assignment', 'Project Update', 'Status Report', 'Feedback Request', 'Approval Request',
-      'Personal', 'Introduction', 'Follow-up', 'Thank You', 'Announcement',
-      'Newsletter', 'Marketing', 'Promotion', 'Survey', 'Invitation',
+      // financial
+      'Invoice', 'Receipt', 'Payment', 'Refund', 'Subscription', 'Bill', 'Expense Report',
+      'Bank Statement', 'Tax Document', 'Financial Report', 'Investment Update', 'Loan', 'Insurance',
+      
+      // calendar & meetings
+      'Meeting Request', 'Meeting Invite', 'Meeting Notes', 'Meeting Reschedule', 'Meeting Cancellation',
+      'Calendar Invite', 'Reminder', 'RSVP Request', 'Availability Request',
+      
+      // travel & hospitality
+      'Flight Booking', 'Hotel Reservation', 'Travel Itinerary', 'Boarding Pass', 'Visa/Immigration',
+      'Car Rental', 'Restaurant Reservation', 'Event Ticket', 'Transportation',
+      
+      // e-commerce & retail
+      'Order Confirmation', 'Shipping Update', 'Delivery Notice', 'Package Tracking',
+      'Return Request', 'Refund Processed', 'Wishlist', 'Cart Reminder', 'Price Drop Alert',
+      
+      // security & account
+      'Security Alert', 'Password Reset', 'Two-Factor Auth', 'Login Notification', 'Account Locked',
+      'Verification Code', 'Privacy Update', 'Terms Update', 'Data Breach Notice',
+      
+      // work & office
+      'Task Assignment', 'Project Update', 'Status Report', 'Deadline Reminder', 'Performance Review',
+      'Approval Request', 'Document Review', 'Signature Request', 'Timesheet', 'Leave Request',
+      'Expense Approval', 'Budget Update', 'Team Announcement', 'Company News', 'Policy Update',
+      
+      // education & academic
+      'Course Enrollment', 'Assignment', 'Grade Report', 'Exam Schedule', 'Tuition',
+      'Scholarship', 'Academic Deadline', 'Faculty Announcement', 'Campus Alert',
+      'Parent-Teacher', 'Transcript Request', 'Graduation', 'Alumni',
+      
+      // government & civic
+      'Tax Notice', 'Government Form', 'License Renewal', 'Voter Registration', 'Jury Duty',
+      'Permit Application', 'Public Service', 'Census', 'Municipal Notice', 'Court Notice',
+      
+      // healthcare
+      'Appointment Reminder', 'Lab Results', 'Prescription', 'Insurance Claim', 'Medical Bill',
+      'Vaccination', 'Health Alert', 'Wellness', 'Provider Message',
+      
+      // personal & social
+      'Personal Message', 'Introduction', 'Follow-up', 'Thank You', 'Congratulations',
+      'Birthday', 'Anniversary', 'Condolences', 'Invitation', 'RSVP',
+      
+      // social media & networking
+      'Social Notification', 'Connection Request', 'Mention', 'Comment', 'Like',
+      'Message Request', 'Profile Update', 'Group Invite', 'Event Invite',
+      
+      // marketing & promotional
+      'Newsletter', 'Marketing', 'Promotion', 'Sale Alert', 'Coupon', 'Loyalty Reward',
+      'Survey', 'Feedback Request', 'Product Launch', 'Webinar Invite',
+      
+      // support & service
       'Support Ticket', 'Bug Report', 'Feature Request', 'Complaint', 'Resolution',
-      'Contract', 'Legal Notice', 'Policy Update', 'HR Notice', 'Compliance',
-      'Bank Statement', 'Tax Document', 'Financial Report', 'Investment Update',
-      'Social Notification', 'Connection Request', 'Mention', 'Comment',
-      'Satire/Joke', 'Spam', 'Phishing Attempt', 'Auto-Reply', 'Out of Office',
-      'Forwarded', 'Thread Reply', 'Digest', 'Notification', 'Other'
+      'Service Update', 'Outage Notice', 'Maintenance', 'FAQ Update',
+      
+      // legal & compliance
+      'Contract', 'Legal Notice', 'NDA', 'Compliance Notice', 'Audit Request',
+      'Dispute', 'Settlement', 'Regulatory Update',
+      
+      // HR & recruiting
+      'Job Application', 'Interview Invite', 'Offer Letter', 'Onboarding', 'Benefits',
+      'Payroll', 'HR Notice', 'Training', 'Certification',
+      
+      // meta & system
+      'Auto-Reply', 'Out of Office', 'Bounce Notice', 'Unsubscribe Confirm',
+      'Forwarded', 'Thread Reply', 'Digest', 'Notification',
+      'Satire/Joke', 'Spam', 'Phishing Attempt', 'Scam', 'Other'
     ]
 
     const schema = {
       type: 'object',
-      required: ['intent', 'reasoning', 'summary', 'action_items'],
+      required: ['tags', 'reasoning', 'summary', 'action_items'],
       properties: {
-        intent: {
+        tags: {
+          type: 'array',
+          items: { type: 'string' },
+          minItems: 1,
+          maxItems: 3,
+          description: `1-3 most relevant tags from: ${intentCategories.slice(0, 50).join(', ')}... and more. Primary tag first, then secondary if applicable. Be specific.`
+        },
+        domain: {
           type: 'string',
-          description: `Primary category. Choose the MOST specific match from: ${intentCategories.join(', ')}. If none fit exactly, use "Other".`
+          enum: ['financial', 'work', 'education', 'government', 'healthcare', 'travel', 'shopping', 'social', 'marketing', 'security', 'legal', 'personal', 'system'],
+          description: 'High-level domain/category for grouping'
         },
         reasoning: {
           type: 'string',
-          description: 'Brief analysis (1-2 sentences): tone (formal/casual/urgent/satirical), content type, any red flags (phishing indicators, spam patterns), and why you chose this intent.'
+          description: 'Brief analysis (1-2 sentences): tone, content type, red flags if any, why you chose these tags.'
         },
         summary: {
           type: 'string',
-          description: 'Clear, direct summary of core message in 1-2 sentences. Strip jargon, marketing fluff, legal boilerplate. For satirical/joke emails, describe the actual topic briefly.'
+          description: 'Clear, direct summary in 1-2 sentences. Strip jargon and fluff.'
         },
         action_items: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Concrete actionable tasks only. Start each with a verb (Approve, Review, Pay, Confirm, Download, Reply, Schedule). Exclude vague items. Empty array if no actions needed.'
+          description: 'Concrete actionable tasks starting with a verb. Empty array if no actions needed.'
         },
         urgency: {
           type: 'string',
           enum: ['critical', 'high', 'normal', 'low', 'none'],
-          description: 'How time-sensitive is this email? critical=immediate action, high=today, normal=this week, low=whenever, none=informational only'
+          description: 'Time-sensitivity: critical=immediate, high=today, normal=this week, low=whenever, none=informational'
         },
         key_details: {
           type: 'object',
           properties: {
-            booking_reference: { type: 'string', description: 'Order ID, confirmation number, PNR, tracking number' },
-            amount: { type: 'string', description: 'Total amount with currency if financial' },
+            booking_reference: { type: 'string', description: 'Order/confirmation/tracking number' },
+            amount: { type: 'string', description: 'Total amount with currency' },
             main_date: { type: 'string', description: 'Most important date/deadline' },
-            dates: { type: 'array', items: { type: 'string' }, description: 'All relevant dates' },
-            financials: { type: 'array', items: { type: 'string' }, description: 'All amounts mentioned' },
-            sender_org: { type: 'string', description: 'Company/organization name if identifiable' }
+            sender_org: { type: 'string', description: 'Company/organization name' }
           }
         }
       }
@@ -712,7 +771,9 @@ Respond with JSON matching the schema. Be precise with intent classification.`
           amount: amount || null,
           sender_org: parsed.key_details?.sender_org || null
         },
-        intent: parsed.intent || null,
+        tags: parsed.tags || (parsed.intent ? [parsed.intent] : []),
+        domain: parsed.domain || null,
+        intent: parsed.tags?.[0] || parsed.intent || null,
         reasoning: parsed.reasoning || null,
         urgency: parsed.urgency || 'normal'
       }
