@@ -175,9 +175,6 @@ export function useTabSession() {
       pageSummary.value = null
       summaryCollapsed.value = false
       
-      // clear session RAG for new document
-      import('@/services/rag/SessionRagService').then(({ sessionRag }) => sessionRag.clear()).catch(() => {})
-      
       previousUrl = newUrl
       const hasSession = await loadTabSession(newUrl, chatMessages, pageSummary, summaryCollapsed)
       
