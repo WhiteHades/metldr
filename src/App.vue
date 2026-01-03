@@ -72,6 +72,7 @@ const {
   chatMessages,
   chatInput,
   chatLoading,
+  chatIndexing,
   sendChatMessage: baseSendChatMessage,
   clearChat: baseClearChat,
   resetChatState
@@ -373,6 +374,7 @@ onUnmounted(() => {
             v-model:chat-input="chatInput"
             :chat-messages="chatMessages"
             :chat-loading="chatLoading"
+            :chat-indexing="chatIndexing"
             :chat-disabled="chatDisabled"
             :disabled-reason="chatDisabledReason"
             :is-viewing-email-thread="isViewingEmailThread"
