@@ -10,8 +10,9 @@ interface Props {
   chatMessages: AppChatMessage[]
   chatLoading: boolean
   chatIndexing?: boolean
+  summaryLoading?: boolean
   chatDisabled: boolean
-  disabledReason?: string // e.g. 'email' or 'local-pdf'
+  disabledReason?: string
   isViewingEmailThread: boolean
 }
 
@@ -29,6 +30,14 @@ const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const isEmpty = computed(() => !chatInput.value.trim())
 const isRunning = computed(() => props.chatLoading)
 const isThreadEmpty = computed(() => props.chatMessages.length === 0 && !props.chatLoading)
+
+const isIndexingOrProcessing = computed(() => props.chatIndexing || props.summaryLoading)
+const inputDisabled = computed(() => props.chatDisabled || isIndexingOrProcessing.value)
+const inputPlaceholder = computed(() => {
+  if (props.summaryLoading) return 'analyzing page, please wait...'
+  if (props.chatIndexing) return 'indexing document, please wait...'
+  return 'ask anything about this page...'
+})
 
 function focusInput() {
   textareaRef.value?.focus()
@@ -74,7 +83,7 @@ function renderMarkdown(text: string): string {
 }
 
 function handleSend() {
-  if (!isEmpty.value && !isRunning.value) {
+  if (!isEmpty.value && !isRunning.value && !isIndexingOrProcessing.value) {
     emit('send')
     nextTick(autoResize)
   }
@@ -218,16 +227,17 @@ defineExpose({
       </div>
 
       <div class="shrink-0 p-3 pt-2">
-        <div class="composer">
+        <div class="composer" :class="{ 'composer-disabled': isIndexingOrProcessing }">
           <div class="composer-bar">
             <textarea
               ref="textareaRef"
               v-model="chatInput"
               @keydown="handleKeydown"
-              placeholder="ask anything about this page..."
-              :disabled="chatDisabled"
+              :placeholder="inputPlaceholder"
+              :disabled="inputDisabled"
               rows="1"
               class="composer-input"
+              :class="{ 'cursor-not-allowed opacity-50': isIndexingOrProcessing }"
             />
             
             <div class="flex items-center gap-1 shrink-0">
@@ -255,11 +265,12 @@ defineExpose({
                 <button
                   v-else
                   @click="handleSend"
-                  :disabled="isEmpty"
+                  :disabled="isEmpty || isIndexingOrProcessing"
                   class="absolute inset-0 rounded-md flex items-center justify-center transition-all duration-200"
-                  :class="isEmpty ? 'bg-muted text-muted-foreground' : 'bg-foreground text-background hover:bg-foreground/90'"
+                  :class="(isEmpty || isIndexingOrProcessing) ? 'bg-muted text-muted-foreground cursor-not-allowed' : 'bg-foreground text-background hover:bg-foreground/90'"
                 >
-                  <ArrowUp :size="14" :stroke-width="2.5" />
+                  <Loader2 v-if="isIndexingOrProcessing" :size="14" class="animate-spin" />
+                  <ArrowUp v-else :size="14" :stroke-width="2.5" />
                 </button>
               </div>
             </div>
@@ -285,6 +296,11 @@ defineExpose({
 .composer-bar:focus-within {
   background: color-mix(in oklch, var(--color-card) 80%, transparent);
   border-color: color-mix(in oklch, var(--color-border) 60%, transparent);
+}
+
+.composer-disabled .composer-bar {
+  background: color-mix(in oklch, var(--color-muted) 40%, transparent);
+  border-color: color-mix(in oklch, var(--color-border) 30%, transparent);
 }
 
 .composer-input {
