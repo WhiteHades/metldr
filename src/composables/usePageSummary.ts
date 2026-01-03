@@ -57,12 +57,25 @@ const isLocalPdfPending = computed(() => {
   return isPdf && isLocal && !pageSummary.value?.fullContent
 })
 
+// system urls where AI features should be disabled
+const isSystemUrl = computed(() => {
+  const url = currentTabUrl.value?.toLowerCase() || ''
+  return url.startsWith('chrome://') || 
+         url.startsWith('chrome-extension://') ||
+         url.startsWith('edge://') ||
+         url.startsWith('about:') ||
+         url.startsWith('devtools://') ||
+         url === ''
+})
+
 const chatDisabled = computed(() => {
+  if (isSystemUrl.value) return true
   if (isLocalPdfPending.value) return true
   return isEmailClient.value && !isViewingEmailThread.value
 })
 
 const chatDisabledReason = computed(() => {
+  if (isSystemUrl.value) return 'system'
   if (isLocalPdfPending.value) return 'local-pdf'
   if (isEmailClient.value && !isViewingEmailThread.value) return 'email'
   return undefined
