@@ -1,6 +1,3 @@
-// core domain types for metldr
-
-// theme
 export interface Theme {
   primary: string
   secondary: string
@@ -26,7 +23,6 @@ export interface IntentStyle {
   text: string
 }
 
-// email
 export interface AmountFact {
   label: string
   value: string
@@ -106,18 +102,18 @@ export interface EmailSummary {
     sender_org: string | null
   }
   intent: string | null
+  tags?: string[]
+  domain?: string | null
   reasoning: string | null
   urgency: string
   time_ms?: number
   cached?: boolean
   model?: string
-  // local model enrichments
-  tags?: { label: string; score: number }[]
+  ner_tags?: { label: string; score: number }[]
   entities?: { word: string; entity: string; score: number }[]
   confidence?: 'high' | 'medium' | 'low'
 }
 
-// unified per-email session data (summary, replies, chat in one store)
 export interface EmailSession {
   emailId: string
   summary: EmailSummary | null
@@ -132,6 +128,8 @@ export interface ParsedLLMSummary {
   summary?: string
   action_items?: string[]
   intent?: string
+  tags?: string[]
+  domain?: string
   reasoning?: string
   urgency?: string
   key_details?: {
