@@ -4,7 +4,7 @@
   "name": "MeTLDR",
   "description": "Local and private AI assistant powered by Ollama with offline dictionary",
   "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' http://localhost:11434 http://127.0.0.1:11434; style-src 'self' 'unsafe-inline'; font-src 'self';",
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' http://localhost:11434 http://127.0.0.1:11434 https://media.githubusercontent.com https://raw.githubusercontent.com; style-src 'self' 'unsafe-inline'; font-src 'self';",
     "sandbox": "sandbox allow-scripts allow-forms allow-popups allow-modals; script-src 'self' 'unsafe-inline' 'unsafe-eval'; object-src 'self'; connect-src 'self';"
   },
   "sandbox": {

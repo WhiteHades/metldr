@@ -1,12 +1,7 @@
 // LocalModelProvider - service worker facade for GPU sandbox
 // communicates with sandbox iframe via postMessage
 
-import type { 
-  LocalTask, 
-  ClassifyResponse,
-  NERResponse,
-  GenerateResponse
-} from '../../types/local-models'
+import type { LocalTask } from '../../types/local-models'
 
 // LRU cache for results
 class LRUCache<K, V> {
@@ -52,8 +47,6 @@ class LocalModelProvider {
   
   // caches
   private embedCache = new LRUCache<string, number[]>(200)
-  private classifyCache = new LRUCache<string, ClassifyResponse>(100)
-  private nerCache = new LRUCache<string, NERResponse>(100)
 
 
   private constructor() {
@@ -274,38 +267,6 @@ class LocalModelProvider {
     return res.data.embeddings
   }
 
-  async classify(text: string, labels: string[], multiLabel = false): Promise<ClassifyResponse> {
-    const cacheKey = `${text.slice(0, 100)}:${labels.join(',')}`
-    const cached = this.classifyCache.get(cacheKey)
-    if (cached) return cached
-    
-    const res = await this.send({ type: 'CLASSIFY', payload: { text, labels, multiLabel } })
-    if (!res.ok) throw new Error(res.error)
-    
-    this.classifyCache.set(cacheKey, res.data)
-    return res.data
-  }
-
-  async extractEntities(text: string): Promise<NERResponse> {
-    const cacheKey = text.slice(0, 200)
-    const cached = this.nerCache.get(cacheKey)
-    if (cached) return cached
-    
-    const res = await this.send({ type: 'NER', payload: { text } })
-    if (!res.ok) throw new Error(res.error)
-    
-    this.nerCache.set(cacheKey, res.data)
-    return res.data
-  }
-
-
-
-  async generate(prompt: string, maxTokens = 128): Promise<string> {
-    const res = await this.send({ type: 'GENERATE', payload: { prompt, maxTokens } })
-    if (!res.ok) throw new Error(res.error)
-    return res.data.text
-  }
-
   async tokenize(texts: string[]): Promise<number[]> {
     const res = await this.send({ type: 'TOKENIZE', texts })
     if (!res.ok) throw new Error(res.error)
@@ -329,9 +290,6 @@ class LocalModelProvider {
 
   clearCaches(): void {
     this.embedCache.clear()
-    this.classifyCache.clear()
-    this.nerCache.clear()
-
   }
 
   // VOY vector store operations

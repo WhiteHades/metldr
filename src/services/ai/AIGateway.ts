@@ -9,7 +9,7 @@ import type {
   AITranslateRequest, AITranslateResponse, AIDetectLanguageRequest, AIDetectLanguageResponse,
   AIWriteRequest, AIWriteResponse, AIRewriteRequest, AIRewriteResponse
 } from '../../types/chrome-ai'
-import type { ClassifyResponse, NERResponse, LocalTask } from '../../types/local-models'
+import type { LocalTask } from '../../types/local-models'
 
 const log = logger.createScoped('AIGateway')
 
@@ -177,16 +177,6 @@ class AIGatewayService {
   // =========================================================================
   // LOCAL MODEL ANALYSIS (always uses transformers.js)
   // =========================================================================
-
-  async classify(text: string, labels: string[], multiLabel = false): Promise<ClassifyResponse> {
-    return localModels.classify(text, labels, multiLabel)
-  }
-
-  async extractEntities(text: string): Promise<NERResponse> {
-    return localModels.extractEntities(text)
-  }
-
-
 
   async embed(text: string, isQuery = false): Promise<Float32Array> {
     const embedding = await localModels.embed(text, isQuery)

@@ -39,6 +39,83 @@ export class EmailExtractor {
     return this.lastExtractedContent
   }
 
+  // extract content from thread (without UI) - used for chat and returning to threads
+  private async extractThreadContent(threadView: ThreadView, threadId: string): Promise<void> {
+    const subject = threadView.getSubject()
+    const messages = threadView.getMessageViewsAll()
+    if (!messages || messages.length === 0) return
+
+    let fullText = ''
+    const participants = new Set<string>()
+    let latestDate: string | null = null
+    let fromName: string | null = null
+    let fromEmail: string | null = null
+    const toRecipients = new Set<string>()
+
+    for (const msgView of messages) {
+      try {
+        const sender = msgView.getSender()
+        const bodyElement = msgView.getBodyElement()
+        const body = bodyElement ? bodyElement.innerText : ''
+
+        if (sender) {
+          if (!fromName && sender.name) fromName = sender.name
+          if (!fromEmail && sender.emailAddress) fromEmail = sender.emailAddress
+          const senderStr = sender.name ? `${sender.name} <${sender.emailAddress}>` : sender.emailAddress || ''
+          if (senderStr) participants.add(senderStr)
+        }
+
+        try {
+          const recipientContacts = await msgView.getRecipientsFull()
+          if (Array.isArray(recipientContacts)) {
+            recipientContacts.forEach((c) => {
+              const email = c.emailAddress || c.address || c.email
+              if (email) toRecipients.add(email)
+            })
+          }
+        } catch {
+          const emailAddrs = msgView.getRecipientEmailAddresses()
+          emailAddrs.forEach(email => toRecipients.add(email))
+        }
+
+        if (body && body.length > 20) {
+          const senderName = sender?.name || sender?.emailAddress || 'Unknown'
+          fullText += `From: ${senderName}\n${body}\n\n`
+        }
+
+        const dateStr = msgView.getDateString?.()
+        if (dateStr) latestDate = dateStr
+      } catch { /* ignore */ }
+    }
+
+    fullText = fullText.split('\n').filter(line => line.trim().length > 0).join('\n')
+    if (!fullText || fullText.length < 50) return
+
+    // simplified metadata for chat context
+    const metadata: EmailMetadata = {
+      subject,
+      participants: Array.from(participants),
+      emailCount: messages.length,
+      date: latestDate,
+      timestamp: new Date().toISOString(),
+      sender: fromName || null,
+      senderEmail: fromEmail || null,
+      from: (fromName || fromEmail) ? [fromName, fromEmail ? `<${fromEmail}>` : null].filter(Boolean).join(' ') : null,
+      replyTo: null,
+      to: toRecipients.size ? Array.from(toRecipients).join(', ') : null,
+      cc: null,
+      bcc: null,
+      toList: Array.from(toRecipients),
+      ccList: [],
+      bccList: [],
+      mailedBy: null,
+      signedBy: null
+    }
+
+    this.lastExtractedContent = { threadId, content: fullText, metadata }
+    console.log('metldr: extracted email content for chat', { threadId: threadId.slice(0, 20), len: fullText.length })
+  }
+
   async getCachedSummary(emailId: string): Promise<unknown> {
     if (!chrome?.runtime?.sendMessage) return null
     try {
@@ -194,6 +271,8 @@ export class EmailExtractor {
       const existingThreadId = existingSummary.getAttribute('data-metldr-thread')
       if (existingThreadId === threadId) {
         console.log('metldr: summary already exists for this thread')
+        // still extract content for chat context
+        await this.extractThreadContent(threadView, threadId)
         return
       }
       existingSummary.remove()

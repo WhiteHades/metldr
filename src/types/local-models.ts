@@ -1,51 +1,27 @@
 // local model types for transformers.js integration
-// 3 core models bundled: embed, classify, ner
+// embedding model bundled only
 
-export type LocalTask = 'embed' | 'classify' | 'ner' | 'generate'
+export type LocalTask = 'embed'
 
 export interface ModelConfig {
-  id: string              // huggingface model id
-  task: string            // transformers.js pipeline task
+  id: string              
+  task: string            
   dtype: 'q8' | 'q4' | 'fp16' | 'fp32'
   device: 'wasm' | 'webgpu'
-  sizeBytes: number       // approximate download size
-  maxTokens?: number      // context window
-  dims?: number           // embedding dimensions
+  sizeBytes: number       
+  maxTokens?: number      
+  dims?: number           
 }
 
-// single source of truth for all models
-// only primary models - fallback downloads if primary fails
 export const MODEL_REGISTRY: Record<LocalTask, ModelConfig> = {
   embed: {
     id: 'nomic-ai/nomic-embed-text-v1.5',
     task: 'feature-extraction',
     dtype: 'q8',
-    device: 'wasm',  // wasm for CSP compatibility (webgpu imports from CDN)
+    device: 'wasm',  // wasm for CSP compatibility
     sizeBytes: 68_000_000,
     maxTokens: 8192,
     dims: 768  // matryoshka: slice to 256 for efficiency
-  },
-  classify: {
-    id: 'MoritzLaurer/deberta-v3-xsmall-zeroshot-v1.1-all-33',
-    task: 'zero-shot-classification',
-    dtype: 'q8',
-    device: 'wasm',  // wasm for CSP compatibility
-    sizeBytes: 40_000_000
-  },
-  ner: {
-    id: 'Xenova/bert-base-NER',
-    task: 'token-classification',
-    dtype: 'q8',
-    device: 'wasm',  // ner has webgpu issues
-    sizeBytes: 55_000_000
-  },
-
-  generate: {
-    id: 'Xenova/flan-t5-small',
-    task: 'text2text-generation',
-    dtype: 'q8',
-    device: 'wasm',
-    sizeBytes: 30_000_000
   }
 } as const
 
@@ -111,10 +87,6 @@ export interface PipelineStatus {
 // discriminated union for sandbox messages
 export type OffscreenRequest =
   | { type: 'EMBED'; payload: EmbedRequest }
-  | { type: 'CLASSIFY'; payload: ClassifyRequest }
-  | { type: 'NER'; payload: NERRequest }
-
-  | { type: 'GENERATE'; payload: GenerateRequest }
   | { type: 'TOKENIZE'; texts: string[] }
   | { type: 'PRELOAD'; tasks: LocalTask[] }
   | { type: 'UNLOAD'; tasks: LocalTask[] }

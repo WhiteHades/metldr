@@ -47,39 +47,19 @@ async function ensureVoy() {
   return voyIndex
 }
 
-// model registry - defines all available models
+// model registry - embedding only
 const MODEL_REGISTRY = {
   embed: {
     id: 'nomic-ai/nomic-embed-text-v1.5',
     task: 'feature-extraction',
     dtype: 'q8',
     priority: 'bundled'
-  },
-  classify: {
-    id: 'MoritzLaurer/deberta-v3-xsmall-zeroshot-v1.1-all-33',
-    task: 'zero-shot-classification',
-    dtype: 'q8',
-    priority: 'bundled'
-  },
-  ner: {
-    id: 'Xenova/bert-base-NER',
-    task: 'token-classification',
-    dtype: 'q8',
-    priority: 'bundled'
-  },
-  generate: {
-    id: 'Xenova/flan-t5-small',
-    task: 'text2text-generation',
-    dtype: 'q8',
-    priority: 'lazy' // not bundled, rarely used
   }
 } as const
 
-// local model paths for bundled models (3 core models)
+// local model paths for bundled models (embedding only)
 const LOCAL_MODEL_PATHS: Record<string, string> = {
-  'nomic-ai/nomic-embed-text-v1.5': 'models/nomic-embed-text-v1.5/',
-  'MoritzLaurer/deberta-v3-xsmall-zeroshot-v1.1-all-33': 'models/deberta-v3-xsmall-zeroshot/',
-  'Xenova/bert-base-NER': 'models/bert-base-NER/'
+  'nomic-ai/nomic-embed-text-v1.5': 'models/nomic-embed-text-v1.5/'
 }
 
 // configure transformers.js
@@ -203,39 +183,6 @@ async function embed(texts: string[], isQuery: boolean): Promise<number[][]> {
   return results
 }
 
-// zero-shot classification
-async function classify(text: string, labels: string[], multiLabel: boolean) {
-  const classifier = await getPipeline('classify')
-  const output = await classifier(text, labels, { multi_label: multiLabel })
-  return {
-    sequence: output.sequence,
-    labels: output.labels,
-    scores: output.scores
-  }
-}
-
-// NER
-async function extractEntities(text: string) {
-  const ner = await getPipeline('ner')
-  const output = await ner(text)
-  return (output as any[]).map(e => ({
-    word: e.word,
-    entity: e.entity,
-    score: e.score,
-    start: e.start,
-    end: e.end
-  }))
-}
-
-
-
-// text generation
-async function generate(prompt: string, maxTokens = 128) {
-  const generator = await getPipeline('generate')
-  const output = await generator(prompt, { max_new_tokens: maxTokens })
-  return (output as any)[0].generated_text
-}
-
 // tokenizer
 async function getTokenizer() {
   if (tokenizer) return tokenizer
@@ -271,20 +218,6 @@ async function handleMessage(request: any): Promise<any> {
         
       case 'EMBED':
         data = { embeddings: await embed(request.payload.texts, request.payload.isQuery ?? false), dims: 256 }
-        break
-        
-      case 'CLASSIFY':
-        data = await classify(request.payload.text, request.payload.labels, request.payload.multiLabel ?? false)
-        break
-        
-      case 'NER':
-        data = { entities: await extractEntities(request.payload.text) }
-        break
-        
-
-        
-      case 'GENERATE':
-        data = { text: await generate(request.payload.prompt, request.payload.maxTokens ?? 128) }
         break
         
       case 'TOKENIZE':
