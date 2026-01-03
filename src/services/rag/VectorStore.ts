@@ -187,7 +187,7 @@ export class VectorStore {
       url: `rag:${entry.id}`,
       ...entry,
       timestamp: Date.now(),
-      ttl: 24 * 60 * 60 * 1000 * 30
+      ttl: 24 * 60 * 60 * 1000 * 60
     })
   }
 
