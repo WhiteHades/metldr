@@ -88,6 +88,65 @@ export class OllamaService {
     }
   }
 
+  // streaming version - yields content chunks via async generator
+  static async *completeStream(
+    model: string,
+    messages: ChatMessage[],
+    options: CompleteOptions = {}
+  ): AsyncGenerator<string, void, unknown> {
+    const body: Record<string, unknown> = {
+      model,
+      messages,
+      stream: true,
+      options: {
+        temperature: options.temperature ?? 0,
+        top_p: options.top_p ?? 0.9
+      }
+    }
+
+    if (options.format) body.format = options.format
+
+    const timeout = options.longContext ? this.TIMEOUT_CHAT_LONG : this.TIMEOUT_CHAT
+
+    const res = await fetch(`${this.BASE_URL}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeout)
+    })
+
+    if (!res.ok || !res.body) {
+      throw new Error(`ollama returned ${res.status}`)
+    }
+
+    // parse NDJSON stream
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+
+      for (const line of lines) {
+        if (!line.trim()) continue
+        try {
+          const chunk = JSON.parse(line)
+          if (chunk.message?.content) {
+            yield stripThinking(chunk.message.content)
+          }
+          if (chunk.done) return
+        } catch {
+          // skip malformed json
+        }
+      }
+    }
+  }
+
   static async getUserSelected(): Promise<string | null> {
     try {
       const result = await chrome.storage.local.get('selectedModel')
