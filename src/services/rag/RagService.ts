@@ -146,12 +146,23 @@ export class RagService {
     }
   }
 
-  async searchWithContext(query: string, limit = 3): Promise<string> {
+  async searchWithContext(query: string, limit = 3, sourceUrl?: string): Promise<string> {
     try {
-      const results = await this.search(query, limit)
+      const results = await this.search(query, limit * 2)
       if (results.length === 0) return ''
       
-      const contextParts = results.map((r, i) => {
+      // prioritize results from the current page if sourceUrl provided
+      let sorted = results
+      if (sourceUrl) {
+        sorted = results.sort((a, b) => {
+          const aMatch = a.entry.metadata?.sourceUrl === sourceUrl ? 1 : 0
+          const bMatch = b.entry.metadata?.sourceUrl === sourceUrl ? 1 : 0
+          if (aMatch !== bMatch) return bMatch - aMatch
+          return b.score - a.score
+        })
+      }
+      
+      const contextParts = sorted.slice(0, limit).map((r, i) => {
         const meta = r.entry.metadata || {}
         const source = meta.title || meta.sourceUrl || r.entry.id
         return `[Source ${i + 1}: ${source}]\n${r.entry.content}`
@@ -161,6 +172,16 @@ export class RagService {
     } catch (err) {
       console.error('[RagService] searchWithContext failed:', err)
       return ''
+    }
+  }
+
+  // check if a URL has been indexed
+  async hasIndexedContent(sourceUrl: string): Promise<boolean> {
+    try {
+      const results = await vectorStore.searchKeyword(sourceUrl, 1)
+      return results.some(r => r.entry.metadata?.sourceUrl === sourceUrl)
+    } catch {
+      return false
     }
   }
 
