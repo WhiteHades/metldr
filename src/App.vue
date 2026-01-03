@@ -375,6 +375,7 @@ onUnmounted(() => {
             :chat-messages="chatMessages"
             :chat-loading="chatLoading"
             :chat-indexing="chatIndexing"
+            :summary-loading="summaryLoading"
             :chat-disabled="chatDisabled"
             :disabled-reason="chatDisabledReason"
             :is-viewing-email-thread="isViewingEmailThread"
