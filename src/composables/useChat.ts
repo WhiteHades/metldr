@@ -9,11 +9,12 @@ const log = logger.createScoped('Chat')
 const chatMessages = ref<AppChatMessage[]>([])
 const chatInput = ref<string>('')
 const chatLoading = ref<boolean>(false)
+const chatIndexing = ref<boolean>(false)
 const emailContext = ref<{ summary?: string; subject?: string; sender?: string } | null>(null)
 
 declare const LanguageModel: {
   availability: (opts?: { languages?: string[] }) => Promise<string | { available: string }>
-  create: (options: { 
+  create: (options?: { 
     initialPrompts?: { role: string; content: string }[]
     temperature?: number
     topK?: number
@@ -21,6 +22,7 @@ declare const LanguageModel: {
     expectedOutputs?: { type: string; languages: string[] }[]
   }) => Promise<{
     prompt: (text: string) => Promise<string>
+    promptStreaming: (text: string) => AsyncIterable<string>
     destroy: () => void
   }>
 } | undefined
@@ -98,19 +100,36 @@ export function useChat() {
             }
           } else {
             log.log('no fullContent, extracting article from page')
-            const extractResponse = await chrome.runtime.sendMessage({
-              type: 'EXTRACT_ONLY',
-              tabId: tab.id
-            }) as { success: boolean; data?: { title?: string; author?: string; content?: string } } | undefined
-            
-            if (extractResponse?.success && extractResponse.data?.content) {
-              const d = extractResponse.data
-              let articleContext = 'ARTICLE METADATA:\n'
-              if (d.title) articleContext += `- Title: "${d.title}"\n`
-              if (d.author) articleContext += `- Author: ${d.author}\n`
-              articleContext += '\n---\nARTICLE CONTENT:\n\n' + d.content
-              contextText = articleContext
-              log.log('fetched article content', contextText.length)
+            try {
+              const extractResponse = await chrome.runtime.sendMessage({
+                type: 'EXTRACT_ONLY',
+                tabId: tab.id
+              }) as { success: boolean; data?: { title?: string; author?: string; content?: string } } | undefined
+              
+              log.log('EXTRACT_ONLY response:', { success: extractResponse?.success, hasContent: !!extractResponse?.data?.content })
+              
+              if (extractResponse?.success && extractResponse.data?.content) {
+                const d = extractResponse.data
+                let articleContext = 'ARTICLE METADATA:\n'
+                if (d.title) articleContext += `- Title: "${d.title}"\n`
+                if (d.author) articleContext += `- Author: ${d.author}\n`
+                articleContext += '\n---\nARTICLE CONTENT:\n\n' + d.content
+                contextText = articleContext
+                log.log('fetched article content', contextText.length)
+              } else {
+                // fallback: try to get innerText directly from content script
+                log.log('EXTRACT_ONLY failed, trying direct extraction')
+                const [result] = await chrome.scripting.executeScript({
+                  target: { tabId: tab.id! },
+                  func: () => document.body.innerText.slice(0, 15000)
+                })
+                if (result?.result) {
+                  contextText = `PAGE CONTENT:\n\n${result.result}`
+                  log.log('direct extraction got', `${contextText.length} chars`)
+                }
+              }
+            } catch (extractErr) {
+              log.log('extraction error:', (extractErr as Error).message)
             }
           }
         } catch (err) {
@@ -118,19 +137,58 @@ export function useChat() {
         }
       }
       
-      const MAX_CONTEXT = 15000 // ~4k tokens - safe for gemini nano
-      if (contextText.length > MAX_CONTEXT) {
-        const headLen = Math.floor(MAX_CONTEXT * 0.6)
-        const tailLen = MAX_CONTEXT - headLen
-        contextText = contextText.slice(0, headLen) + '\n\n[...truncated...]\n\n' + contextText.slice(-tailLen)
+      // smart context sizing: skip RAG if content fits in context window (~8000 chars ≈ 2000 tokens)
+      const CONTEXT_THRESHOLD = 8000
+      const needsRag = contextText && contextText.length > CONTEXT_THRESHOLD
+      
+      const { sessionRag } = await import('@/services/rag/SessionRagService')
+      
+      let relevantContext = ''
+      if (needsRag) {
+        // large doc: use RAG for relevant chunks
+        if (!sessionRag.isIndexed()) {
+          chatIndexing.value = true
+          log.log(`indexing document for session RAG... ${contextText.length} chars`)
+          await sessionRag.indexDocument(contextText)
+          log.log(`indexed ${sessionRag.getChunkCount()} chunks`)
+          chatIndexing.value = false
+        }
+        
+        if (sessionRag.isIndexed()) {
+          relevantContext = await sessionRag.searchForContext(userMessage, 5)
+          log.log(`found relevant context: ${relevantContext.length} chars`)
+        }
+      } else if (contextText) {
+        // small doc: use full content directly (fits in context window)
+        relevantContext = contextText
+        log.log(`using full context (${contextText.length} chars < ${CONTEXT_THRESHOLD} threshold)`)
       }
 
       const isEmail = contextText.includes('EMAIL CONTENT:')
-      const systemPrompt = contextText 
-        ? isEmail 
-          ? `you are an assistant helping the user understand an email thread.\n\n${contextText}\n\nRULES:\n1. answer based ONLY on the email content\n2. if info isn't in the email, say so\n3. be concise`
-          : `you are an assistant helping the user understand an article.\n\nARTICLE:\n${contextText}\n\nRULES:\n1. answer based ONLY on the article\n2. if info isn't in the article, say so\n3. be concise`
-        : 'you are a helpful assistant. be concise.'
+      const docType = isEmail ? 'email thread' : 'article'
+      
+      // build system prompt with context
+      const systemPrompt = relevantContext  
+        ? `You are an assistant helping the user understand a ${docType}.
+
+RELEVANT SECTIONS FROM THE DOCUMENT:
+${relevantContext}
+
+RULES:
+1. Answer based ONLY on the sections above
+2. If the info isn't in these sections, say "I don't see that in the document"
+3. Be concise and helpful`
+        : contextText
+          ? `You are an assistant helping the user understand a ${docType}.
+
+DOCUMENT:
+${contextText.slice(0, 8000)}
+
+RULES:
+1. Answer based on the document
+2. Be concise`
+          : 'You are a helpful assistant. Be concise.'
+
 
       const useOllama = preferredProvider?.value === 'ollama'
       
@@ -147,24 +205,80 @@ export function useChat() {
               log.log('creating Chrome AI session...')
               
               try {
-                const session = await LanguageModel.create({
-                  initialPrompts: [{ role: 'system', content: systemPrompt }],
-                  temperature: 0.7,
-                  topK: 3,
-                  expectedInputs: [{ type: 'text', languages: ['en', 'es', 'ja'] }],
-                  expectedOutputs: [{ type: 'text', languages: ['en'] }]
-                })
-                log.log('session created, prompting...')
+              // create session with NO options (simplest form - per Chrome AI docs)
+              const session = await LanguageModel.create()
+              log.log('session created')
                 
-                const start = performance.now()
-                try {
-                  const result = await session.prompt(userMessage)
-                  const timing = Math.round(performance.now() - start)
-                  log.log('prompt succeeded', { len: result?.length, timing })
-                  chromeResult = { ok: true, content: result, model: 'gemini-nano', timing }
-                } finally {
-                  session.destroy()
+              const start = performance.now()
+              // combine system prompt + user message
+              const fullPrompt = `${systemPrompt}\n\nUser question: ${userMessage}`
+              
+              let sessionSuccess = false
+              let msgIndex = -1
+              
+              try {
+                // try streaming first for real-time response
+                const stream = session.promptStreaming(fullPrompt)
+                let fullResponse = ''
+                  
+                for await (const chunk of stream) {
+                  fullResponse += chunk
+                  // add message on first chunk (no placeholder)
+                  if (msgIndex === -1) {
+                    msgIndex = chatMessages.value.length
+                    chatMessages.value.push({ role: 'assistant', content: fullResponse })
+                  } else {
+                    chatMessages.value[msgIndex].content = fullResponse
+                  }
+                  await nextTick()
+                  if (chatContainer.value) {
+                    chatContainer.value.scrollTop = chatContainer.value.scrollHeight
+                  }
                 }
+                
+                const timing = Math.round(performance.now() - start)
+                log.log('streaming complete', { len: fullResponse.length, timing })
+                if (msgIndex >= 0) {
+                  chatMessages.value[msgIndex].timing = { total: timing, model: 'gemini-nano' }
+                }
+                chromeResult = { ok: true, content: fullResponse, model: 'gemini-nano', timing }
+                sessionSuccess = true
+              } catch (streamErr) {
+                log.log('streaming failed, trying non-streaming...', (streamErr as Error).message)
+                
+                // fallback to non-streaming prompt (session still alive)
+                try {
+                  const result = await session.prompt(fullPrompt)
+                  const timing = Math.round(performance.now() - start)
+                  // add message (streaming may not have added one)
+                  if (msgIndex === -1) {
+                    chatMessages.value.push({ 
+                      role: 'assistant', 
+                      content: result,
+                      timing: { total: timing, model: 'gemini-nano' }
+                    })
+                  } else {
+                    chatMessages.value[msgIndex].content = result
+                    chatMessages.value[msgIndex].timing = { total: timing, model: 'gemini-nano' }
+                  }
+                  chromeResult = { ok: true, content: result, model: 'gemini-nano', timing }
+                  log.log('non-streaming complete', { len: result.length, timing })
+                  sessionSuccess = true
+                } catch (promptErr) {
+                  // both failed - remove message if one was added
+                  if (msgIndex >= 0) {
+                    chatMessages.value.splice(msgIndex, 1)
+                  }
+                  throw promptErr
+                }
+              }
+              
+              // destroy session only after all attempts complete
+              session.destroy()
+              
+              if (!sessionSuccess) {
+                throw new Error('Chrome AI session failed')
+              }
               } catch (sessionErr) {
                 log.log('session/prompt error:', (sessionErr as Error).message)
                 throw sessionErr
@@ -180,41 +294,61 @@ export function useChat() {
         }
       }
 
+      // if streaming already added the message, skip duplicate add
       if (chromeResult?.ok && chromeResult.content) {
-        chatMessages.value.push({ 
-          role: 'assistant', 
-          content: chromeResult.content,
-          timing: { total: chromeResult.timing || 0, model: 'gemini-nano' }
-        })
+        // message already added during streaming, just save session
       } else {
-        // fallback to background/ollama
+        // fallback to ollama with streaming
         const model = selectedModel.value || availableModels.value[0]
+        if (!model) {
+          throw new Error('no AI available - Chrome AI is off and Ollama is not running')
+        }
+        
         const recentMessages = chatMessages.value.slice(-6).map(m => ({
-          role: m.role,
+          role: m.role as 'user' | 'assistant' | 'system',
           content: m.content
         }))
         
-        const response = await sendToBackground<AppChatResponse | null>({
-          type: 'CHAT_MESSAGE',
-          model,
-          messages: recentMessages,
-          pageContext: pageSummary.value ? {
-            title: pageSummary.value.title,
-            author: pageSummary.value.author,
-            publication: pageSummary.value.publication,
-            content: pageSummary.value.content,
-            fullContent: pageSummary.value.fullContent
-          } : null
-        })
+        // add system prompt as first message
+        const messagesWithSystem = [
+          { role: 'system' as const, content: systemPrompt },
+          ...recentMessages
+        ]
         
-        if (response?.ok && response.content) {
-          chatMessages.value.push({ 
-            role: 'assistant', 
-            content: response.content,
-            timing: response.timing
-          })
-        } else {
-          throw new Error(response?.error || 'chat failed')
+        log.log('streaming with ollama...', model)
+        const start = performance.now()
+        
+        const { OllamaService } = await import('@/services/OllamaService')
+        let fullResponse = ''
+        let msgIndex = -1
+        
+        try {
+          for await (const chunk of OllamaService.completeStream(model, messagesWithSystem)) {
+            fullResponse += chunk
+            // add message on first chunk (no placeholder)
+            if (msgIndex === -1) {
+              msgIndex = chatMessages.value.length
+              chatMessages.value.push({ role: 'assistant', content: fullResponse })
+            } else {
+              chatMessages.value[msgIndex].content = fullResponse
+            }
+            await nextTick()
+            if (chatContainer.value) {
+              chatContainer.value.scrollTop = chatContainer.value.scrollHeight
+            }
+          }
+          
+          const timing = Math.round(performance.now() - start)
+          log.log('ollama streaming complete', { len: fullResponse.length, timing })
+          if (msgIndex >= 0) {
+            chatMessages.value[msgIndex].timing = { total: timing, model }
+          }
+        } catch (err) {
+          // remove message if one was added
+          if (msgIndex >= 0) {
+            chatMessages.value.splice(msgIndex, 1)
+          }
+          throw err
         }
       }
     } catch (error) {
@@ -264,6 +398,7 @@ export function useChat() {
     chatMessages,
     chatInput,
     chatLoading,
+    chatIndexing,
     emailContext,
     
     // Methods
