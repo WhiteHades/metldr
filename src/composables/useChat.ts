@@ -137,31 +137,65 @@ export function useChat() {
         }
       }
       
-      // smart context sizing: skip RAG if content fits in context window (~8000 chars ≈ 2000 tokens)
+      // get current page URL for scoped search
+      let currentUrl = ''
+      try {
+        const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
+        currentUrl = tabs[0]?.url || ''
+      } catch {}
+      
+      // smart context: use full content if small, RAG search if large
       const CONTEXT_THRESHOLD = 8000
-      const needsRag = contextText && contextText.length > CONTEXT_THRESHOLD
-      
-      const { sessionRag } = await import('@/services/rag/SessionRagService')
-      
       let relevantContext = ''
-      if (needsRag) {
-        // large doc: use RAG for relevant chunks
-        if (!sessionRag.isIndexed()) {
-          chatIndexing.value = true
-          log.log(`indexing document for session RAG... ${contextText.length} chars`)
-          await sessionRag.indexDocument(contextText)
-          log.log(`indexed ${sessionRag.getChunkCount()} chunks`)
-          chatIndexing.value = false
+      
+      // always index for cross-content search (fire-and-forget for small docs)
+      if (contextText && currentUrl) {
+        const { ragService } = await import('@/services/rag/RagService')
+        const hasIndex = await ragService.hasIndexedContent(currentUrl)
+        
+        if (!hasIndex) {
+          if (contextText.length > CONTEXT_THRESHOLD) {
+            // large doc: must wait for indexing before search
+            chatIndexing.value = true
+            log.log(`indexing large doc for chat... ${contextText.length} chars`)
+            try {
+              await ragService.indexChunks(contextText, {
+                sourceId: currentUrl,
+                sourceUrl: currentUrl,
+                sourceType: 'article',
+                title: ''
+              })
+            } catch (indexErr) {
+              log.warn('indexing failed', (indexErr as Error).message)
+            } finally {
+              chatIndexing.value = false
+            }
+          } else {
+            // small doc: index async for cross-content search, don't block chat
+            ragService.indexChunks(contextText, {
+              sourceId: currentUrl,
+              sourceUrl: currentUrl,
+              sourceType: 'article',
+              title: ''
+            }).catch(err => log.warn('async indexing failed', (err as Error).message))
+          }
         }
         
-        if (sessionRag.isIndexed()) {
-          relevantContext = await sessionRag.searchForContext(userMessage, 5)
-          log.log(`found relevant context: ${relevantContext.length} chars`)
+        // use RAG search for large docs, full content for small
+        if (contextText.length > CONTEXT_THRESHOLD) {
+          relevantContext = await ragService.searchWithContext(userMessage, 5, currentUrl)
+          log.log(`found context from RAG: ${relevantContext.length} chars`)
+          if (!relevantContext) {
+            relevantContext = contextText.slice(0, CONTEXT_THRESHOLD)
+            log.log('RAG empty, using truncated content')
+          }
+        } else {
+          relevantContext = contextText
+          log.log(`using full context (${contextText.length} chars < ${CONTEXT_THRESHOLD} threshold)`)
         }
       } else if (contextText) {
-        // small doc: use full content directly (fits in context window)
         relevantContext = contextText
-        log.log(`using full context (${contextText.length} chars < ${CONTEXT_THRESHOLD} threshold)`)
+        log.log(`no URL, using full context (${contextText.length} chars)`)
       }
 
       const isEmail = contextText.includes('EMAIL CONTENT:')
@@ -358,6 +392,7 @@ RULES:
         content: 'sorry, something went wrong. try again.'
       })
     } finally {
+      chatIndexing.value = false
       await nextTick()
       if (chatContainer.value) {
         chatContainer.value.scrollTop = chatContainer.value.scrollHeight
