@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useThemeStore } from '@/stores/theme'
 import { chromeAILogger } from '@/utils/chromeAILogger'
+import { analyticsService } from '@/services/AnalyticsService'
 
-// Composables
 import { 
   useOllama, 
   useChromeAI, 
@@ -15,27 +15,20 @@ import {
   useDropdown
 } from '@/composables'
 
-// Components
 import HistoryManager from '@/components/HistoryManager.vue'
 import SummaryCard from '@/components/SummaryCard.vue'
 import ChatPanel from '@/components/ChatPanel.vue'
 import OllamaSetup from '@/components/OllamaSetup.vue'
 import SettingsPanel from '@/components/SettingsPanel.vue'
 import HoverRevealNav from '@/components/HoverRevealNav.vue'
-import SearchPanel from '@/components/SearchPanel.vue'
+
 
 import { ScrollArea } from '@/components/ui'
-import { Loader2, RefreshCw, X, FileText, BarChart3, Settings, Search } from 'lucide-vue-next'
+import { Loader2, RefreshCw, X, FileText, BarChart3, Settings } from 'lucide-vue-next'
 
-// Theme store
 const themeStore = useThemeStore()
-
-// Debug logger
 chromeAILogger.info('Side panel loaded - run chromeAILogger.runDiagnostic() for Chrome AI debug')
 
-// ===== COMPOSABLES =====
-
-// Ollama
 const { 
   ollamaStatus, 
   availableModels, 
@@ -44,10 +37,8 @@ const {
   selectModel 
 } = useOllama()
 
-// Chrome AI
 const { chromeAIStatus, checkChromeAI } = useChromeAI()
 
-// Page Summary
 const {
   pageSummary,
   pageMetadata,
@@ -67,7 +58,6 @@ const {
   openLocalPdf
 } = usePageSummary()
 
-// Chat
 const {
   chatMessages,
   chatInput,
@@ -78,7 +68,6 @@ const {
   resetChatState
 } = useChat()
 
-// Settings
 const {
   summaryMode,
   allowlistInput,
@@ -98,7 +87,6 @@ const {
   setupStorageListener
 } = useSettings()
 
-// Dictionary
 const {
   downloadedLanguages,
   selectedLanguages,
@@ -111,10 +99,8 @@ const {
   updateSelectedLanguages
 } = useDictionary()
 
-// Tab Session
 const { saveTabSession, setupTabListener } = useTabSession()
 
-// Dropdown
 const {
   showModelDropdown,
   modelDropdownPos,
@@ -122,8 +108,6 @@ const {
   closeDropdown,
   setupDropdownClickHandler
 } = useDropdown()
-
-// ===== LOCAL STATE =====
 
 const activeTab = ref<string>('summary')
 const historyRef = ref<InstanceType<typeof HistoryManager> | null>(null)
@@ -144,31 +128,23 @@ const aiChecking = computed(() => {
   return ollamaStatus.value === 'checking'
 })
 
-// ===== HELPER FUNCTIONS =====
-
-// Wrapper for saveTabSession
 async function doSaveTabSession(): Promise<void> {
   await saveTabSession(currentTabUrl, chatMessages, pageSummary, summaryCollapsed)
 }
 
-// Wrapper for fetchCurrentPageSummary
 async function doFetchSummary(force = false, trigger = 'auto'): Promise<void> {
   await fetchCurrentPageSummary(force, trigger, doSaveTabSession)
 }
 
-// Trigger manual summary
 function triggerManualSummary(): void {
   doFetchSummary(true, 'manual')
 }
-
-// Accept summary prompt
 function acceptSummaryPrompt(): void {
   if (!summaryPrompt.value) return
   summaryPrompt.value = null
   doFetchSummary(true, 'manual')
 }
 
-// Decline summary prompt
 function declineSummaryPrompt(): void {
   summaryError.value = 'summary dismissed'
   summaryPrompt.value = null
@@ -192,24 +168,18 @@ function clearChat(): void {
   chatPanelRef.value?.focusInput()
 }
 
-// Select model and close dropdown
 async function handleSelectModel(model: string): Promise<void> {
   await selectModel(model)
   closeDropdown()
 }
-
-// Retry Ollama detection
 async function retryDetection(): Promise<void> {
   ollamaStatus.value = 'checking'
   await checkOllama(false)
 }
 
-// Open welcome page
 function openWelcomePage(): void {
   chrome.tabs.create({ url: chrome.runtime.getURL('welcome.html') })
 }
-
-// Clear cache
 async function clearCache(): Promise<void> {
   if (!confirm('clear all cached summaries?')) return
   
@@ -225,21 +195,18 @@ async function clearCache(): Promise<void> {
   }
 }
 
-// Switch tab
 function switchTab(tab: string): void {
   if (activeTab.value === tab) return
   activeTab.value = tab
+  analyticsService.trackTabSwitch(tab as 'summary' | 'stats' | 'settings').catch(() => {})
 }
 
-// Keyboard shortcuts
 function handleKeydown(e: KeyboardEvent): void {
   if (e.ctrlKey && e.shiftKey && e.key?.toLowerCase?.() === 'l') {
     e.preventDefault()
     triggerManualSummary()
   }
 }
-
-// ===== LIFECYCLE =====
 
 let cleanupTabListener: (() => void) | null = null
 let cleanupDropdownHandler: (() => void) | null = null
@@ -248,7 +215,6 @@ let statusCheckInterval: ReturnType<typeof setInterval> | null = null
 onMounted(async () => {
   await themeStore.loadSavedTheme()
   
-  // Load settings
   await loadWordPopupSetting()
   await loadSummaryPrefs()
   await loadProviderPreference()
@@ -256,18 +222,15 @@ onMounted(async () => {
   await loadDictionarySettings()
   await initSelectedLanguages()
   
-  // Check AI providers
   await checkOllama()
   await checkChromeAI()
   
-  // Setup watchers and listeners
   setupSettingsWatcher()
   setupStorageListener(
     (model) => { selectedModel.value = model },
     (langs) => { updateSelectedLanguages(langs) }
   )
   
-  // Setup tab listener - handles session save/load and tab changes automatically
   cleanupTabListener = setupTabListener(
     currentTabId,
     currentTabUrl,
@@ -279,23 +242,29 @@ onMounted(async () => {
     doFetchSummary
   )
   
-  // Keyboard listener
   window.addEventListener('keydown', handleKeydown)
   
-  // Dropdown click handler
   cleanupDropdownHandler = setupDropdownClickHandler()
   
-  // Status check interval - always check so we detect disconnections
   statusCheckInterval = setInterval(async () => {
     const wasOllamaReady = ollamaStatus.value === 'ready'
     await checkOllama(false)
     
-    // auto-fallback to Chrome AI if Ollama disconnected while selected
     if (wasOllamaReady && ollamaStatus.value !== 'ready' && preferredProvider.value === 'ollama') {
       console.log('[App] Ollama disconnected, falling back to Chrome AI')
       setProviderPreference('chrome-ai')
     }
   }, 5000)
+  
+  const context = isEmailClient.value ? 'gmail' : 'article'
+  analyticsService.startSession(context, 'summary', currentTabUrl.value || undefined).catch(() => {})
+})
+
+watch(currentTabUrl, (newUrl) => {
+  if (newUrl) {
+    const context = newUrl.includes('mail.google.com') ? 'gmail' : 'article'
+    analyticsService.updateSessionContext(context, newUrl).catch(() => {})
+  }
 })
 
 onUnmounted(() => {
@@ -303,21 +272,19 @@ onUnmounted(() => {
   if (cleanupTabListener) cleanupTabListener()
   if (cleanupDropdownHandler) cleanupDropdownHandler()
   window.removeEventListener('keydown', handleKeydown)
+  analyticsService.endSession().catch(() => {})
 })
 </script>
 
 <template>
   <div class="h-screen flex flex-col bg-background text-foreground overflow-hidden">
-    <!-- teleport target for dropdowns -->
     <div id="dropdown-portal" class="fixed inset-0 pointer-events-none z-50"></div>
 
-    <!-- hover-reveal navigation -->
     <HoverRevealNav 
       v-if="aiReady"
       :active-tab="activeTab"
       :tabs="[
         { key: 'summary', icon: FileText, label: 'Summary' },
-        { key: 'search', icon: Search, label: 'Search' },
         { key: 'stats', icon: BarChart3, label: 'Stats' },
         { key: 'settings', icon: Settings, label: 'Settings' }
       ]"
@@ -326,31 +293,25 @@ onUnmounted(() => {
       @close="navOpen = false"
     />
 
-    <!-- main content -->
     <main 
       class="flex-1 overflow-hidden"
       :class="navOpen ? 'content-down' : 'content-up'"
     >
       <Transition name="fade" mode="out-in">
-        <!-- checking state -->
         <div v-if="aiChecking" class="flex flex-col items-center justify-center h-full p-6">
           <Loader2 class="w-8 h-8 mb-3 animate-spin text-primary" :stroke-width="2" />
           <p class="text-[12px] text-foreground/70">connecting to ai...</p>
         </div>
-
-        <!-- not found state (only if ollama preferred and not found) -->
         <OllamaSetup 
           v-else-if="preferredProvider === 'ollama' && ollamaStatus === 'not-found'"
           @retry="retryDetection"
           @open-welcome="openWelcomePage"
         />
 
-        <!-- summary tab -->
         <div 
           v-else-if="aiReady && activeTab === 'summary'" 
           :class="['flex flex-col h-full min-h-0 relative', summaryPrompt ? 'pb-16' : '']"
         >
-          <!-- Summary card (hidden on gmail threads) -->
           <SummaryCard 
             v-if="!isViewingEmailThread"
             :page-summary="pageSummary"
@@ -368,7 +329,6 @@ onUnmounted(() => {
             @open-local-pdf="() => openLocalPdf(doSaveTabSession)"
           />
 
-          <!-- Chat panel -->
           <ChatPanel 
             ref="chatPanelRef"
             v-model:chat-input="chatInput"
@@ -384,14 +344,12 @@ onUnmounted(() => {
           />
         </div>
 
-        <!-- stats tab -->
         <ScrollArea v-else-if="aiReady && activeTab === 'stats'" class="h-full">
           <div class="p-3">
             <HistoryManager ref="historyRef" :limit="10" />
           </div>
         </ScrollArea>
 
-        <!-- settings tab -->
         <SettingsPanel 
           v-else-if="activeTab === 'settings'"
           :chrome-a-i-status="chromeAIStatus"
@@ -426,12 +384,6 @@ onUnmounted(() => {
           @update:font-size="setFontSize"
         />
 
-        <!-- search tab -->
-        <ScrollArea v-else-if="activeTab === 'search'" class="h-full">
-          <SearchPanel />
-        </ScrollArea>
-
-        <!-- error state -->
         <div v-else-if="ollamaStatus === 'error'" class="flex flex-col items-center justify-center h-full p-6">
           <X :size="32" class="mb-3 text-destructive/50" />
           <p class="text-[12px] text-foreground/70 mb-3">connection error</p>
@@ -441,7 +393,6 @@ onUnmounted(() => {
           </button>
         </div>
 
-        <!-- chrome ai unavailable state -->
         <div v-else-if="preferredProvider === 'chrome-ai' && chromeAIStatus === 'unavailable'" class="flex flex-col items-center justify-center h-full p-6">
           <X :size="32" class="mb-3 text-foreground/30" />
           <p class="text-[13px] font-medium text-foreground/80 mb-2">chrome ai unavailable</p>
@@ -452,7 +403,6 @@ onUnmounted(() => {
           </button>
         </div>
 
-        <!-- fallback: no ai available -->
         <div v-else class="flex flex-col items-center justify-center h-full p-6">
           <Loader2 class="w-6 h-6 mb-3 text-foreground/30" :stroke-width="2" />
           <p class="text-[11px] text-foreground/50">waiting for ai...</p>
