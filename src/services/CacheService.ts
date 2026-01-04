@@ -202,6 +202,15 @@ export class CacheService {
     }
   }
 
+  async getAllTabSessions(): Promise<TabSessionEntry[]> {
+    try {
+      return await databaseService.getAll<TabSessionEntry>(DB_CONFIGS.cache, STORE_TAB_SESSIONS)
+    } catch (err) {
+      log.error('getAllTabSessions failed', (err as Error).message)
+      return []
+    }
+  }
+
   async clearAll(): Promise<void> {
     try {
       await Promise.all([
