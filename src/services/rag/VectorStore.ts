@@ -1,5 +1,6 @@
 // vector store - manages vector embeddings with voy-search
 // uses LocalModelProvider for all sandbox operations
+// critical: handles sandbox lifecycle (reload voy index when sandbox restarts)
 
 import { databaseService, DB_CONFIGS } from '../DatabaseService'
 import { localModels } from '../ai/LocalModelProvider'
@@ -49,6 +50,10 @@ class InvertedIndex {
     this.docs.clear()
   }
 
+  getDocCount(): number {
+    return this.docs.size
+  }
+
   private tokenize(text: string): string[] {
     return text.toLowerCase()
       .replace(/[^\w\s]/g, ' ')
@@ -60,19 +65,27 @@ class InvertedIndex {
 export class VectorStore {
   private operationQueue: Promise<void> = Promise.resolve()
   private pendingSaveTimeout: ReturnType<typeof setTimeout> | null = null
-  private saveDebounceMs = 500
+  private saveDebounceMs = 300
   private loaded = false
   private loadingPromise: Promise<void> | null = null
   private invertedIndex = new InvertedIndex()
+  private pendingAdds = 0
+  
+  // sandbox lifecycle tracking
+  private lastSandboxId: string | null = null
+  private voyIndexLoadedAt: number = 0
 
   async add(entry: VectorEntry, embedding: Float32Array): Promise<void> {
+    this.pendingAdds++
     this.operationQueue = this.operationQueue.then(async () => {
       await this.ensureIndexLoaded()
       await this.storeDocument(entry)
       this.invertedIndex.add(entry)
       await localModels.voyAdd(entry.id, Array.from(embedding), String(entry.metadata?.title || entry.id), String(entry.metadata?.sourceUrl || ''))
+      this.pendingAdds--
       this.scheduleDebouncedSave()
     }).catch(err => {
+      this.pendingAdds--
       console.error('[VectorStore] Add failed:', err)
     })
     return this.operationQueue
@@ -109,30 +122,94 @@ export class VectorStore {
     console.log(`[VectorStore] Batch add complete.`)
   }
 
-  private async ensureIndexLoaded() {
+  // check if sandbox was recreated and we need to reload voy index
+  private async checkSandboxLifecycle(): Promise<boolean> {
+    try {
+      const currentSandboxId = localModels.getSandboxId()
+      if (this.lastSandboxId && currentSandboxId !== this.lastSandboxId) {
+        console.log('[VectorStore] Sandbox was recreated, need to reload VOY index')
+        this.lastSandboxId = currentSandboxId
+        return true
+      }
+      this.lastSandboxId = currentSandboxId
+      return false
+    } catch {
+      return false
+    }
+  }
+
+  private async ensureIndexLoaded(): Promise<void> {
+    // check if sandbox was recreated (side panel closed/reopened)
+    const sandboxRecreated = await this.checkSandboxLifecycle()
+    if (sandboxRecreated && this.loaded) {
+      console.log('[VectorStore] Forcing reload due to sandbox recreation')
+      this.loaded = false
+      this.loadingPromise = null
+    }
+    
     if (this.loaded) return
     if (this.loadingPromise) return this.loadingPromise
 
     this.loadingPromise = (async () => {
+      const startTime = Date.now()
       console.log('[VectorStore] Loading index...')
+      
+      // load voy index from IDB
       const record = await databaseService.get<any>(DB_CONFIGS.cache, 'page_cache', 'system:voy_index')
       if (record && record.value) {
-        console.log('[VectorStore] Found persisted index, loading...')
-        await localModels.voyLoad(record.value)
-        console.log('[VectorStore] Index loaded from IDB.')
+        console.log('[VectorStore] Found persisted VOY index, loading into sandbox...')
+        try {
+          await localModels.voyLoad(record.value)
+          this.voyIndexLoadedAt = Date.now()
+          console.log(`[VectorStore] VOY index loaded from IDB (${Date.now() - startTime}ms)`)
+        } catch (err) {
+          console.error('[VectorStore] VOY load failed, starting fresh:', err)
+        }
       } else {
-        console.log('[VectorStore] No persisted index found, starting fresh.')
+        console.log('[VectorStore] No persisted VOY index found, starting fresh.')
       }
       
+      // rebuild inverted index from stored documents
       await this.rebuildInvertedIndex()
+      
       this.loaded = true
+      this.lastSandboxId = localModels.getSandboxId()
+      console.log(`[VectorStore] Index ready. ${this.invertedIndex.getDocCount()} docs in inverted index. (${Date.now() - startTime}ms total)`)
     })()
 
     await this.loadingPromise
   }
 
-  private async rebuildInvertedIndex() {
-    console.log('[VectorStore] Rebuilding inverted index...')
+  // force reload from IDB - call when index seems stale
+  async forceReload(): Promise<void> {
+    console.log('[VectorStore] Force reloading index...')
+    this.loaded = false
+    this.loadingPromise = null
+    await this.ensureIndexLoaded()
+  }
+
+  // check if we have a specific document indexed
+  async hasDocument(sourceId: string): Promise<boolean> {
+    await this.ensureIndexLoaded()
+    
+    // check inverted index first (fast)
+    const keywordResults = this.invertedIndex.search(sourceId, 1)
+    if (keywordResults.some(r => r.entry.metadata?.sourceId === sourceId || r.entry.metadata?.sourceUrl === sourceId)) {
+      return true
+    }
+    
+    // fallback: check IDB directly
+    const doc = await databaseService.get<any>(DB_CONFIGS.cache, 'page_cache', `rag:article:${sourceId}:chunk:0`)
+    return !!doc
+  }
+
+  // get doc count for verification
+  getDocCount(): number {
+    return this.invertedIndex.getDocCount()
+  }
+
+  private async rebuildInvertedIndex(): Promise<void> {
+    console.log('[VectorStore] Rebuilding inverted index from IDB...')
     this.invertedIndex.clear()
     const db = await databaseService.getDatabase(DB_CONFIGS.cache)
     const tx = db.transaction('page_cache', 'readonly')
@@ -140,42 +217,61 @@ export class VectorStore {
     const cursorRequest = store.openCursor()
 
     return new Promise<void>((resolve) => {
+      let count = 0
       cursorRequest.onsuccess = (e) => {
         const cursor = (e.target as IDBRequest).result as IDBCursorWithValue
         if (cursor) {
           const val = cursor.value
           if (typeof val.url === 'string' && val.url.startsWith('rag:')) {
             this.invertedIndex.add(val as VectorEntry)
+            count++
           }
           cursor.continue()
         } else {
-          console.log('[VectorStore] Inverted index rebuilt.')
+          console.log(`[VectorStore] Inverted index rebuilt with ${count} documents.`)
           resolve()
         }
       }
-      cursorRequest.onerror = () => resolve()
+      cursorRequest.onerror = () => {
+        console.error('[VectorStore] Cursor error during rebuild')
+        resolve()
+      }
     })
   }
 
-  private scheduleDebouncedSave() {
+  private scheduleDebouncedSave(): void {
     if (this.pendingSaveTimeout) clearTimeout(this.pendingSaveTimeout)
+    
+    const delay = this.pendingAdds > 0 ? this.saveDebounceMs : 50
     this.pendingSaveTimeout = setTimeout(() => {
       this.saveIndex()
       this.pendingSaveTimeout = null
-    }, this.saveDebounceMs)
+    }, delay)
   }
 
-  private async saveIndex() {
-    console.log('[VectorStore] Saving index...')
+  async forceSave(): Promise<void> {
+    if (this.pendingSaveTimeout) {
+      clearTimeout(this.pendingSaveTimeout)
+      this.pendingSaveTimeout = null
+    }
+    await this.saveIndex()
+  }
+
+  private async saveIndex(): Promise<void> {
+    if (!this.loaded) return
+    
+    console.log('[VectorStore] Saving VOY index to IDB...')
     try {
       const index = await localModels.voySerialize()
-      if (index) {
+      if (index && index.length > 0) {
         await databaseService.put(DB_CONFIGS.cache, 'page_cache', {
           url: 'system:voy_index',
           value: index,
           timestamp: Date.now()
         })
-        console.log('[VectorStore] Index saved.')
+        console.log(`[VectorStore] VOY index saved (${index.length} bytes)`)
+      } else {
+        console.log('[VectorStore] VOY index empty, skipping save')
       }
     } catch (err) {
       console.error('[VectorStore] Save failed:', err)
@@ -187,7 +283,7 @@ export class VectorStore {
       url: `rag:${entry.id}`,
       ...entry,
       timestamp: Date.now(),
-      ttl: 24 * 60 * 60 * 1000 * 60
+      ttl: 24 * 60 * 60 * 1000 * 60 // 60 days
     })
   }
 

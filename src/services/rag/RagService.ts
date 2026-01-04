@@ -1,6 +1,7 @@
 import { vectorStore } from './VectorStore'
 import { embeddingProvider } from './EmbeddingProvider'
 import { chunkingService } from './ChunkingService'
+import { databaseService, DB_CONFIGS } from '../DatabaseService'
 import type { VectorEntry, SearchResult } from '../../types'
 
 interface ChunkMetadata {
@@ -10,9 +11,28 @@ interface ChunkMetadata {
   title?: string
 }
 
-const EMBEDDING_CONCURRENCY = 4
+interface RagMetadataEntry {
+  sourceId: string
+  contentHash: string
+  simHash: string
+  chunkCount: number
+  timestamp: number
+}
 
-// simple SimHash for near-duplicate detection
+interface IndexingStats {
+  sourceId: string
+  wallClockMs: number
+  chunkCount: number
+  embeddingMs: number
+  storageMs: number
+  skipped: boolean
+  skipReason?: 'unchanged' | 'duplicate' | 'no_chunks'
+}
+
+const EMBEDDING_CONCURRENCY = 4
+const STORE_RAG_METADATA = 'rag_metadata'
+
+// simhash: locality-sensitive hashing for near-duplicate detection
 function simHash(text: string): bigint {
   const tokens = text.toLowerCase().split(/\s+/).filter(t => t.length > 2)
   const v = new Int32Array(64).fill(0)
@@ -44,49 +64,158 @@ function hammingDistance(a: bigint, b: bigint): number {
   return count
 }
 
+function bigintToHex(n: bigint): string {
+  return n.toString(16).padStart(16, '0')
+}
+
+function hexToBigint(hex: string): bigint {
+  return BigInt('0x' + hex)
+}
+
 export class RagService {
   private contentHashes = new Map<string, string>()
   private simHashes = new Map<string, bigint>()
   private readonly SIMHASH_THRESHOLD = 5
+  private metadataLoaded = false
+  private loadingPromise: Promise<void> | null = null
+  private activeIndexing = new Map<string, Promise<void>>()
+  private lastStats: IndexingStats | null = null
+
+  private async ensureMetadataLoaded(): Promise<void> {
+    if (this.metadataLoaded) return
+    if (this.loadingPromise) return this.loadingPromise
+
+    this.loadingPromise = (async () => {
+      const startTime = Date.now()
+      try {
+        console.log('[RagService] Loading persisted metadata from IDB...')
+        const entries = await databaseService.getAll<RagMetadataEntry>(DB_CONFIGS.cache, STORE_RAG_METADATA)
+        
+        for (const entry of entries) {
+          this.contentHashes.set(entry.sourceId, entry.contentHash)
+          this.simHashes.set(entry.sourceId, hexToBigint(entry.simHash))
+        }
+        
+        console.log(`[RagService] Loaded ${entries.length} metadata entries (${Date.now() - startTime}ms)`)
+        this.metadataLoaded = true
+      } catch (err) {
+        console.error('[RagService] Failed to load metadata:', err)
+        this.metadataLoaded = true // proceed anyway to avoid infinite loops
+      }
+    })()
+
+    await this.loadingPromise
+  }
+
+  private async persistMetadata(sourceId: string, contentHash: string, simHashVal: bigint, chunkCount: number): Promise<void> {
+    try {
+      const entry: RagMetadataEntry = {
+        sourceId,
+        contentHash,
+        simHash: bigintToHex(simHashVal),
+        chunkCount,
+        timestamp: Date.now()
+      }
+      await databaseService.put(DB_CONFIGS.cache, STORE_RAG_METADATA, entry)
+      console.log(`[RagService] Persisted metadata for ${sourceId.slice(0, 50)}`)
+    } catch (err) {
+      console.error('[RagService] Failed to persist metadata:', err)
+    }
+  }
 
   async index(entry: VectorEntry): Promise<void> {
+    const startTime = Date.now()
     try {
-      console.log(`[RagService] Indexing ${entry.id}...`)
+      console.log(`[RagService] Indexing single entry: ${entry.id}`)
       const embedding = await embeddingProvider.embedDocument(entry.content)
       await vectorStore.add(entry, embedding)
-      console.log(`[RagService] Indexed ${entry.id}`)
+      console.log(`[RagService] Indexed ${entry.id} (${Date.now() - startTime}ms)`)
     } catch (err) {
-      console.error('[RagService] Indexing failed:', err)
+      console.error('[RagService] Single indexing failed:', err)
     }
   }
 
   async indexChunks(text: string, metadata: ChunkMetadata): Promise<void> {
+    const wallClockStart = Date.now()
+    await this.ensureMetadataLoaded()
+
+    // check for concurrent indexing of same source
+    const existing = this.activeIndexing.get(metadata.sourceId)
+    if (existing) {
+      console.log(`[RagService] Already indexing ${metadata.sourceId.slice(0, 50)}, waiting...`)
+      await existing
+      return
+    }
+
+    const indexPromise = this._doIndexChunks(text, metadata, wallClockStart)
+    this.activeIndexing.set(metadata.sourceId, indexPromise)
+    
     try {
-      // check if content unchanged
+      await indexPromise
+    } finally {
+      this.activeIndexing.delete(metadata.sourceId)
+    }
+  }
+
+  private async _doIndexChunks(text: string, metadata: ChunkMetadata, wallClockStart: number): Promise<void> {
+    const stats: IndexingStats = {
+      sourceId: metadata.sourceId,
+      wallClockMs: 0,
+      chunkCount: 0,
+      embeddingMs: 0,
+      storageMs: 0,
+      skipped: false
+    }
+
+    try {
       const contentHash = this.hashContent(text)
       const existingHash = this.contentHashes.get(metadata.sourceId)
+      
+      // check if content unchanged (persisted deduplication)
       if (existingHash === contentHash) {
-        console.log(`[RagService] Content unchanged for ${metadata.sourceId}, skipping`)
-        return
+        // verify VOY index actually has this data
+        const voyHasData = await this.verifyVoyIndex(metadata.sourceId)
+        if (voyHasData) {
+          stats.skipped = true
+          stats.skipReason = 'unchanged'
+          stats.wallClockMs = Date.now() - wallClockStart
+          this.lastStats = stats
+          console.log(`[RagService] SKIPPED: ${metadata.sourceId.slice(0, 50)} (content unchanged, VOY verified) [${stats.wallClockMs}ms]`)
+          return
+        } else {
+          console.log(`[RagService] Metadata says indexed but VOY empty, re-indexing...`)
+          // fall through to re-index
+        }
       }
 
-      // check for near-duplicate via SimHash
+      // check for near-duplicate content via simhash
       const textSimHash = simHash(text)
       for (const [existingId, existingSimHash] of this.simHashes) {
         if (existingId !== metadata.sourceId && hammingDistance(textSimHash, existingSimHash) < this.SIMHASH_THRESHOLD) {
-          console.log(`[RagService] Near-duplicate of ${existingId}, skipping`)
+          stats.skipped = true
+          stats.skipReason = 'duplicate'
+          stats.wallClockMs = Date.now() - wallClockStart
+          this.lastStats = stats
+          console.log(`[RagService] SKIPPED: Near-duplicate of ${existingId.slice(0, 50)} [${stats.wallClockMs}ms]`)
           return
         }
       }
 
+      // chunk the content
       const chunks = await chunkingService.chunkForEmbedding(text)
       if (chunks.length === 0) {
-        console.log('[RagService] No chunks to index')
+        stats.skipped = true
+        stats.skipReason = 'no_chunks'
+        stats.wallClockMs = Date.now() - wallClockStart
+        this.lastStats = stats
+        console.log(`[RagService] SKIPPED: No chunks to index [${stats.wallClockMs}ms]`)
         return
       }
       
-      console.log(`[RagService] Indexing ${chunks.length} chunks for ${metadata.sourceId} (parallel=${EMBEDDING_CONCURRENCY})`)
+      stats.chunkCount = chunks.length
+      console.log(`[RagService] INDEXING: ${chunks.length} chunks for ${metadata.sourceId.slice(0, 50)}`)
       
+      // create vector entries
       const entries: VectorEntry[] = chunks.map(chunk => ({
         id: `${metadata.sourceType}:${metadata.sourceId}:chunk:${chunk.index}`,
         type: metadata.sourceType,
@@ -101,20 +230,52 @@ export class RagService {
         timestamp: Date.now()
       }))
 
+      // embed and store with timing
+      const embedStart = Date.now()
       await this.embedAndStoreBatched(entries, EMBEDDING_CONCURRENCY)
+      stats.embeddingMs = Date.now() - embedStart
       
-      // store hashes for future dedup
+      // persist metadata for future deduplication
+      const persistStart = Date.now()
       this.contentHashes.set(metadata.sourceId, contentHash)
       this.simHashes.set(metadata.sourceId, textSimHash)
+      await this.persistMetadata(metadata.sourceId, contentHash, textSimHash, chunks.length)
       
-      console.log(`[RagService] Indexed ${chunks.length} chunks for ${metadata.sourceId}`)
+      // force save VOY index to persist embeddings
+      await vectorStore.forceSave()
+      stats.storageMs = Date.now() - persistStart
+      
+      stats.wallClockMs = Date.now() - wallClockStart
+      this.lastStats = stats
+      
+      console.log(`[RagService] INDEXED: ${chunks.length} chunks for ${metadata.sourceId.slice(0, 50)}`)
+      console.log(`[RagService] Timing: total=${stats.wallClockMs}ms, embed=${stats.embeddingMs}ms, persist=${stats.storageMs}ms`)
     } catch (err) {
-      console.error('[RagService] Chunk indexing failed:', err)
+      stats.wallClockMs = Date.now() - wallClockStart
+      this.lastStats = stats
+      console.error(`[RagService] Chunk indexing FAILED after ${stats.wallClockMs}ms:`, err)
+    }
+  }
+
+  // verify that VOY index actually has embeddings for this source
+  private async verifyVoyIndex(sourceId: string): Promise<boolean> {
+    try {
+      const docCount = vectorStore.getDocCount()
+      if (docCount === 0) {
+        console.log('[RagService] VOY verification: index is empty')
+        return false
+      }
+      
+      const hasDoc = await vectorStore.hasDocument(sourceId)
+      console.log(`[RagService] VOY verification: hasDoc=${hasDoc}, totalDocs=${docCount}`)
+      return hasDoc
+    } catch (err) {
+      console.warn('[RagService] VOY verification error:', err)
+      return false
     }
   }
 
   private hashContent(text: string): string {
-    // simple hash: length + first 200 chars + last 200 chars
     const first = text.slice(0, 200)
     const last = text.slice(-200)
     return `${text.length}:${first}:${last}`
@@ -148,21 +309,34 @@ export class RagService {
 
   async searchWithContext(query: string, limit = 3, sourceUrl?: string): Promise<string> {
     try {
-      const results = await this.search(query, limit * 2)
+      const results = await this.search(query, limit * 4)
       if (results.length === 0) return ''
       
-      // prioritize results from the current page if sourceUrl provided
-      let sorted = results
+      let filtered = results
       if (sourceUrl) {
-        sorted = results.sort((a, b) => {
-          const aMatch = a.entry.metadata?.sourceUrl === sourceUrl ? 1 : 0
-          const bMatch = b.entry.metadata?.sourceUrl === sourceUrl ? 1 : 0
-          if (aMatch !== bMatch) return bMatch - aMatch
-          return b.score - a.score
+        const sourceBase = sourceUrl.split('?')[0]
+        filtered = results.filter(r => {
+          const entrySourceUrl = r.entry.metadata?.sourceUrl as string | undefined
+          if (!entrySourceUrl || typeof entrySourceUrl !== 'string') return false
+          const entryBase = entrySourceUrl.split('?')[0]
+          return entrySourceUrl === sourceUrl || 
+                 entryBase === sourceBase ||
+                 entryBase.startsWith(sourceBase) ||
+                 sourceBase.startsWith(entryBase)
         })
+        
+        console.log(`[RagService] searchWithContext: ${results.length} total -> ${filtered.length} filtered for ${sourceUrl.slice(0, 50)}`)
+        
+        if (filtered.length === 0) {
+          console.log('[RagService] No RAG results for current page, using raw content instead')
+          return ''
+        }
       }
       
-      const contextParts = sorted.slice(0, limit).map((r, i) => {
+      // sort by score
+      filtered.sort((a, b) => b.score - a.score)
+      
+      const contextParts = filtered.slice(0, limit).map((r, i) => {
         const meta = r.entry.metadata || {}
         const source = meta.title || meta.sourceUrl || r.entry.id
         return `[Source ${i + 1}: ${source}]\n${r.entry.content}`
@@ -175,8 +349,20 @@ export class RagService {
     }
   }
 
-  // check if a URL has been indexed
   async hasIndexedContent(sourceUrl: string): Promise<boolean> {
+    await this.ensureMetadataLoaded()
+    
+    // check metadata first (fast)
+    if (this.contentHashes.has(sourceUrl)) {
+      // verify VOY actually has the data
+      const voyHasData = await this.verifyVoyIndex(sourceUrl)
+      if (voyHasData) {
+        return true
+      }
+      console.log(`[RagService] hasIndexedContent: metadata exists but VOY empty for ${sourceUrl.slice(0, 50)}`)
+    }
+
+    // fallback: check inverted index
     try {
       const results = await vectorStore.searchKeyword(sourceUrl, 1)
       return results.some(r => r.entry.metadata?.sourceUrl === sourceUrl)
@@ -198,6 +384,23 @@ export class RagService {
       }
     })
     return Array.from(map.values()).sort((a, b) => b.score - a.score)
+  }
+
+  isIndexing(sourceId: string): boolean {
+    return this.activeIndexing.has(sourceId)
+  }
+
+  getActiveIndexingCount(): number {
+    return this.activeIndexing.size
+  }
+
+  getLastStats(): IndexingStats | null {
+    return this.lastStats
+  }
+  
+  // get persisted metadata count (for debugging)
+  getMetadataCount(): number {
+    return this.contentHashes.size
   }
 }
 
