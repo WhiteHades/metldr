@@ -65,7 +65,8 @@ const {
   chatIndexing,
   sendChatMessage: baseSendChatMessage,
   clearChat: baseClearChat,
-  resetChatState
+  resetChatState,
+  switchToUrl
 } = useChat()
 
 const {
@@ -239,7 +240,8 @@ onMounted(async () => {
     summaryCollapsed,
     aiReady,
     summaryMode,
-    doFetchSummary
+    doFetchSummary,
+    switchToUrl
   )
   
   window.addEventListener('keydown', handleKeydown)

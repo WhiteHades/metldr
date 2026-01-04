@@ -165,7 +165,7 @@ onMounted(async () => {
   await loadData()
   pollIntervalId = setInterval(loadData, POLL_INTERVAL_MS)
   messageListener = (msg) => {
-    if (msg.type === 'SUMMARY_ADDED' || msg.type === 'SESSION_UPDATED') loadData()
+    if (msg.type === 'SUMMARY_ADDED' || msg.type === 'SESSION_UPDATED' || msg.type === 'STATS_UPDATED') loadData()
   }
   chrome.runtime.onMessage.addListener(messageListener)
 })
