@@ -370,6 +370,8 @@ defineExpose({
   color: var(--color-primary);
   text-decoration: underline;
   text-underline-offset: 2px;
+  word-break: break-all;
+  overflow-wrap: anywhere;
 }
 
 .chat-markdown :deep(p) {
@@ -454,10 +456,12 @@ defineExpose({
   font-size: var(--font-text-body);
   line-height: 1.6;
   color: var(--color-foreground);
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
-/* streaming animation - blinking cursor */
-.assistant-message.streaming .chat-markdown::after {
+/* streaming animation - blinking cursor at end of last content */
+.assistant-message.streaming .chat-markdown :deep(> *:last-child)::after {
   content: '▋';
   display: inline;
   animation: cursor-blink 0.7s steps(1) infinite;
