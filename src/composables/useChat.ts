@@ -3,6 +3,7 @@ import type { AppPageSummary, AppChatMessage, AppChatResponse } from '@/types'
 import type { AIProviderPreference } from './useSettings'
 import { sendToBackground, withTiming } from './useMessaging'
 import { logger } from '@/services/LoggerService'
+import { analyticsService } from '@/services/AnalyticsService'
 
 const log = logger.createScoped('Chat')
 
@@ -47,6 +48,9 @@ export function useChat() {
     }
     
     chatMessages.value.push({ role: 'user', content: userMessage })
+    
+    // track user message
+    analyticsService.trackChat('user', userMessage).catch(() => {})
     
     await nextTick()
     if (chatContainer.value) {
@@ -277,6 +281,8 @@ RULES:
                 }
                 chromeResult = { ok: true, content: fullResponse, model: 'gemini-nano', timing }
                 sessionSuccess = true
+                // track AI response
+                analyticsService.trackChat('assistant', fullResponse, timing).catch(() => {})
               } catch (streamErr) {
                 log.log('streaming failed, trying non-streaming...', (streamErr as Error).message)
                 
@@ -377,6 +383,8 @@ RULES:
           if (msgIndex >= 0) {
             chatMessages.value[msgIndex].timing = { total: timing, model }
           }
+          // track AI response
+          analyticsService.trackChat('assistant', fullResponse, timing).catch(() => {})
         } catch (err) {
           // remove message if one was added
           if (msgIndex >= 0) {
