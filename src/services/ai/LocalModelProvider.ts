@@ -45,6 +45,10 @@ class LocalModelProvider {
   
   private backend: 'webgpu' | 'wasm' = 'wasm'
   
+  // sandbox lifecycle tracking - unique ID per sandbox instance
+  private sandboxId: string = ''
+  private sandboxCreatedAt: number = 0
+  
   // caches
   private embedCache = new LRUCache<string, number[]>(200)
 
@@ -80,10 +84,20 @@ class LocalModelProvider {
           if (existing) {
             this.iframe = existing
             this.ready = true
-            console.log('[LocalModels] Reusing existing sandbox')
+            // generate sandbox ID if not already set (shouldn't happen but be safe)
+            if (!this.sandboxId) {
+              this.sandboxId = `sandbox_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+              this.sandboxCreatedAt = Date.now()
+            }
+            console.log('[LocalModels] Reusing existing sandbox, id:', this.sandboxId)
             resolve()
             return
           }
+          
+          // generate new sandbox ID
+          this.sandboxId = `sandbox_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+          this.sandboxCreatedAt = Date.now()
+          console.log('[LocalModels] Creating new sandbox, id:', this.sandboxId)
           
           // create hidden iframe
           this.iframe = document.createElement('iframe')
@@ -141,7 +155,12 @@ class LocalModelProvider {
               const pong = await chrome.runtime.sendMessage({ target: 'offscreen', type: 'PING' })
               if (pong?.status === 'pong') {
                 this.ready = true
-                console.log('[LocalModels] Offscreen sandbox ready')
+                // generate sandbox ID for offscreen
+                if (!this.sandboxId) {
+                  this.sandboxId = `offscreen_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+                  this.sandboxCreatedAt = Date.now()
+                }
+                console.log('[LocalModels] Offscreen sandbox ready, id:', this.sandboxId)
                 
                 // init backend
                 this.send({ type: 'INIT' }).then(res => {
@@ -195,13 +214,12 @@ class LocalModelProvider {
           requestId: id
         }, '*')
         
-        // timeout
         setTimeout(() => {
           if (this.pendingRequests.has(id)) {
             this.pendingRequests.delete(id)
             reject(new Error(`Request ${message.type} timed out`))
           }
-        }, 60000) // 60s for model loading
+        }, 180000)
       })
     } else {
       // Offscreen communication with RETRY logic
@@ -314,6 +332,19 @@ class LocalModelProvider {
   async voyLoad(data: Uint8Array): Promise<void> {
     const res = await this.send({ type: 'VOY_LOAD', data })
     if (!res.ok) throw new Error(res.error)
+  }
+
+  // sandbox lifecycle tracking
+  getSandboxId(): string {
+    return this.sandboxId
+  }
+
+  getSandboxCreatedAt(): number {
+    return this.sandboxCreatedAt
+  }
+
+  isReady(): boolean {
+    return this.ready
   }
 }
 
