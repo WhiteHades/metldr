@@ -20,6 +20,8 @@
     "@mozilla/readability": "^0.6.0",
     "@radix-icons/vue": "^1.0.0",
     "@tailwindcss/vite": "^4.1.17",
+    "@unovis/ts": "^1.6.2",
+    "@unovis/vue": "^1.6.2",
     "@vueuse/core": "^14.1.0",
     "ai": "^6.0.3",
     "class-variance-authority": "^0.7.1",
