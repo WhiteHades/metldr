@@ -8,6 +8,7 @@ import { SummaryPrefs } from '../utils/summaryPrefs'
 import { aiGateway } from './ai'
 import { logger } from './LoggerService'
 import { ragService } from './rag/RagService'
+import { analyticsService } from './AnalyticsService'
 import type {
   EmailSummaryMessage,
   GetReplySuggestionsMessage,
@@ -352,6 +353,9 @@ export class BackgroundBootstrap {
 
         if (result) {
           console.log('[BackgroundBootstrap._onWordLookup] found result, source:', result.source)
+          // track analytics for real-time stat sync
+          const cached = result.source === 'local' || result.source === 'cache'
+          analyticsService.trackWordLookup(word, cached).catch(() => {})
           respond({ success: true, result })
         } else {
           console.log('[BackgroundBootstrap._onWordLookup] no result found')

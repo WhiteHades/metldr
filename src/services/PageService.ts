@@ -1,6 +1,7 @@
 import { OllamaService } from './OllamaService'
 import { cacheService } from './CacheService'
 import { aiGateway, AIPrompts, mapReduceService } from './ai'
+import { analyticsService } from './AnalyticsService'
 import type { ExtractedData, SummaryTiming, PageSummary, ChatMessage, PageContext, ChatResult } from '../types'
 
 import { ragService } from './rag/RagService'
@@ -82,6 +83,18 @@ export class PageService {
     }
 
     if (url) await cacheService.setPageSummary(url, summary, 3600)
+
+    analyticsService.trackSummary({
+      type: 'page',
+      cached: false,
+      responseTimeMs: timing.llm || 0,
+      wordsIn: wordCount || 0,
+      wordsOut: bullets.join(' ').split(/\s+/).length,
+      tokensOut: Math.round(summaryText.length / 4),
+      model: timing.model,
+      url
+    }).catch(() => {})
+
     return summary
   }
 

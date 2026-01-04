@@ -1,6 +1,7 @@
 import { OllamaService } from './OllamaService'
 import { cacheService } from './CacheService'
 import { aiGateway, AIPrompts } from './ai'
+import { analyticsService } from './AnalyticsService'
 import type {
   AmountFact,
   IdFact,
@@ -82,6 +83,15 @@ export class EmailService {
             cacheService.setEmailSummary(emailId, chromeResult).catch(() => {})
             this.generateReplySuggestions(emailId, emailContent, chromeResult, metadata).catch(() => {})
           }
+          analyticsService.trackSummary({
+            type: 'email',
+            cached: false,
+            responseTimeMs: elapsed,
+            wordsIn: emailContent.split(/\s+/).length,
+            wordsOut: (chromeResult.summary || '').split(/\s+/).length,
+            tokensOut: Math.round((chromeResult.summary || '').length / 4),
+            model: 'gemini-nano'
+          }).catch(() => {})
           return chromeResult
         }
       }
@@ -102,6 +112,15 @@ export class EmailService {
               cacheService.setEmailSummary(emailId, chromeResult).catch(() => {})
               this.generateReplySuggestions(emailId, emailContent, chromeResult, metadata).catch(() => {})
             }
+            analyticsService.trackSummary({
+              type: 'email',
+              cached: false,
+              responseTimeMs: elapsed,
+              wordsIn: emailContent.split(/\s+/).length,
+              wordsOut: (chromeResult.summary || '').split(/\s+/).length,
+              tokensOut: Math.round((chromeResult.summary || '').length / 4),
+              model: 'gemini-nano'
+            }).catch(() => {})
             return chromeResult
           }
         }
@@ -122,6 +141,16 @@ export class EmailService {
         cacheService.setEmailSummary(emailId, summary).catch(() => {})
         this.generateReplySuggestions(emailId, emailContent, summary, metadata).catch(() => {})
       }
+
+      analyticsService.trackSummary({
+        type: 'email',
+        cached: false,
+        responseTimeMs: elapsed,
+        wordsIn: emailContent.split(/\s+/).length,
+        wordsOut: (summary.summary || '').split(/\s+/).length,
+        tokensOut: Math.round((summary.summary || '').length / 4),
+        model
+      }).catch(() => {})
 
       return summary
     } catch (err) {
@@ -321,6 +350,7 @@ export class EmailService {
           if (emailId) {
             await cacheService.setReplySuggestions(emailId, chromeReplies)
           }
+          analyticsService.trackReplyGenerated(chromeReplies.length).catch(() => {})
           return chromeReplies
         }
       }
@@ -335,6 +365,9 @@ export class EmailService {
           if (suggestions?.length > 0 && emailId) {
             await cacheService.setReplySuggestions(emailId, suggestions)
           }
+          if (suggestions?.length > 0) {
+            analyticsService.trackReplyGenerated(suggestions.length).catch(() => {})
+          }
           return suggestions
         }
       }
@@ -346,6 +379,7 @@ export class EmailService {
           if (emailId) {
             await cacheService.setReplySuggestions(emailId, chromeReplies)
           }
+          analyticsService.trackReplyGenerated(chromeReplies.length).catch(() => {})
           return chromeReplies
         }
       }
