@@ -220,5 +220,15 @@ export const DB_CONFIGS = {
       { name: 'words', keyPath: 'word' },
       { name: 'metadata', keyPath: 'lang' }
     ]
+  },
+  analytics: {
+    name: 'metldr-analytics',
+    version: 1,
+    stores: [
+      { name: 'daily_stats', keyPath: 'date' },
+      { name: 'sessions', keyPath: 'id' },
+      { name: 'events', keyPath: 'id' }
+    ]
   }
 } as const
+
