@@ -1,7 +1,8 @@
-import { type Ref } from 'vue'
+import { ref, type Ref } from 'vue'
 import type { AppPageSummary, AppChatMessage } from '@/types'
 import { cacheService } from '@/services/CacheService'
 import { logger } from '@/services/LoggerService'
+import { concurrencyManager } from '@/services/ConcurrencyManager'
 
 const log = logger.createScoped('TabSession')
 
@@ -127,7 +128,8 @@ export function useTabSession() {
     summaryCollapsed: Ref<boolean>,
     aiReady: Ref<boolean>,
     summaryMode: Ref<string>,
-    fetchSummary: (force: boolean, trigger: string) => Promise<void>
+    fetchSummary: (force: boolean, trigger: string) => Promise<void>,
+    switchChatUrl?: (url: string) => void
   ): () => void {
     let urlPollInterval: ReturnType<typeof setInterval> | null = null
     let previousUrl: string | null = null
@@ -161,6 +163,8 @@ export function useTabSession() {
       log.log('tab changed', { from: prevKey?.slice(0, 30), to: newKey?.slice(0, 30) })
       
       if (previousUrl) {
+        concurrencyManager.abortForUrl(previousUrl)
+        
         const prevChatMessages = [...chatMessages.value]
         const prevPageSummary = pageSummary.value
         const prevSummaryCollapsed = summaryCollapsed.value
@@ -171,16 +175,33 @@ export function useTabSession() {
         saveTabSession(tempRef, tempChat, tempSummary, tempCollapsed)
       }
       
-      chatMessages.value = []
+      // CRITICAL: switch chat state to new URL's isolated state
+      if (switchChatUrl) {
+        switchChatUrl(newUrl)
+      }
+      
+      // only clear if switchChatUrl wasn't provided (legacy fallback)
+      if (!switchChatUrl) {
+        chatMessages.value = []
+      }
       pageSummary.value = null
       summaryCollapsed.value = false
       
       previousUrl = newUrl
-      const hasSession = await loadTabSession(newUrl, chatMessages, pageSummary, summaryCollapsed)
+      
+      // when switchChatUrl is used, in-memory state has priority over IDB
+      // so we only load pageSummary from IDB, not chatMessages
+      if (switchChatUrl) {
+        // load pageSummary from IDB but keep in-memory chat state
+        const dummyChatRef = ref<AppChatMessage[]>([])
+        await loadTabSession(newUrl, dummyChatRef, pageSummary, summaryCollapsed)
+      } else {
+        await loadTabSession(newUrl, chatMessages, pageSummary, summaryCollapsed)
+      }
       
       // Always auto-fetch for PDFs, otherwise respect summaryMode
       const isPdf = newUrl.toLowerCase().endsWith('.pdf') || newUrl.includes('.pdf?')
-      if (!hasSession && (summaryMode.value === 'auto' || isPdf)) {
+      if ((summaryMode.value === 'auto' || isPdf) && !pageSummary.value) {
         fetchSummary(false, 'auto')
       }
     }

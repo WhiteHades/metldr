@@ -4,6 +4,7 @@ import type { AppPageSummary, SummaryPromptData, AppSummaryResponse, ExtractedDa
 import { logger } from '@/services/LoggerService'
 import { cacheService } from '@/services/CacheService'
 import { pdfService } from '@/services/pdf/PdfService'
+import { concurrencyManager } from '@/services/ConcurrencyManager'
 
 const log = logger.createScoped('PageSummary')
 
@@ -97,12 +98,17 @@ function parseBullets(text: string): string[] {
 // index content to RAG directly from side panel context (embeddings require page context)
 async function indexToRag(text: string, metadata: { sourceId: string; sourceUrl: string; sourceType: 'article' | 'email' | 'pdf'; title?: string }) {
   try {
-    // dynamic import to avoid loading RAG service until needed
     const { ragService } = await import('@/services/rag/RagService')
-    await ragService.indexChunks(text, metadata)
+    await concurrencyManager.execute('indexing', metadata.sourceUrl, async (signal) => {
+      if (signal.aborted) throw new Error('Indexing aborted')
+      await ragService.indexChunks(text, metadata)
+    })
     log.log('RAG indexing complete', metadata.sourceId.slice(0, 50))
   } catch (err) {
-    log.warn('RAG indexing failed', (err as Error).message)
+    const msg = (err as Error).message
+    if (msg !== 'Indexing aborted' && msg !== 'Operation cancelled') {
+      log.warn('RAG indexing failed', msg)
+    }
   }
 }
 
