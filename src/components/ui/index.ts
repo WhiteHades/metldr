@@ -5,3 +5,13 @@ export { Checkbox } from './checkbox'
 export { Textarea } from './textarea'
 export { Input } from './input'
 export { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './tooltip'
+export { 
+  ChartContainer, 
+  ChartTooltip, 
+  ChartTooltipContent, 
+  ChartCrosshair, 
+  ChartLegendContent,
+  componentToString,
+  type ChartConfig 
+} from './chart'
+
