@@ -259,6 +259,18 @@ class AnalyticsServiceClass {
   
   private activeTimer: ReturnType<typeof setInterval> | null = null
   private lastTickTime = 0
+  private notifyDebounceTimer: ReturnType<typeof setTimeout> | null = null
+
+  // broadcast stats update to trigger UI refresh (debounced)
+  private notifyStatsUpdated(): void {
+    if (this.notifyDebounceTimer) {
+      clearTimeout(this.notifyDebounceTimer)
+    }
+    this.notifyDebounceTimer = setTimeout(() => {
+      chrome.runtime.sendMessage({ type: 'STATS_UPDATED' }).catch(() => {})
+      this.notifyDebounceTimer = null
+    }, 100) // 100ms debounce
+  }
 
   // ============ DAILY STATS ============
 
@@ -490,6 +502,8 @@ class AnalyticsServiceClass {
       model: opts.model,
       url: opts.url
     })
+    
+    this.notifyStatsUpdated()
   }
 
   async trackSummaryFailed(error: string, type: 'email' | 'page'): Promise<void> {
@@ -529,6 +543,8 @@ class AnalyticsServiceClass {
       length: text.length,
       responseTimeMs
     })
+    
+    this.notifyStatsUpdated()
   }
 
   async trackWordLookup(word: string, cached: boolean): Promise<void> {
@@ -540,6 +556,8 @@ class AnalyticsServiceClass {
     }
 
     await this.logEvent(cached ? 'word_lookup_cached' : 'word_lookup', { word })
+    
+    this.notifyStatsUpdated()
   }
 
   async trackReplyGenerated(count: number): Promise<void> {
