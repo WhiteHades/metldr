@@ -1,18 +1,18 @@
 /* bundled fonts - no external CDN */
 @font-face {
-  font-family: 'IBM Plex Sans';
+  font-family: "IBM Plex Sans";
   font-style: normal;
   font-weight: 100 700;
   font-display: swap;
-  src: url('/fonts/ibm-plex-sans.woff2') format('woff2');
+  src: url("/fonts/ibm-plex-sans.woff2") format("woff2");
 }
 
 @font-face {
-  font-family: 'JetBrains Mono';
+  font-family: "JetBrains Mono";
   font-style: normal;
   font-weight: 400 500;
   font-display: swap;
-  src: url('/fonts/jetbrains-mono.woff2') format('woff2');
+  src: url("/fonts/jetbrains-mono.woff2") format("woff2");
 }
 
 @import "tailwindcss";
@@ -55,13 +55,17 @@
   --color-input: oklch(0.24 0.02 265);
   --color-ring: oklch(0.75 0.18 230);
 
-  /* Border radius */
+  --color-chart-1: oklch(0.75 0.18 230);
+  --color-chart-2: oklch(0.7 0.16 285);
+  --color-chart-3: oklch(0.76 0.15 165);
+  --color-chart-4: oklch(0.78 0.16 85);
+  --color-chart-5: oklch(0.65 0.22 28);
+
   --radius-lg: 0.75rem;
   --radius-md: 0.5rem;
   --radius-sm: 0.25rem;
 }
 
-/* Light theme override */
 .light {
   --color-background: oklch(0.98 0.01 265);
   --color-foreground: oklch(0.2 0.02 265);
@@ -99,6 +103,12 @@
   --color-border: oklch(0.9 0.01 265);
   --color-input: oklch(0.9 0.01 265);
   --color-ring: oklch(0.55 0.2 230);
+
+  --color-chart-1: oklch(0.55 0.2 230);
+  --color-chart-2: oklch(0.5 0.18 285);
+  --color-chart-3: oklch(0.56 0.17 165);
+  --color-chart-4: oklch(0.68 0.18 85);
+  --color-chart-5: oklch(0.55 0.24 28);
 }
 
 :root {
@@ -118,13 +128,12 @@
     "liga" 1,
     "calt" 1;
 
-  --font-size-base: 0.9375rem;  
+  --font-size-base: 0.9375rem;
   --font-text-body: 13px;
   --font-text-secondary: 12px;
   --font-text-small: 11px;
 }
 
-/* font size presets */
 [data-font-size="small"] {
   --font-text-body: 12px;
   --font-text-secondary: 11px;
