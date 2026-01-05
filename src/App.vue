@@ -21,6 +21,8 @@ import ChatPanel from '@/components/ChatPanel.vue'
 import OllamaSetup from '@/components/OllamaSetup.vue'
 import SettingsPanel from '@/components/SettingsPanel.vue'
 import HoverRevealNav from '@/components/HoverRevealNav.vue'
+import PdfDropZone from '@/components/PdfDropZone.vue'
+import { pdfService } from '@/services/pdf/PdfService'
 
 
 import { ScrollArea } from '@/components/ui'
@@ -66,7 +68,8 @@ const {
   sendChatMessage: baseSendChatMessage,
   clearChat: baseClearChat,
   resetChatState,
-  switchToUrl
+  switchToUrl,
+  syncIndexingStatus
 } = useChat()
 
 const {
@@ -209,6 +212,39 @@ function handleKeydown(e: KeyboardEvent): void {
   }
 }
 
+// pdf drag-drop handler
+const pdfDropLoading = ref(false)
+const pdfDropError = ref<string | null>(null)
+
+async function handlePdfDropped(file: File): Promise<void> {
+  pdfDropLoading.value = true
+  pdfDropError.value = null
+  
+  try {
+    console.log('[App] Processing dropped PDF:', file.name)
+    const arrayBuffer = await file.arrayBuffer()
+    const result = await pdfService.summarizeFromArrayBuffer(arrayBuffer, file.name)
+    
+    // update page summary state with the PDF result
+    pageSummary.value = {
+      bullets: result.summary.split('\n').filter(l => l.trim()),
+      timing: { total: 0, model: 'pdf' }
+    } as any // type assertion for PDF-generated summary
+    
+    console.log('[App] PDF processed successfully')
+  } catch (err) {
+    console.error('[App] PDF processing failed:', err)
+    pdfDropError.value = (err as Error).message
+  } finally {
+    pdfDropLoading.value = false
+  }
+}
+
+function handlePdfDropError(message: string): void {
+  console.warn('[App] PDF drop error:', message)
+  pdfDropError.value = message
+}
+
 let cleanupTabListener: (() => void) | null = null
 let cleanupDropdownHandler: (() => void) | null = null
 let statusCheckInterval: ReturnType<typeof setInterval> | null = null
@@ -260,6 +296,8 @@ onMounted(async () => {
   
   const context = isEmailClient.value ? 'gmail' : 'article'
   analyticsService.startSession(context, 'summary', currentTabUrl.value || undefined).catch(() => {})
+  
+  syncIndexingStatus()
 })
 
 watch(currentTabUrl, (newUrl) => {
@@ -295,10 +333,14 @@ onUnmounted(() => {
       @close="navOpen = false"
     />
 
-    <main 
-      class="flex-1 overflow-hidden"
-      :class="navOpen ? 'content-down' : 'content-up'"
+    <PdfDropZone
+      @pdf-dropped="handlePdfDropped"
+      @error="handlePdfDropError"
     >
+      <main 
+        class="flex-1 overflow-hidden"
+        :class="navOpen ? 'content-down' : 'content-up'"
+      >
       <Transition name="fade" mode="out-in">
         <div v-if="aiChecking" class="flex flex-col items-center justify-center h-full p-6">
           <Loader2 class="w-8 h-8 mb-3 animate-spin text-primary" :stroke-width="2" />
@@ -411,6 +453,7 @@ onUnmounted(() => {
         </div>
       </Transition>
     </main>
+    </PdfDropZone>
   </div>
 </template>
 
