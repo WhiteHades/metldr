@@ -1,11 +1,15 @@
 import { aiGateway } from '../ai/AIGateway'
 import type { PdfChunk } from '../../types'
 
+export interface SummaryOptions {
+  maxBullets?: number
+}
+
 export class RecursiveSummaryStrategy {
   private readonly CHUNK_SIZE = 12000 // approx 3-4k tokens
   private readonly OVERLAP = 500
 
-  async execute(fullText: string): Promise<string> {
+  async execute(fullText: string, options?: SummaryOptions): Promise<string> {
     console.log(`[RecursiveSummary] Starting for text length: ${fullText.length}`)
 
     const chunks = this.chunkText(fullText)
@@ -13,7 +17,7 @@ export class RecursiveSummaryStrategy {
 
     if (chunks.length === 1) {
       const res = await aiGateway.summarize({ content: chunks[0].text, type: 'key-points' })
-      return res.summary || ''
+      return this.limitBullets(res.summary || '', options?.maxBullets)
     }
 
     const chunkSummaries: string[] = []
@@ -77,5 +81,12 @@ export class RecursiveSummaryStrategy {
     }
     
     return chunks
+  }
+
+  private limitBullets(summary: string, maxBullets?: number): string {
+    if (!maxBullets) return summary
+    
+    const lines = summary.split('\n').filter(l => l.trim())
+    return lines.slice(0, maxBullets).join('\n')
   }
 }
