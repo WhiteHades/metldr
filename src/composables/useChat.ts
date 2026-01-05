@@ -65,7 +65,10 @@ function getUrlState(url: string): ChatState {
 function saveCurrentToUrlState(): void {
   if (activeUrl) {
     const state = getUrlState(activeUrl)
-    state.messages = [...chatMessages.value]
+    // only overwrite messages if chatMessages has more (urlStates may have been updated directly during streaming)
+    if (chatMessages.value.length >= state.messages.length) {
+      state.messages = [...chatMessages.value]
+    }
     state.loading = chatLoading.value
     state.indexing = chatIndexing.value
     state.input = chatInput.value
@@ -359,21 +362,37 @@ RULES:
               log.log('creating Chrome AI session...')
               
               try {
-                const session = await LanguageModel.create()
+                const state = getUrlState(targetUrl)
+                const recentMessages = state.messages.slice(-6).map(m => ({
+                  role: m.role as 'user' | 'assistant',
+                  content: m.content
+                }))
+                
+                const initialPrompts: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+                  { role: 'system', content: systemPrompt }
+                ]
+                
+                // add chat history (exclude the current message we just added)
+                for (const msg of recentMessages) {
+                  if (msg.content !== userMessage) {
+                    initialPrompts.push(msg)
+                  }
+                }
+                
+                log.log('Chrome AI session with initial prompts:', initialPrompts.length)
+                const session = await LanguageModel.create({ initialPrompts })
                 log.log('session created')
                   
                 const start = performance.now()
-                const fullPrompt = `${systemPrompt}\n\nUser question: ${userMessage}`
                 
                 let fullResponse = ''
                 
                 try {
-                  const stream = session.promptStreaming(fullPrompt)
+                  const stream = session.promptStreaming(userMessage)
                   
                   for await (const chunk of stream) {
                     fullResponse += chunk
                     
-                    // update target URL's state - safe even if user switched tabs
                     updateUrlState(targetUrl, state => {
                       const lastMsg = state.messages[state.messages.length - 1]
                       if (lastMsg?.role === 'assistant') {
@@ -383,7 +402,7 @@ RULES:
                       }
                     })
                     
-                    // debounced auto-save to IDB during streaming
+                    // debounced auto save to IDB during streaming
                     debouncedSaveChat(targetUrl, getUrlState(targetUrl).messages)
                     
                     await nextTick()
@@ -392,7 +411,7 @@ RULES:
                     }
                   }
                   
-                  flushSaveChat() // cancel pending debounce since we'll do full save at end
+                  flushSaveChat()
                   
                   const timing = Math.round(performance.now() - start)
                   log.log('streaming complete', { len: fullResponse.length, timing })
@@ -410,7 +429,7 @@ RULES:
                   log.log('streaming failed, trying non-streaming...', (streamErr as Error).message)
                   
                   try {
-                    const result = await session.prompt(fullPrompt)
+                    const result = await session.prompt(userMessage)
                     const timing = Math.round(performance.now() - start)
                     
                     updateUrlState(targetUrl, state => {

@@ -193,12 +193,14 @@ export function useTabSession() {
       
       previousUrl = newUrl
       
-      // when switchChatUrl is used, in-memory state has priority over IDB
-      // so we only load pageSummary from IDB, not chatMessages
       if (switchChatUrl) {
-        // load pageSummary from IDB but keep in-memory chat state
-        const dummyChatRef = ref<AppChatMessage[]>([])
-        await loadTabSession(newUrl, dummyChatRef, pageSummary, summaryCollapsed)
+        if (chatMessages.value.length === 0) {
+          await loadTabSession(newUrl, chatMessages, pageSummary, summaryCollapsed)
+          log.log('loaded chat from IDB (in-memory was empty)')
+        } else {
+          const dummyChatRef = ref<AppChatMessage[]>([])
+          await loadTabSession(newUrl, dummyChatRef, pageSummary, summaryCollapsed)
+        }
       } else {
         await loadTabSession(newUrl, chatMessages, pageSummary, summaryCollapsed)
       }
