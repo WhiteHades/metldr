@@ -1,5 +1,6 @@
 import { UIService } from './UIService'
 import { WordPopup } from './WordPopup'
+import { PdfToolbar } from './PdfToolbar'
 import { emailExtractor } from './EmailExtractor'
 import { ArticleExtractor } from './ArticleExtractor'
 import type { ThemeColors } from '../types'
@@ -31,7 +32,9 @@ export class ContentScriptBootstrap {
     } else if (isGmail) {
       console.log('metldr: gmail mode, waiting for inboxsdk')
     } else {
-      console.log('metldr: non-gmail mode, word popup only')
+      console.log('metldr: non-gmail mode, word popup + pdf toolbar')
+      // pdf toolbar auto-initializes on pdf pages
+      new PdfToolbar()
     }
   }
 

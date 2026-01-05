@@ -160,26 +160,50 @@ async function loadPipeline(task: LocalTask): Promise<Pipeline> {
 }
 
 // embedding with matryoshka slicing
+// nomic-embed-text-v1.5 has 8192 token limit (~4 chars/token)
+const MAX_EMBED_CHARS = 24000 // ~6000 tokens, leaving headroom
+
 async function embed(texts: string[], isQuery: boolean): Promise<number[][]> {
+  console.log('[GPU Bridge] embed called:', { textCount: texts.length, isQuery })
+  
   const extractor = await getPipeline('embed')
+  if (!extractor) {
+    throw new Error('Failed to get embedding pipeline')
+  }
+  
   const results: number[][] = []
   const targetDims = 256 // matryoshka slice
   
-  for (const text of texts) {
+  for (let i = 0; i < texts.length; i++) {
+    const text = texts[i]
+    
+    // warn about oversized text (chunking should prevent this)
+    if (text.length > MAX_EMBED_CHARS) {
+      console.warn(`[GPU Bridge] WARNING: text ${i + 1} is ${text.length} chars (>${MAX_EMBED_CHARS}), may exceed token limit`)
+    }
+    
     const prefixed = isQuery ? `search_query: ${text}` : `search_document: ${text}`
+    
+    console.log(`[GPU Bridge] Embedding text ${i + 1}/${texts.length} (${text.length} chars)`)
     const output = await extractor(prefixed, { pooling: 'mean', normalize: true })
+    
+    if (!output || !output.data) {
+      throw new Error(`Embedding failed for text ${i + 1}: no output data`)
+    }
     
     const full = output.data as Float32Array
     const sliced = full.slice(0, targetDims)
     
     // renormalize after slice
     let norm = 0
-    for (let i = 0; i < sliced.length; i++) norm += sliced[i] ** 2
+    for (let j = 0; j < sliced.length; j++) norm += sliced[j] ** 2
     norm = Math.sqrt(norm)
-    if (norm > 0) for (let i = 0; i < sliced.length; i++) sliced[i] /= norm
+    if (norm > 0) for (let j = 0; j < sliced.length; j++) sliced[j] /= norm
     
     results.push(Array.from(sliced))
   }
+  
+  console.log('[GPU Bridge] embed complete:', { resultCount: results.length })
   return results
 }
 
@@ -275,8 +299,17 @@ async function handleMessage(request: any): Promise<any> {
     
     return { ok: true, data, timing: performance.now() - start }
   } catch (err) {
-    console.error('[GPU Bridge] Error:', err)
-    return { ok: false, error: (err as Error).message }
+    // comprehensive error capture
+    let errorMessage = 'Unknown error'
+    if (err instanceof Error) {
+      errorMessage = err.message || err.name || String(err)
+    } else if (typeof err === 'string') {
+      errorMessage = err
+    } else if (err && typeof err === 'object') {
+      errorMessage = JSON.stringify(err)
+    }
+    console.error('[GPU Bridge] Error:', errorMessage, err)
+    return { ok: false, error: errorMessage || 'Sandbox execution failed' }
   }
 }
 
