@@ -3,8 +3,8 @@ import { sendToBackground, withTiming } from './useMessaging'
 import type { AppPageSummary, SummaryPromptData, AppSummaryResponse, ExtractedData } from '@/types'
 import { logger } from '@/services/LoggerService'
 import { cacheService } from '@/services/CacheService'
+import { storageService } from '@/services/StorageService'
 import { pdfService } from '@/services/pdf/PdfService'
-import { concurrencyManager } from '@/services/ConcurrencyManager'
 
 const log = logger.createScoped('PageSummary')
 
@@ -58,6 +58,18 @@ const isLocalPdfPending = computed(() => {
   return isPdf && isLocal && !pageSummary.value?.fullContent
 })
 
+// get active AI provider and model from storage (same pattern as useSettings)
+async function getActiveAIInfo(): Promise<{ provider: 'chrome-ai' | 'ollama', model: string }> {
+  try {
+    const provider = await storageService.get<'chrome-ai' | 'ollama'>('preferredProvider', 'chrome-ai')
+    const selectedModel = await storageService.get<string>('selectedModel', 'llama3.2')
+    const model = provider === 'chrome-ai' ? 'gemini-nano' : selectedModel
+    return { provider, model }
+  } catch {
+    return { provider: 'chrome-ai', model: 'gemini-nano' }
+  }
+}
+
 // system urls where AI features should be disabled
 const isSystemUrl = computed(() => {
   const url = currentTabUrl.value?.toLowerCase() || ''
@@ -95,13 +107,13 @@ function parseBullets(text: string): string[] {
   return bullets
 }
 
-// index content to RAG directly from side panel context (embeddings require page context)
+// index content via background -> offscreen for persistence (survives panel close)
 async function indexToRag(text: string, metadata: { sourceId: string; sourceUrl: string; sourceType: 'article' | 'email' | 'pdf'; title?: string }) {
   try {
-    const { ragService } = await import('@/services/rag/RagService')
-    await concurrencyManager.execute('indexing', metadata.sourceUrl, async (signal) => {
-      if (signal.aborted) throw new Error('Indexing aborted')
-      await ragService.indexChunks(text, metadata)
+    await sendToBackground({
+      type: 'RAG_INDEX_CHUNKS',
+      text,
+      metadata
     })
     log.log('RAG indexing complete', metadata.sourceId.slice(0, 50))
   } catch (err) {
@@ -220,19 +232,22 @@ export function usePageSummary() {
           
           const urlParts = tab.url.split('/')
           const pdfFilename = decodeURIComponent(urlParts[urlParts.length - 1] || 'PDF Document')
-          
           const bullets = parseBullets(pdfSummary)
+          const aiInfo = await getActiveAIInfo()
+          const pdfWordCount = pdfSummary.split(/\s+/).length
+          const pdfReadTimeMin = Math.max(1, Math.round(pdfWordCount / 200))
+          
           const summaryData: AppPageSummary = {
             title: pdfFilename.replace('.pdf', ''),
             author: undefined,
             publishDate: undefined,
             publication: undefined,
             bullets: bullets.length ? bullets : [pdfSummary.slice(0, 200) + '...'],
-            readTime: undefined,
+            readTime: `${pdfReadTimeMin} min`,
             fullContent: pdfSummary,
-            wordCount: pdfSummary.split(/\\s+/).length,
+            wordCount: pdfWordCount,
             timestamp: Date.now(),
-            timing: { llm: timing, total: timing, cached: false, model: 'pdf-recursive', provider: 'ollama' }
+            timing: { llm: timing, total: timing, cached: false, model: aiInfo.model, provider: aiInfo.provider }
           }
           
           pageSummary.value = summaryData
@@ -409,20 +424,26 @@ export function usePageSummary() {
       summaryLoading.value = true
       summaryError.value = null
       
+      const startTime = performance.now()
       const result = await pdfService.openAndSummarize()
+      const totalTime = Math.round(performance.now() - startTime)
       
       const bullets = parseBullets(result.summary)
+      const aiInfo = await getActiveAIInfo()
+      const wordCount = result.fullText.split(/\s+/).length
+      const readTimeMin = Math.max(1, Math.round(wordCount / 200)) // ~200 wpm avg reading speed
+      
       const summaryData: AppPageSummary = {
         title: result.filename.replace('.pdf', ''),
         author: undefined,
         publishDate: undefined,
         publication: undefined,
         bullets: bullets.length ? bullets : [result.summary.slice(0, 200) + '...'],
-        readTime: undefined,
-        fullContent: result.fullText, // store full text, not summary (for chat context)
-        wordCount: result.fullText.split(/\s+/).length,
+        readTime: `${readTimeMin} min`,
+        fullContent: result.fullText,
+        wordCount: wordCount,
         timestamp: Date.now(),
-        timing: { llm: 0, total: 0, cached: false, model: 'pdf-recursive', provider: 'ollama' }
+        timing: { llm: totalTime, total: totalTime, cached: false, model: aiInfo.model, provider: aiInfo.provider }
       }
       
       pageSummary.value = summaryData
