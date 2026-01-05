@@ -4,9 +4,28 @@ import type { AIProviderPreference } from './useSettings'
 import { sendToBackground, withTiming } from './useMessaging'
 import { logger } from '@/services/LoggerService'
 import { analyticsService } from '@/services/AnalyticsService'
-import { concurrencyManager } from '@/services/ConcurrencyManager'
+import { cacheService } from '@/services/CacheService'
 
 const log = logger.createScoped('Chat')
+
+let saveTimeout: ReturnType<typeof setTimeout> | null = null
+const SAVE_DEBOUNCE_MS = 2000
+
+function debouncedSaveChat(url: string, messages: AppChatMessage[]): void {
+  if (saveTimeout) clearTimeout(saveTimeout)
+  saveTimeout = setTimeout(() => {
+    const normalizedUrl = url.split('?')[0].replace(/\/+$/, '')
+    cacheService.setTabSession(normalizedUrl, messages, null, false)
+      .catch(err => log.warn('auto-save failed', err.message))
+  }, SAVE_DEBOUNCE_MS)
+}
+
+function flushSaveChat(): void {
+  if (saveTimeout) {
+    clearTimeout(saveTimeout)
+    saveTimeout = null
+  }
+}
 
 // URL-scoped state - each URL has its own isolated state
 interface ChatState {
@@ -233,22 +252,19 @@ export function useChat() {
       let relevantContext = ''
       
       if (contextText && currentUrl) {
-        const { ragService } = await import('@/services/rag/RagService')
-        const hasIndex = await ragService.hasIndexedContent(currentUrl)
+        // route through background -> offscreen for persistence (survives panel close)
+        const hasIndexRes = await sendToBackground({ type: 'RAG_HAS_INDEXED_CONTENT', sourceUrl: currentUrl }) as { success: boolean; hasContent?: boolean }
+        const hasIndex = hasIndexRes?.success && hasIndexRes.hasContent
         
         if (!hasIndex) {
           if (contextText.length > CONTEXT_THRESHOLD) {
             updateUrlState(targetUrl, s => { s.indexing = true })
             log.log(`indexing large doc for chat... ${contextText.length} chars`)
             try {
-              await concurrencyManager.execute('indexing', currentUrl, async (signal) => {
-                if (signal.aborted) throw new Error('Indexing aborted')
-                await ragService.indexChunks(contextText, {
-                  sourceId: currentUrl,
-                  sourceUrl: currentUrl,
-                  sourceType: 'article',
-                  title: ''
-                })
+              await sendToBackground({
+                type: 'RAG_INDEX_CHUNKS',
+                text: contextText,
+                metadata: { sourceId: currentUrl, sourceUrl: currentUrl, sourceType: 'article', title: '' }
               })
             } catch (indexErr) {
               if ((indexErr as Error).message !== 'Indexing aborted') {
@@ -258,36 +274,31 @@ export function useChat() {
               updateUrlState(targetUrl, s => { s.indexing = false })
             }
           } else {
-            concurrencyManager.execute('indexing', currentUrl, async (signal) => {
-              if (signal.aborted) return
-              await ragService.indexChunks(contextText, {
-                sourceId: currentUrl,
-                sourceUrl: currentUrl,
-                sourceType: 'article',
-                title: ''
-              })
+            // fire and forget for small docs - background handles concurrency
+            sendToBackground({
+              type: 'RAG_INDEX_CHUNKS',
+              text: contextText,
+              metadata: { sourceId: currentUrl, sourceUrl: currentUrl, sourceType: 'article', title: '' }
             }).catch(err => log.warn('async indexing failed', (err as Error).message))
           }
         }
         
         if (contextText.length > CONTEXT_THRESHOLD) {
-          relevantContext = await ragService.searchWithContext(userMessage, 5, currentUrl)
+          const searchRes = await sendToBackground({ type: 'RAG_SEARCH_WITH_CONTEXT', query: userMessage, limit: 5, sourceUrl: currentUrl }) as { success: boolean; context?: string }
+          relevantContext = searchRes?.success ? (searchRes.context || '') : ''
           log.log(`found context from RAG: ${relevantContext.length} chars`)
           
           if (!relevantContext) {
             log.log('RAG empty for large doc, triggering indexing...')
             updateUrlState(targetUrl, s => { s.indexing = true })
             try {
-              await concurrencyManager.execute('indexing', currentUrl, async (signal) => {
-                if (signal.aborted) throw new Error('Indexing aborted')
-                await ragService.indexChunks(contextText, {
-                  sourceId: currentUrl,
-                  sourceUrl: currentUrl,
-                  sourceType: 'article',
-                  title: ''
-                })
+              await sendToBackground({
+                type: 'RAG_INDEX_CHUNKS',
+                text: contextText,
+                metadata: { sourceId: currentUrl, sourceUrl: currentUrl, sourceType: 'article', title: '' }
               })
-              relevantContext = await ragService.searchWithContext(userMessage, 5, currentUrl)
+              const retryRes = await sendToBackground({ type: 'RAG_SEARCH_WITH_CONTEXT', query: userMessage, limit: 5, sourceUrl: currentUrl }) as { success: boolean; context?: string }
+              relevantContext = retryRes?.success ? (retryRes.context || '') : ''
               log.log(`RAG retry after indexing: ${relevantContext.length} chars`)
             } catch (indexErr) {
               log.warn('indexing failed, using truncated content', (indexErr as Error).message)
@@ -372,11 +383,16 @@ RULES:
                       }
                     })
                     
+                    // debounced auto-save to IDB during streaming
+                    debouncedSaveChat(targetUrl, getUrlState(targetUrl).messages)
+                    
                     await nextTick()
                     if (activeUrl === targetUrl && chatContainer.value) {
                       chatContainer.value.scrollTop = chatContainer.value.scrollHeight
                     }
                   }
+                  
+                  flushSaveChat() // cancel pending debounce since we'll do full save at end
                   
                   const timing = Math.round(performance.now() - start)
                   log.log('streaming complete', { len: fullResponse.length, timing })
@@ -466,11 +482,16 @@ RULES:
               }
             })
             
+            // debounced auto-save to IDB during streaming
+            debouncedSaveChat(targetUrl, getUrlState(targetUrl).messages)
+            
             await nextTick()
             if (activeUrl === targetUrl && chatContainer.value) {
               chatContainer.value.scrollTop = chatContainer.value.scrollHeight
             }
           }
+          
+          flushSaveChat() // cancel pending debounce since we'll do full save at end
           
           const timing = Math.round(performance.now() - start)
           log.log('ollama streaming complete', { len: fullResponse.length, timing })
@@ -549,6 +570,22 @@ RULES:
     emailContext.value = null
   }
 
+  // sync indexing status from background (call on sidepanel open/reopen)
+  async function syncIndexingStatus(): Promise<void> {
+    const url = await getActiveUrl()
+    if (!url) return
+    
+    try {
+      const res = await sendToBackground({ type: 'RAG_IS_INDEXING', sourceId: url }) as { success: boolean; isIndexing?: boolean }
+      if (res?.success && res.isIndexing) {
+        log.log(`[Sync] background is indexing ${url.slice(0, 40)}`)
+        updateUrlState(url, s => { s.indexing = true })
+      }
+    } catch (err) {
+      log.warn('[Sync] failed to query indexing status', (err as Error).message)
+    }
+  }
+
   return {
     // State
     chatMessages,
@@ -561,6 +598,7 @@ RULES:
     sendChatMessage,
     clearChat,
     resetChatState,
+    syncIndexingStatus,
     
     // URL-scoped state management
     switchToUrl,
