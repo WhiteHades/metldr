@@ -481,7 +481,7 @@ export interface GetEmailCacheMessage {
 export interface SetEmailCacheMessage {
   type: 'SET_EMAIL_CACHE'
   emailId: string
-  summary: unknown
+  summary: EmailSummary
 }
 
 export type BackgroundMessage =
@@ -494,6 +494,16 @@ export type BackgroundMessage =
   | CheckHealthMessage
   | GetEmailCacheMessage
   | SetEmailCacheMessage
+  | { type: 'EXTRACT_ONLY'; tabId: number }
+  | { type: 'RAG_INDEX'; entry: VectorEntry }
+  | { type: 'RAG_INDEX_CHUNKS'; text: string; metadata: Record<string, unknown> }
+  | { type: 'RAG_SEARCH'; query: string; limit?: number }
+  | { type: 'RAG_HAS_INDEXED_CONTENT'; sourceUrl: string }
+  | { type: 'RAG_SEARCH_WITH_CONTEXT'; query: string; limit?: number; sourceUrl?: string }
+  | { type: 'RAG_IS_INDEXING'; sourceId: string }
+  | { type: 'PDF_SUMMARIZE'; url: string }
+  | { type: 'PDF_EXTRACT_TEXT'; url: string }
+  | { type: 'OPEN_SIDE_PANEL'; focus?: string }
 
 export type ResponseCallback = (response: unknown) => void
 
