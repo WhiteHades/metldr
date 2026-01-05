@@ -24,6 +24,10 @@ function normalizeUrl(url: string | null): string | null {
   if (!url) return null
   try {
     const u = new URL(url)
+    // file:// URLs have origin='null' (literal string), handle specially
+    if (u.protocol === 'file:') {
+      return url.split('#')[0].split('?')[0] // strip hash and query, keep full path
+    }
     return `${u.origin}${u.pathname}`
   } catch {
     return url
@@ -217,9 +221,13 @@ export function useTabSession() {
     refreshTabUrl().then(() => {
       if (currentTabUrl.value) {
         previousUrl = currentTabUrl.value
+        
+        if (switchChatUrl) {
+          switchChatUrl(currentTabUrl.value)
+        }
+        
         const isPdf = currentTabUrl.value.toLowerCase().endsWith('.pdf') || currentTabUrl.value.includes('.pdf?')
         loadTabSession(currentTabUrl.value, chatMessages, pageSummary, summaryCollapsed).then(hasSession => {
-          // Always auto-fetch for PDFs, otherwise respect summaryMode
           if (!hasSession && aiReady.value && (summaryMode.value === 'auto' || isPdf)) {
             fetchSummary(false, 'auto')
           }
