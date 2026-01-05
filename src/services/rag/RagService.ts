@@ -294,14 +294,20 @@ export class RagService {
       let filtered = results
       if (sourceUrl) {
         const sourceBase = sourceUrl.split('?')[0]
-        filtered = results.filter(r => {
+        filtered = results.filter((r, i) => {
           const entrySourceUrl = r.entry.metadata?.sourceUrl as string | undefined
           if (!entrySourceUrl || typeof entrySourceUrl !== 'string') return false
           const entryBase = entrySourceUrl.split('?')[0]
-          return entrySourceUrl === sourceUrl || 
+          
+          const match = entrySourceUrl === sourceUrl || 
                  entryBase === sourceBase ||
                  entryBase.startsWith(sourceBase) ||
                  sourceBase.startsWith(entryBase)
+          
+          if (i < 3 && !match) {
+            console.log(`[RagService] URL mismatch: query="${sourceBase.slice(0, 60)}" vs entry="${entryBase.slice(0, 60)}"`)
+          }
+          return match
         })
         
         console.log(`[RagService] searchWithContext: ${results.length} total -> ${filtered.length} filtered for ${sourceUrl.slice(0, 50)}`)
