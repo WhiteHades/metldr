@@ -27,6 +27,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "gsap": "^3.13.0",
+    "llm-splitter": "^0.2.0",
     "lucide-vue-next": "^0.553.0",
     "marked": "^17.0.1",
     "motion-v": "^1.7.4",
@@ -37,6 +38,8 @@
     "streamdown-vue": "^1.0.29",
     "tailwind-merge": "^3.4.0",
     "tailwindcss": "^4.1.17",
+    "tesseract-wasm": "^0.11.0",
+    "unpdf": "^1.4.0",
     "voy-search": "^0.6.3",
     "vue": "^3.5.22",
     "vue-stick-to-bottom": "^0.1.0"
