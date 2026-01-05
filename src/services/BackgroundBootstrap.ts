@@ -4,10 +4,12 @@ import { dictionaryService } from './DictionaryService'
 import { WordService } from './WordService'
 import { EmailService } from './EmailService'
 import { PageService } from './PageService'
+import { pdfService } from './pdf/PdfService'
 import { SummaryPrefs } from '../utils/summaryPrefs'
 import { aiGateway } from './ai'
 import { logger } from './LoggerService'
 import { ragService } from './rag/RagService'
+import { concurrencyManager } from './ConcurrencyManager'
 import { analyticsService } from './AnalyticsService'
 import type {
   EmailSummaryMessage,
@@ -58,8 +60,9 @@ export class BackgroundBootstrap {
       log.error('dictionary init failed', (err as Error).message)
     }
     
-    // model preloading now happens from side panel/welcome page context (service worker can't create iframe)
-    // this._preloadEmbeddingModel()
+    // preload embedding model on startup via offscreen document
+    // reduces first-indexing latency from ~150s to ~5s
+    this._preloadEmbeddingModel()
     
     this.isInitialized = true
 
@@ -136,6 +139,38 @@ export class BackgroundBootstrap {
 
       if (msg.type === 'RAG_SEARCH') {
         this._onRagSearch(msg as { type: string; query: string; limit?: number }, respond)
+        return true
+      }
+
+      if (msg.type === 'RAG_HAS_INDEXED_CONTENT') {
+        this._onRagHasIndexedContent(msg as { type: string; sourceUrl: string }, respond)
+        return true
+      }
+
+      if (msg.type === 'RAG_SEARCH_WITH_CONTEXT') {
+        this._onRagSearchWithContext(msg as { type: string; query: string; limit?: number; sourceUrl?: string }, respond)
+        return true
+      }
+
+      if (msg.type === 'RAG_IS_INDEXING') {
+        const { sourceId } = msg as { type: string; sourceId: string }
+        respond({ success: true, isIndexing: ragService.isIndexing(sourceId) })
+        return true
+      }
+
+      // pdf toolbar handlers
+      if (msg.type === 'PDF_SUMMARIZE') {
+        this._onPdfSummarize(msg as { type: string; url: string }, respond)
+        return true
+      }
+
+      if (msg.type === 'PDF_EXTRACT_TEXT') {
+        this._onPdfExtractText(msg as { type: string; url: string }, respond)
+        return true
+      }
+
+      if (msg.type === 'OPEN_SIDE_PANEL') {
+        this._onOpenSidePanel(msg as { type: string; focus?: string }, respond)
         return true
       }
 
@@ -570,11 +605,19 @@ export class BackgroundBootstrap {
   static _onRagIndexChunks(msg: { type: string; text: string; metadata: any }, respond: ResponseCallback): void {
     (async () => {
       try {
-        await ragService.indexChunks(msg.text, msg.metadata)
+        const sourceUrl = msg.metadata?.sourceUrl || msg.metadata?.sourceId || 'unknown'
+        // wrap in concurrency manager to prevent duplicate indexing on rapid tab switches
+        await concurrencyManager.execute('indexing', sourceUrl, async (signal) => {
+          if (signal.aborted) throw new Error('Indexing aborted')
+          await ragService.indexChunks(msg.text, msg.metadata)
+        })
         respond({ success: true })
       } catch (err) {
-        log.error('onRagIndexChunks', (err as Error).message)
-        respond({ success: false, error: (err as Error).message })
+        const errMsg = (err as Error).message
+        if (errMsg !== 'Indexing aborted' && errMsg !== 'Operation cancelled') {
+          log.error('onRagIndexChunks', errMsg)
+        }
+        respond({ success: false, error: errMsg })
       }
     })()
   }
@@ -591,10 +634,115 @@ export class BackgroundBootstrap {
     })()
   }
 
+  static _onRagHasIndexedContent(msg: { type: string; sourceUrl: string }, respond: ResponseCallback): void {
+    (async () => {
+      try {
+        const hasContent = await ragService.hasIndexedContent(msg.sourceUrl)
+        respond({ success: true, hasContent })
+      } catch (err) {
+        log.error('onRagHasIndexedContent', (err as Error).message)
+        respond({ success: false, error: (err as Error).message, hasContent: false })
+      }
+    })()
+  }
+
+  static _onRagSearchWithContext(msg: { type: string; query: string; limit?: number; sourceUrl?: string }, respond: ResponseCallback): void {
+    (async () => {
+      try {
+        const context = await ragService.searchWithContext(msg.query, msg.limit || 5, msg.sourceUrl)
+        respond({ success: true, context })
+      } catch (err) {
+        log.error('onRagSearchWithContext', (err as Error).message)
+        respond({ success: false, error: (err as Error).message, context: '' })
+      }
+    })()
+  }
+
   static _preloadEmbeddingModel(): void {
     // preload embedding model via LocalModelProvider (creates sandbox iframe automatically)
     aiGateway.initializeLocalModels(['embed'])
       .then(() => log.log('Embedding model preloaded'))
       .catch(err => log.warn('Model preload failed', err.message))
   }
+
+  // pdf toolbar handlers
+  static _onPdfSummarize(msg: { type: string; url: string }, respond: ResponseCallback): void {
+    (async () => {
+      try {
+        const { url } = msg
+        if (!url) {
+          respond({ success: false, error: 'no url provided' })
+          return
+        }
+
+        log.log('pdf summarize request:', url.slice(0, 80))
+
+        // use same queue as email/page summarization
+        const result = await this._enqueueSummary(() => pdfService.summarize(url))
+        
+        if (typeof result === 'object' && 'success' in result && !result.success) {
+          respond({ success: false, error: result.error })
+          return
+        }
+        
+        const summary = result as string
+        
+        // parse bullets from summary text
+        const bullets = summary
+          .split('\n')
+          .filter(line => line.trim().startsWith('•') || line.trim().startsWith('-') || line.trim().startsWith('*'))
+          .map(line => line.replace(/^[•\-*]\s*/, '').trim())
+          .filter(Boolean)
+
+        // if no bullets found, split by sentences
+        const finalBullets = bullets.length > 0 
+          ? bullets 
+          : summary.split(/[.!?]+/).filter(s => s.trim().length > 20).slice(0, 5)
+
+        respond({ success: true, summary: { bullets: finalBullets, raw: summary } })
+      } catch (err) {
+        log.error('onPdfSummarize', (err as Error).message)
+        respond({ success: false, error: (err as Error).message })
+      }
+    })()
+  }
+
+  static _onPdfExtractText(msg: { type: string; url: string }, respond: ResponseCallback): void {
+    (async () => {
+      try {
+        const { url } = msg
+        if (!url) {
+          respond({ success: false, error: 'no url provided' })
+          return
+        }
+
+        log.log('pdf extract text request:', url.slice(0, 80))
+
+        const text = await pdfService.extractFromUrl(url)
+        const wordCount = text.split(/\s+/).filter(Boolean).length
+
+        respond({ success: true, text, wordCount })
+      } catch (err) {
+        log.error('onPdfExtractText', (err as Error).message)
+        respond({ success: false, error: (err as Error).message })
+      }
+    })()
+  }
+
+  static _onOpenSidePanel(msg: { type: string; focus?: string }, respond: ResponseCallback): void {
+    (async () => {
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+        if (tab?.id) {
+          await chrome.sidePanel.open({ tabId: tab.id })
+          log.log('side panel opened', msg.focus ? `focus: ${msg.focus}` : '')
+        }
+        respond({ success: true })
+      } catch (err) {
+        log.error('onOpenSidePanel', (err as Error).message)
+        respond({ success: false, error: (err as Error).message })
+      }
+    })()
+  }
 }
+
