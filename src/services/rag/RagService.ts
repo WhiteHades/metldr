@@ -14,7 +14,6 @@ interface ChunkMetadata {
 interface RagMetadataEntry {
   sourceId: string
   contentHash: string
-  simHash: string
   chunkCount: number
   timestamp: number
 }
@@ -74,8 +73,6 @@ function hexToBigint(hex: string): bigint {
 
 export class RagService {
   private contentHashes = new Map<string, string>()
-  private simHashes = new Map<string, bigint>()
-  private readonly SIMHASH_THRESHOLD = 5
   private metadataLoaded = false
   private loadingPromise: Promise<void> | null = null
   private activeIndexing = new Map<string, Promise<void>>()
@@ -93,7 +90,6 @@ export class RagService {
         
         for (const entry of entries) {
           this.contentHashes.set(entry.sourceId, entry.contentHash)
-          this.simHashes.set(entry.sourceId, hexToBigint(entry.simHash))
         }
         
         console.log(`[RagService] Loaded ${entries.length} metadata entries (${Date.now() - startTime}ms)`)
@@ -107,12 +103,11 @@ export class RagService {
     await this.loadingPromise
   }
 
-  private async persistMetadata(sourceId: string, contentHash: string, simHashVal: bigint, chunkCount: number): Promise<void> {
+  private async persistMetadata(sourceId: string, contentHash: string, chunkCount: number): Promise<void> {
     try {
       const entry: RagMetadataEntry = {
         sourceId,
         contentHash,
-        simHash: bigintToHex(simHashVal),
         chunkCount,
         timestamp: Date.now()
       }
@@ -188,21 +183,8 @@ export class RagService {
         }
       }
 
-      // check for near-duplicate content via simhash
-      const textSimHash = simHash(text)
-      for (const [existingId, existingSimHash] of this.simHashes) {
-        if (existingId !== metadata.sourceId && hammingDistance(textSimHash, existingSimHash) < this.SIMHASH_THRESHOLD) {
-          stats.skipped = true
-          stats.skipReason = 'duplicate'
-          stats.wallClockMs = Date.now() - wallClockStart
-          this.lastStats = stats
-          console.log(`[RagService] SKIPPED: Near-duplicate of ${existingId.slice(0, 50)} [${stats.wallClockMs}ms]`)
-          return
-        }
-      }
-
-      // chunk the content
-      const chunks = await chunkingService.chunkForEmbedding(text)
+      const contentType = metadata.sourceType === 'email' ? 'email' : metadata.sourceType === 'pdf' ? 'pdf' : 'article'
+      const chunks = await chunkingService.chunkForEmbedding(text, contentType as 'email' | 'article' | 'pdf')
       if (chunks.length === 0) {
         stats.skipped = true
         stats.skipReason = 'no_chunks'
@@ -235,13 +217,10 @@ export class RagService {
       await this.embedAndStoreBatched(entries, EMBEDDING_CONCURRENCY)
       stats.embeddingMs = Date.now() - embedStart
       
-      // persist metadata for future deduplication
       const persistStart = Date.now()
       this.contentHashes.set(metadata.sourceId, contentHash)
-      this.simHashes.set(metadata.sourceId, textSimHash)
-      await this.persistMetadata(metadata.sourceId, contentHash, textSimHash, chunks.length)
+      await this.persistMetadata(metadata.sourceId, contentHash, chunks.length)
       
-      // force save VOY index to persist embeddings
       await vectorStore.forceSave()
       stats.storageMs = Date.now() - persistStart
       
