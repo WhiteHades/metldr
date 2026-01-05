@@ -1,105 +1,176 @@
-import { localModels } from '../ai/LocalModelProvider'
+import { split, getChunk } from 'llm-splitter'
 
-const DEFAULT_TARGET_TOKENS = 1500
-const DEFAULT_OVERLAP_TOKENS = 200
-const MAX_TOKENS = 8000
+// content-type configs based on 2025 industry research
+// sources: arXiv, NVIDIA RAG best practices, Milvus
+const CHUNK_CONFIGS = {
+  email: {
+    maxTokens: 200,    // ~800 chars - fact-based retrieval
+    overlap: 30,
+    maxChars: 800
+  },
+  article: {
+    maxTokens: 300,    // ~1200 chars - balanced context
+    overlap: 50,
+    maxChars: 1200
+  },
+  pdf: {
+    maxTokens: 400,    // ~1600 chars - broader context
+    overlap: 60,
+    maxChars: 1600
+  }
+} as const
+
+export type ContentType = 'email' | 'article' | 'pdf'
 
 export interface ChunkOptions {
-  targetTokens?: number
-  overlapTokens?: number
+  contentType?: ContentType
+  chunkSize?: number
+  chunkOverlap?: number
 }
 
 export interface ChunkResult {
   text: string
   index: number
   tokenCount: number
+  start: number
+  end: number
 }
 
-async function countTokens(texts: string[]): Promise<number[]> {
-  return localModels.tokenize(texts)
-}
-
-// fast word-based estimate for initial chunking (avoid round-trip for every paragraph)
 function estimateTokens(text: string): number {
-  // ~1.3 tokens per word for English text
-  const words = text.split(/\s+/).filter(w => w.length > 0).length
-  return Math.ceil(words * 1.3)
+  if (!text) return 0
+  return Math.ceil(text.length / 4)
 }
 
-function splitIntoParagraphs(text: string): string[] {
-  return text.split(/\n\s*\n/).filter(p => p.trim().length > 0)
+function sanitizeText(text: string): string {
+  if (!text || typeof text !== 'string') return ''
+  return text
+    .replace(/\r\n/g, '\n')
+    .replace(/\t/g, ' ')
+    .replace(/ +/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
 }
 
-export async function chunk(text: string, options: ChunkOptions = {}): Promise<ChunkResult[]> {
-  const targetTokens = options.targetTokens || DEFAULT_TARGET_TOKENS
-  const overlapTokens = options.overlapTokens || DEFAULT_OVERLAP_TOKENS
-  
-  if (!text || text.trim().length === 0) return []
-  
-  const paragraphs = splitIntoParagraphs(text)
-  const chunks: ChunkResult[] = []
-  let currentParagraphs: string[] = []
-  let currentEstimate = 0
-  
-  for (const para of paragraphs) {
-    const paraEstimate = estimateTokens(para)
-    
-    if (currentEstimate + paraEstimate > targetTokens && currentParagraphs.length > 0) {
-      const chunkText = currentParagraphs.join('\n\n')
-      chunks.push({
-        text: chunkText,
-        index: chunks.length,
-        tokenCount: currentEstimate
-      })
-      
-      // overlap: keep last paragraph(s) up to overlapTokens
-      const overlapParas: string[] = []
-      let overlapCount = 0
-      for (let i = currentParagraphs.length - 1; i >= 0 && overlapCount < overlapTokens; i--) {
-        overlapParas.unshift(currentParagraphs[i])
-        overlapCount += estimateTokens(currentParagraphs[i])
-      }
-      currentParagraphs = overlapParas
-      currentEstimate = overlapCount
+export async function chunk(rawText: string, options: ChunkOptions = {}): Promise<ChunkResult[]> {
+  const text = sanitizeText(rawText)
+  if (!text || text.length < 50) {
+    if (text.length > 0) {
+      return [{
+        text,
+        index: 0,
+        tokenCount: estimateTokens(text),
+        start: 0,
+        end: text.length
+      }]
     }
-    
-    currentParagraphs.push(para)
-    currentEstimate += paraEstimate
+    return []
   }
   
-  if (currentParagraphs.length > 0) {
-    chunks.push({
-      text: currentParagraphs.join('\n\n'),
-      index: chunks.length,
-      tokenCount: currentEstimate
+  const contentType = options.contentType || 'article'
+  const config = CHUNK_CONFIGS[contentType]
+  
+  const maxChars = options.chunkSize || config.maxChars
+  const overlapChars = options.chunkOverlap || Math.floor(config.overlap * 4)
+  
+  if (overlapChars >= maxChars) {
+    throw new Error('Overlap must be less than chunk size')
+  }
+  
+  try {
+    const chunks = split(text, {
+      chunkSize: maxChars,
+      chunkOverlap: overlapChars
+    })
+    
+    const results: ChunkResult[] = chunks.map((c, i) => {
+      const chunkText = typeof c.text === 'string' ? c.text : (c.text?.join('\n\n') || '')
+      return {
+        text: chunkText,
+        index: i,
+        tokenCount: estimateTokens(chunkText),
+        start: c.start,
+        end: c.end
+      }
+    }).filter(c => c.text.length >= 50)
+    
+    // stats
+    const avgChars = results.reduce((sum, c) => sum + c.text.length, 0) / results.length
+    const avgTokens = results.reduce((sum, c) => sum + c.tokenCount, 0) / results.length
+    
+    console.log(
+      `[ChunkingService] ${text.length} chars → ${results.length} chunks ` +
+      `(avg: ${Math.round(avgChars)} chars, ${Math.round(avgTokens)} tokens) ` +
+      `type: ${contentType}`
+    )
+    
+    // warn if any chunk exceeds 1.5x target
+    results.forEach((chunk, i) => {
+      if (chunk.tokenCount > config.maxTokens * 1.5) {
+        console.warn(`[ChunkingService] Chunk ${i} large: ${chunk.tokenCount} tokens`)
+      }
+    })
+    
+    return results
+  } catch (err) {
+    console.error('[ChunkingService] Failed:', err)
+    return fallbackChunk(text, maxChars)
+  }
+}
+
+function fallbackChunk(text: string, targetChars: number): ChunkResult[] {
+  const sentences = text.split(/(?<=[.!?])\s+/).filter(s => s.length > 0)
+  const results: ChunkResult[] = []
+  let current = ''
+  let start = 0
+  
+  for (const sentence of sentences) {
+    if (current.length + sentence.length > targetChars && current.length > 0) {
+      results.push({
+        text: current.trim(),
+        index: results.length,
+        tokenCount: estimateTokens(current),
+        start,
+        end: start + current.length
+      })
+      start += current.length
+      current = ''
+    }
+    current += (current ? ' ' : '') + sentence
+  }
+  
+  if (current.trim()) {
+    results.push({
+      text: current.trim(),
+      index: results.length,
+      tokenCount: estimateTokens(current),
+      start,
+      end: start + current.length
     })
   }
   
-  // refine token counts with WASM tokenizer (batch call)
-  if (chunks.length > 0) {
-    try {
-      const exactCounts = await countTokens(chunks.map(c => c.text))
-      chunks.forEach((c, i) => { c.tokenCount = exactCounts[i] })
-    } catch (err) {
-      console.warn('[ChunkingService] WASM tokenization failed, using estimates:', err)
-    }
-  }
-  
-  return chunks
+  return results
 }
 
-export async function chunkForEmbedding(text: string): Promise<ChunkResult[]> {
-  return chunk(text, { targetTokens: 1500, overlapTokens: 200 })
+export async function chunkForEmbedding(text: string, contentType: ContentType = 'article'): Promise<ChunkResult[]> {
+  return chunk(text, { contentType })
 }
 
-// sync version for simple word count (keyword index still uses this)
 export function countWords(text: string): number {
   return text.split(/\s+/).filter(w => w.length > 0).length
 }
+
+export async function countTokens(texts: string[]): Promise<number[]> {
+  return texts.map(estimateTokens)
+}
+
+export { getChunk }
 
 export const chunkingService = {
   chunk,
   chunkForEmbedding,
   countWords,
-  countTokens
+  countTokens,
+  getChunk,
+  estimateTokens,
+  sanitizeText
 }
