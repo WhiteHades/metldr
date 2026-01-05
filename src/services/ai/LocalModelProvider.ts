@@ -272,7 +272,7 @@ class LocalModelProvider {
     if (cached) return cached
     
     const res = await this.send({ type: 'EMBED', payload: { texts: [text], isQuery } })
-    if (!res.ok) throw new Error(res.error)
+    if (!res.ok) throw new Error(res.error || 'Embedding failed: no error details from sandbox')
     
     const embedding = res.data.embeddings[0]
     this.embedCache.set(cacheKey, embedding)
@@ -281,7 +281,7 @@ class LocalModelProvider {
 
   async embedBatch(texts: string[], isQuery = false): Promise<number[][]> {
     const res = await this.send({ type: 'EMBED', payload: { texts, isQuery } })
-    if (!res.ok) throw new Error(res.error)
+    if (!res.ok) throw new Error(res.error || 'Batch embedding failed: no error details from sandbox')
     return res.data.embeddings
   }
 
