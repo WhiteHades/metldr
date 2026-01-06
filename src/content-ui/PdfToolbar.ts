@@ -8,7 +8,8 @@ const ICONS = {
   copy: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`,
   panel: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/></svg>`,
   file: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10,9 9,9 8,9"/></svg>`,
-  x: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`
+  x: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`,
+  upload: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>`
 }
 
 export class PdfToolbar {
@@ -20,8 +21,11 @@ export class PdfToolbar {
   private styleEl: HTMLElement | null = null
   private isExpanded = false
   private isPdfPage = false
+  private isLocalPdf = false
   private isProcessing = false
+  private sidePanelOpen = false
   private themeUnsubscribe: (() => void) | null = null
+  private localPdfPrompt: HTMLElement | null = null
 
   constructor() {
     this.detectPdfPage()
@@ -37,8 +41,11 @@ export class PdfToolbar {
       url.includes('.pdf#') ||
       contentType === 'application/pdf'
     
+    // detect if this is a local file:// PDF
+    this.isLocalPdf = this.isPdfPage && window.location.href.startsWith('file://')
+    
     if (this.isPdfPage) {
-      console.log('metldr: pdf page detected, injecting toolbar')
+      console.log('metldr: pdf page detected, injecting toolbar', { isLocal: this.isLocalPdf })
       this.injectFab()
     }
   }
@@ -86,19 +93,43 @@ export class PdfToolbar {
 
   private setupCloseHandlers(shadow: ShadowRoot): void {
     document.addEventListener('click', (e) => {
-      if (this.isExpanded && !shadow.contains(e.target as Node)) {
-        this.collapseMenu()
+      const path = e.composedPath()
+      let isClickInside = false
+      
+      for (const el of path) {
+        if (el === this.container) {
+          isClickInside = true
+          break
+        }
+        if (el instanceof Node && el.getRootNode() === shadow) {
+          isClickInside = true
+          break
+        }
       }
-    })
+      
+      if (!isClickInside) {
+        if (this.isExpanded) this.collapseMenu()
+        if (this.resultCard) this.hideResult()
+        if (this.localPdfPrompt) this.hideLocalPdfPrompt()
+      }
+    }, true)
     
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && this.isExpanded) {
-        this.collapseMenu()
+      if (e.key === 'Escape') {
+        if (this.isExpanded) this.collapseMenu()
+        if (this.resultCard) this.hideResult()
+        if (this.localPdfPrompt) this.hideLocalPdfPrompt()
       }
     })
   }
 
   private toggleMenu(): void {
+    if (this.resultCard || this.localPdfPrompt) {
+      this.hideResult()
+      this.hideLocalPdfPrompt()
+      return
+    }
+    
     if (this.isExpanded) {
       this.collapseMenu()
     } else {
@@ -118,8 +149,6 @@ export class PdfToolbar {
     const menuItems = [
       { icon: ICONS.fileText, label: 'Summarize', action: () => this.summarize() },
       { icon: ICONS.message, label: 'Chat', action: () => this.openChat() },
-      { icon: ICONS.copy, label: 'Copy Text', action: () => this.extractText() },
-      { icon: ICONS.panel, label: 'Open Panel', action: () => this.openSidePanel() },
     ]
     
     menuItems.forEach((item, i) => {
@@ -164,6 +193,14 @@ export class PdfToolbar {
 
   async summarize(): Promise<void> {
     if (this.isProcessing) return
+    
+    // for local PDFs, show file picker prompt directly
+    if (this.isLocalPdf) {
+      this.collapseMenu()
+      this.showLocalPdfPrompt('summarize')
+      return
+    }
+    
     this.isProcessing = true
     this.showLoading()
     
@@ -175,6 +212,9 @@ export class PdfToolbar {
       
       if (response?.success && response.summary) {
         this.showResult(response.summary.bullets)
+      } else if (response?.error === 'LOCAL_PDF_NEEDS_PICKER') {
+        // fallback: show file picker prompt
+        this.showLocalPdfPrompt('summarize')
       } else {
         this.showError(response?.error || 'Failed to summarize')
       }
@@ -190,6 +230,14 @@ export class PdfToolbar {
 
   async extractText(): Promise<void> {
     if (this.isProcessing) return
+    
+    // for local PDFs, show file picker prompt directly
+    if (this.isLocalPdf) {
+      this.collapseMenu()
+      this.showLocalPdfPrompt('copy')
+      return
+    }
+    
     this.isProcessing = true
     this.showLoading()
     
@@ -202,6 +250,9 @@ export class PdfToolbar {
       if (response?.success && response.text) {
         await navigator.clipboard.writeText(response.text)
         this.showToast(`Copied ${response.wordCount?.toLocaleString() || 'text'} words`)
+      } else if (response?.error === 'LOCAL_PDF_NEEDS_PICKER') {
+        // fallback: show file picker prompt
+        this.showLocalPdfPrompt('copy')
       } else {
         this.showError(response?.error || 'Failed to extract text')
       }
@@ -216,7 +267,8 @@ export class PdfToolbar {
   }
 
   openChat(): void {
-    chrome.runtime.sendMessage({ type: 'OPEN_SIDE_PANEL', focus: 'chat' })
+    // send toggle message - background will open panel if closed, or broadcast close message to panel
+    chrome.runtime.sendMessage({ type: 'TOGGLE_SIDE_PANEL', focus: 'chat' })
     this.collapseMenu()
   }
 
@@ -285,28 +337,27 @@ export class PdfToolbar {
       <ul class="result-bullets">
         ${bullets.slice(0, 5).map(b => `<li>${this.escapeHtml(b)}</li>`).join('')}
       </ul>
-      <div class="result-actions">
-        <button class="result-action" data-action="panel">Open in Panel</button>
-        <button class="result-action" data-action="copy">Copy</button>
-      </div>
+      <button class="result-copy-btn" aria-label="Copy summary">
+        ${ICONS.copy}
+        <span class="copy-feedback">Copied!</span>
+      </button>
     `
     
     shadow.appendChild(this.resultCard)
     
     requestAnimationFrame(() => this.resultCard?.classList.add('visible'))
     
-    this.resultCard.querySelector('.result-close')?.addEventListener('click', () => {
+    this.resultCard.querySelector('.result-close')?.addEventListener('click', (e) => {
+      e.stopPropagation()
       this.hideResult()
     })
     
-    this.resultCard.querySelector('[data-action="panel"]')?.addEventListener('click', () => {
-      this.openSidePanel()
-      this.hideResult()
-    })
-    
-    this.resultCard.querySelector('[data-action="copy"]')?.addEventListener('click', async () => {
+    const copyBtn = this.resultCard.querySelector('.result-copy-btn')
+    copyBtn?.addEventListener('click', async (e) => {
+      e.stopPropagation()
       await navigator.clipboard.writeText(bullets.join('\n• '))
-      this.showToast('Copied to clipboard')
+      copyBtn.classList.add('copied')
+      setTimeout(() => copyBtn.classList.remove('copied'), 1500)
     })
   }
 
@@ -318,6 +369,136 @@ export class PdfToolbar {
       this.resultCard?.remove()
       this.resultCard = null
     }, 200)
+  }
+
+  private async showLocalPdfPrompt(action: 'summarize' | 'copy'): Promise<void> {
+    const shadow = this.container?.shadowRoot
+    if (!shadow) return
+    
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'GET_PAGE_CACHE',
+        url: window.location.href
+      }) as { summary?: { bullets?: string[]; title?: string } } | null
+      
+      const cached = response?.summary
+      if (cached?.bullets?.length) {
+        if (action === 'summarize') {
+          this.showResult(cached.bullets)
+          return
+        } else if (action === 'copy') {
+          await navigator.clipboard.writeText(cached.bullets.join('\n• '))
+          this.showToast('Copied cached summary')
+          return
+        }
+      }
+    } catch {
+      // cache check failed, continue with file picker prompt
+    }
+    
+    this.localPdfPrompt?.remove()
+    
+    this.localPdfPrompt = document.createElement('div')
+    this.localPdfPrompt.className = 'metldr-pdf-prompt'
+    
+    const actionText = action === 'summarize' ? 'Summarize' : 'Copy Text'
+    
+    this.localPdfPrompt.innerHTML = `
+      <div class="prompt-header">
+        <span class="prompt-icon">${ICONS.file}</span>
+        <span class="prompt-title">Local PDF</span>
+        <button class="prompt-close" aria-label="Close">${ICONS.x}</button>
+      </div>
+      <p class="prompt-text">Select the PDF file to ${action}</p>
+      <button class="prompt-action" data-action="${action}">
+        <span class="icon">${ICONS.upload}</span>
+        Select File
+      </button>
+    `
+    
+    shadow.appendChild(this.localPdfPrompt)
+    requestAnimationFrame(() => this.localPdfPrompt?.classList.add('visible'))
+    
+    this.localPdfPrompt.querySelector('.prompt-close')?.addEventListener('click', () => {
+      this.hideLocalPdfPrompt()
+    })
+    
+    this.localPdfPrompt.querySelector('.prompt-action')?.addEventListener('click', () => {
+      this.openFilePicker(action)
+    })
+  }
+
+  private hideLocalPdfPrompt(): void {
+    if (!this.localPdfPrompt) return
+    
+    this.localPdfPrompt.classList.remove('visible')
+    setTimeout(() => {
+      this.localPdfPrompt?.remove()
+      this.localPdfPrompt = null
+    }, 200)
+  }
+
+  // opens native file picker and processes PDF using existing pdfService via background
+  private async openFilePicker(action: 'summarize' | 'copy'): Promise<void> {
+    this.hideLocalPdfPrompt()
+    this.showLoading()
+    
+    try {
+      // create file input for user gesture
+      const input = document.createElement('input')
+      input.type = 'file'
+      input.accept = '.pdf,application/pdf'
+      input.style.display = 'none'
+      document.body.appendChild(input)
+      
+      const file = await new Promise<File | null>((resolve) => {
+        input.onchange = () => {
+          const f = input.files?.[0] || null
+          document.body.removeChild(input)
+          resolve(f)
+        }
+        input.oncancel = () => {
+          document.body.removeChild(input)
+          resolve(null)
+        }
+        input.click()
+      })
+      
+      if (!file) {
+        this.hideLoading()
+        return
+      }
+      
+      console.log('metldr: processing local PDF:', file.name)
+      
+      // read file as ArrayBuffer and send to background for processing
+      const arrayBuffer = await file.arrayBuffer()
+      const uint8Array = new Uint8Array(arrayBuffer)
+      
+      // send to background for processing (uses existing pdfService logic)
+      const response = await chrome.runtime.sendMessage({
+        type: 'PDF_PROCESS_ARRAYBUFFER',
+        data: Array.from(uint8Array),
+        filename: file.name,
+        action
+      }) as { success: boolean; summary?: { bullets: string[] }; text?: string; wordCount?: number; error?: string }
+      
+      if (response?.success) {
+        if (action === 'summarize' && response.summary?.bullets) {
+          this.showResult(response.summary.bullets)
+        } else if (action === 'copy' && response.text) {
+          await navigator.clipboard.writeText(response.text)
+          this.showToast(`Copied ${response.wordCount?.toLocaleString() || 'text'} words`)
+        }
+      } else {
+        this.showError(response?.error || 'Failed to process PDF')
+      }
+    } catch (err) {
+      console.error('metldr: file picker error:', err)
+      this.showError((err as Error).message)
+    } finally {
+      this.hideLoading()
+    }
   }
 
   private escapeHtml(text: string): string {
@@ -485,6 +666,7 @@ export class PdfToolbar {
         opacity: 0;
         transform: scale(0.95) translateY(8px);
         transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+        padding-bottom: 48px;
       }
       
       .metldr-pdf-result.visible {
@@ -499,6 +681,7 @@ export class PdfToolbar {
         padding: 12px 14px;
         background: ${theme.bgSecondary};
         border-bottom: 1px solid ${theme.borderSubtle};
+        border-radius: 16px 16px 0 0;
       }
       
       .result-icon {
@@ -563,30 +746,149 @@ export class PdfToolbar {
         opacity: 0.6;
       }
       
-      .result-actions {
-        display: flex;
-        gap: 8px;
-        padding: 10px 14px;
-        background: ${theme.bgSecondary};
-        border-top: 1px solid ${theme.borderSubtle};
-      }
-      
-      .result-action {
-        flex: 1;
-        padding: 8px 10px;
+      .result-copy-btn {
+        position: absolute;
+        bottom: 10px;
+        right: 10px;
+        width: 32px;
+        height: 32px;
         border: 1px solid ${theme.border};
         border-radius: 8px;
         background: ${theme.bg};
-        color: ${theme.text};
+        color: ${theme.textMuted};
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.2s;
+      }
+      
+      .result-copy-btn:hover {
+        border-color: ${theme.primary};
+        color: ${theme.primary};
+        background: ${theme.bgSecondary};
+      }
+      
+      .result-copy-btn .copy-feedback {
+        position: absolute;
+        right: 100%;
+        margin-right: 8px;
+        white-space: nowrap;
         font-size: 11px;
         font-weight: 500;
+        color: ${theme.primary};
+        opacity: 0;
+        transform: translateX(4px);
+        transition: all 0.2s;
+        pointer-events: none;
+      }
+      
+      .result-copy-btn.copied {
+        border-color: ${theme.primary};
+        color: ${theme.primary};
+      }
+      
+      .result-copy-btn.copied .copy-feedback {
+        opacity: 1;
+        transform: translateX(0);
+      }
+      
+      /* local PDF prompt styles */
+      .metldr-pdf-prompt {
+        position: fixed;
+        bottom: 80px;
+        right: 24px;
+        z-index: 999996;
+        width: 280px;
+        max-width: calc(100vw - 48px);
+        background: ${theme.bg};
+        border: 1px solid ${theme.border};
+        border-radius: 16px;
+        box-shadow: 0 8px 32px ${theme.shadow};
+        overflow: hidden;
+        opacity: 0;
+        transform: scale(0.95) translateY(8px);
+        transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+      }
+      
+      .metldr-pdf-prompt.visible {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+      }
+      
+      .prompt-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 12px 14px;
+        background: ${theme.bgSecondary};
+        border-bottom: 1px solid ${theme.borderSubtle};
+      }
+      
+      .prompt-icon {
+        color: ${theme.primary};
+        opacity: 0.8;
+      }
+      
+      .prompt-title {
+        flex: 1;
+        font-size: 13px;
+        font-weight: 600;
+        color: ${theme.text};
+      }
+      
+      .prompt-close {
+        width: 24px;
+        height: 24px;
+        border: none;
+        background: none;
+        color: ${theme.textMuted};
         cursor: pointer;
+        border-radius: 6px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
         transition: all 0.15s;
       }
       
-      .result-action:hover {
-        border-color: ${theme.primary};
-        color: ${theme.primary};
+      .prompt-close:hover {
+        background: ${theme.border};
+        color: ${theme.text};
+      }
+      
+      .prompt-text {
+        margin: 0;
+        padding: 12px 14px;
+        font-size: 12px;
+        color: ${theme.textMuted};
+        line-height: 1.5;
+      }
+      
+      .prompt-action {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        width: calc(100% - 28px);
+        margin: 0 14px 14px;
+        padding: 10px 16px;
+        border: none;
+        border-radius: 10px;
+        background: ${theme.primary};
+        color: white;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+      
+      .prompt-action:hover {
+        opacity: 0.9;
+        transform: scale(1.02);
+      }
+      
+      .prompt-action .icon {
+        display: flex;
       }
     `
   }
