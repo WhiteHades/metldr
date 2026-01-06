@@ -248,6 +248,17 @@ function handlePdfDropError(message: string): void {
 let cleanupTabListener: (() => void) | null = null
 let cleanupDropdownHandler: (() => void) | null = null
 let statusCheckInterval: ReturnType<typeof setInterval> | null = null
+let sidePanelMessageListener: ((msg: any) => void) | null = null
+
+// listen for messages to close/toggle the side panel
+function setupSidePanelMessageListener() {
+  sidePanelMessageListener = (msg: any) => {
+    if (msg.type === 'CLOSE_SIDE_PANEL' || msg.type === 'TOGGLE_SIDE_PANEL') {
+      window.close()
+    }
+  }
+  chrome.runtime.onMessage.addListener(sidePanelMessageListener)
+}
 
 onMounted(async () => {
   await themeStore.loadSavedTheme()
@@ -298,6 +309,7 @@ onMounted(async () => {
   analyticsService.startSession(context, 'summary', currentTabUrl.value || undefined).catch(() => {})
   
   syncIndexingStatus()
+  setupSidePanelMessageListener()
 })
 
 watch(currentTabUrl, (newUrl) => {
@@ -311,6 +323,7 @@ onUnmounted(() => {
   if (statusCheckInterval) clearInterval(statusCheckInterval)
   if (cleanupTabListener) cleanupTabListener()
   if (cleanupDropdownHandler) cleanupDropdownHandler()
+  if (sidePanelMessageListener) chrome.runtime.onMessage.removeListener(sidePanelMessageListener)
   window.removeEventListener('keydown', handleKeydown)
   analyticsService.endSession().catch(() => {})
 })
