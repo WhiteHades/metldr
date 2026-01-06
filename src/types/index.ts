@@ -504,6 +504,9 @@ export type BackgroundMessage =
   | { type: 'PDF_SUMMARIZE'; url: string }
   | { type: 'PDF_EXTRACT_TEXT'; url: string }
   | { type: 'OPEN_SIDE_PANEL'; focus?: string }
+  | { type: 'TOGGLE_SIDE_PANEL'; focus?: string }
+  | { type: 'PDF_PROCESS_ARRAYBUFFER'; data: number[]; filename: string; action: 'summarize' | 'copy' }
+  | { type: 'GET_PAGE_CACHE'; url: string }
 
 export type ResponseCallback = (response: unknown) => void
 

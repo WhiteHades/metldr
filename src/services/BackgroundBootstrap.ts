@@ -170,7 +170,24 @@ export class BackgroundBootstrap {
       }
 
       if (msg.type === 'OPEN_SIDE_PANEL') {
-        this._onOpenSidePanel(msg as { type: string; focus?: string }, respond)
+        this._onOpenSidePanel(msg as { type: string; focus?: string }, _sender, respond)
+        return true
+      }
+
+      if (msg.type === 'TOGGLE_SIDE_PANEL') {
+        this._onToggleSidePanel(msg as { type: string; focus?: string }, _sender, respond)
+        return true
+      }
+
+      // handler for processing PDFs from ArrayBuffer (local file picker)
+      if (msg.type === 'PDF_PROCESS_ARRAYBUFFER') {
+        this._onPdfProcessArrayBuffer(msg as { type: string; data: number[]; filename: string; action: 'summarize' | 'copy' }, respond)
+        return true
+      }
+
+      // handler for checking page cache (used by PdfToolbar)
+      if (msg.type === 'GET_PAGE_CACHE') {
+        this._onGetPageCache(msg as { type: string; url: string }, respond)
         return true
       }
 
@@ -729,18 +746,146 @@ export class BackgroundBootstrap {
     })()
   }
 
-  static _onOpenSidePanel(msg: { type: string; focus?: string }, respond: ResponseCallback): void {
+  static _onOpenSidePanel(
+    msg: { type: string; focus?: string },
+    sender: chrome.runtime.MessageSender,
+    respond: ResponseCallback
+  ): void {
+
+    const windowId = sender?.tab?.windowId
+    
+    if (!windowId) {
+      // fallback: try to get current window
+      chrome.windows.getCurrent((win) => {
+        if (win?.id) {
+          chrome.sidePanel.open({ windowId: win.id })
+            .then(() => {
+              log.log('side panel opened (fallback)', msg.focus ? `focus: ${msg.focus}` : '')
+              respond({ success: true })
+            })
+            .catch((err) => {
+              log.error('onOpenSidePanel', err.message)
+              respond({ success: false, error: err.message })
+            })
+        } else {
+          respond({ success: false, error: 'no window available' })
+        }
+      })
+      return
+    }
+    
+    // preferred path: use sender's windowId directly (preserves user gesture)
+    chrome.sidePanel.open({ windowId })
+      .then(() => {
+        log.log('side panel opened', msg.focus ? `focus: ${msg.focus}` : '')
+        respond({ success: true })
+      })
+      .catch((err) => {
+        log.error('onOpenSidePanel', err.message)
+        respond({ success: false, error: err.message })
+      })
+  }
+
+  // toggle side panel - if panel is open, broadcast close message; otherwise open it
+  static _onToggleSidePanel(
+    msg: { type: string; focus?: string },
+    sender: chrome.runtime.MessageSender,
+    respond: ResponseCallback
+  ): void {
+    const windowId = sender?.tab?.windowId
+    
+    if (!windowId) {
+      chrome.windows.getCurrent((win) => {
+        if (win?.id) {
+          // try to open - if it fails, panel might already be open
+          chrome.sidePanel.open({ windowId: win.id })
+            .then(() => {
+              log.log('side panel opened (toggle)', msg.focus ? `focus: ${msg.focus}` : '')
+              respond({ success: true, action: 'opened' })
+            })
+            .catch(() => {
+              // panel likely already open, broadcast close message
+              chrome.runtime.sendMessage({ type: 'TOGGLE_SIDE_PANEL' }).catch(() => {})
+              respond({ success: true, action: 'closed' })
+            })
+        } else {
+          respond({ success: false, error: 'no window available' })
+        }
+      })
+      return
+    }
+    
+    // try to open panel - if already open, this succeeds silently
+    // the panel listens for TOGGLE_SIDE_PANEL and closes itself
+    chrome.sidePanel.open({ windowId })
+      .then(() => {
+        // panel opened or was already open
+        // broadcast toggle message - panel will close itself if open
+        chrome.runtime.sendMessage({ type: 'TOGGLE_SIDE_PANEL' }).catch(() => {})
+        log.log('side panel toggle', msg.focus ? `focus: ${msg.focus}` : '')
+        respond({ success: true })
+      })
+      .catch((err) => {
+        log.error('onToggleSidePanel', err.message)
+        respond({ success: false, error: err.message })
+      })
+  }
+
+  // process PDF from ArrayBuffer (content script file picker)
+  static _onPdfProcessArrayBuffer(
+    msg: { type: string; data: number[]; filename: string; action: 'summarize' | 'copy' },
+    respond: ResponseCallback
+  ): void {
     (async () => {
       try {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
-        if (tab?.id) {
-          await chrome.sidePanel.open({ tabId: tab.id })
-          log.log('side panel opened', msg.focus ? `focus: ${msg.focus}` : '')
+        const { data, filename, action } = msg
+        log.log(`pdf process arraybuffer request: ${filename} (${action})`)
+        
+        const arrayBuffer = new Uint8Array(data).buffer
+        
+        if (action === 'summarize') {
+          const result = await pdfService.summarizeFromArrayBuffer(arrayBuffer, filename)
+          
+          // parse bullets from summary
+          const bullets = result.summary
+            .split('\n')
+            .filter(line => line.trim().startsWith('•') || line.trim().startsWith('-') || line.trim().startsWith('*'))
+            .map(line => line.replace(/^[•\-*]\s*/, '').trim())
+            .filter(Boolean)
+          
+          const finalBullets = bullets.length > 0 
+            ? bullets 
+            : result.summary.split(/[.!?]+/).filter(s => s.trim().length > 20).slice(0, 5)
+          
+          respond({ success: true, summary: { bullets: finalBullets }, text: result.fullText })
+        } else {
+          // extract text only
+          const text = await pdfService.extractFromArrayBuffer(arrayBuffer)
+          const wordCount = text.split(/\s+/).filter(Boolean).length
+          respond({ success: true, text, wordCount })
         }
-        respond({ success: true })
       } catch (err) {
-        log.error('onOpenSidePanel', (err as Error).message)
+        log.error('onPdfProcessArrayBuffer', (err as Error).message)
         respond({ success: false, error: (err as Error).message })
+      }
+    })()
+  }
+
+  // get cached page summary
+  static _onGetPageCache(msg: { type: string; url: string }, respond: ResponseCallback): void {
+    (async () => {
+      try {
+        const { url } = msg
+        if (!url) {
+          respond({ summary: null })
+          return
+        }
+        
+        const cached = await cacheService.getPageSummary(url)
+        respond({ summary: cached })
+      } catch (err) {
+        log.error('onGetPageCache', (err as Error).message)
+        respond({ summary: null })
       }
     })()
   }
