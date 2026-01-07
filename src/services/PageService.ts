@@ -39,14 +39,12 @@ export class PageService {
 
     const fullContent = metadata + content
     const llmStart = performance.now()
-// ... existing code ...
 
     console.log('[PageService] summarizing, length:', fullContent.length)
 
     let summaryText: string
     let usedMapReduce = false
 
-    // use map-reduce for long content that exceeds LLM context
     if (mapReduceService.needsMapReduce(fullContent)) {
       console.log('[PageService] using map-reduce for long content')
       const mrResult = await mapReduceService.summarize(content, `Article titled "${title}"`)
@@ -82,7 +80,14 @@ export class PageService {
       timing
     }
 
-    if (url) await cacheService.setPageSummary(url, summary, 3600)
+    if (url) {
+      await cacheService.setPageSummary(url, summary, 3600)
+      // index summary for global search
+      ragService.indexSummary(
+        bullets.join('\n'),
+        { sourceId: url, sourceUrl: url, sourceType: 'article', title: title || url }
+      ).catch(() => {})
+    }
 
     analyticsService.trackSummary({
       type: 'page',
@@ -101,14 +106,12 @@ export class PageService {
   private static _parseBullets(text: string): string[] {
     const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0)
     
-    // match: - bullet, • bullet, * bullet, 1. numbered
     const bullets = lines
       .filter(l => /^[-•*]|^\d+\./.test(l))
       .map(l => l.replace(/^[-•*]\s*/, '').replace(/^\d+\.\s*/, '').trim())
       .filter(l => l.length > 10)
       .slice(0, 5)
 
-    // fallback: use raw lines if no bullets found
     if (bullets.length === 0 && lines.length > 0) {
       return lines.filter(l => l.length > 15).slice(0, 3)
     }
@@ -130,8 +133,6 @@ export class PageService {
         contextText.slice(-tailLen)
     }
 
-    // RAG: Perform Hybrid Search across *all* indexed knowledge (emails, pdfs, other pages)
-    // We do this if we have a user message (which we do)
     const lastUserMsg = messages.filter(m => m.role === 'user').pop()?.content || ''
     
     let ragContext = ''
@@ -193,6 +194,83 @@ export class PageService {
     } catch (err) {
       console.error('[PageService.chat]', (err as Error).message)
       return { ok: false, error: (err as Error).message || 'chat failed' }
+    }
+  }
+
+  static async globalChat(
+    messages: ChatMessage[]
+  ): Promise<ChatResult & { 
+    sources?: Array<{ index: number; title: string; url: string; type: 'email' | 'page' | 'pdf'; score: number; snippet: string }>
+  }> {
+    const startTime = performance.now()
+    const lastUserMsg = messages.filter(m => m.role === 'user').pop()?.content || ''
+    
+    if (!lastUserMsg) {
+      return { ok: false, error: 'no user message' }
+    }
+    
+    const { context, sources } = await ragService.searchWithSources(lastUserMsg, 5)
+    
+    if (!context) {
+      return { 
+        ok: true, 
+        content: "I don't have any indexed content to search. Try summarizing some emails, articles, or PDFs first.",
+        sources: [],
+        timing: { total: Math.round(performance.now() - startTime), model: 'none' }
+      }
+    }
+    
+    const systemPrompt = `You are a helpful assistant answering questions based on the user's indexed documents.
+
+SOURCES:
+${context}
+
+INSTRUCTIONS:
+- Answer the user's question based ONLY on the provided sources
+- Cite sources using [1], [2] etc. inline where you use information from that source
+- If the sources don't contain relevant information, say so
+- Be concise and direct`
+
+    const result = await aiGateway.complete({
+      systemPrompt,
+      userPrompt: lastUserMsg,
+      temperature: 0.3
+    })
+    
+    if (result.ok) {
+      const isChrome = aiGateway.getPreference() === 'chrome-ai'
+      return {
+        ok: true,
+        content: result.content,
+        sources,
+        timing: { 
+          total: Math.round(performance.now() - startTime), 
+          model: isChrome ? 'gemini-nano' : 'ollama'
+        }
+      }
+    }
+    
+    // fallback to ollama
+    const selectedModel = await OllamaService.selectBest('page_summary')
+    if (!selectedModel) {
+      return { ok: false, error: result.error || 'no ai available', sources }
+    }
+    
+    try {
+      const ollamaResult = await OllamaService.complete(
+        selectedModel,
+        [{ role: 'system', content: systemPrompt }, ...messages.slice(-6)],
+        { temperature: 0.2 }
+      )
+      
+      return {
+        ...ollamaResult,
+        sources,
+        timing: { total: Math.round(performance.now() - startTime), model: selectedModel }
+      }
+    } catch (err) {
+      console.error('[PageService.globalChat]', (err as Error).message)
+      return { ok: false, error: (err as Error).message, sources }
     }
   }
 }

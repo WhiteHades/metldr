@@ -82,6 +82,12 @@ export class EmailService {
           if (emailId) {
             cacheService.setEmailSummary(emailId, chromeResult).catch(() => {})
             this.generateReplySuggestions(emailId, emailContent, chromeResult, metadata).catch(() => {})
+            // index summary for global search
+            const summaryText = [chromeResult.summary, ...(chromeResult.action_items || [])].filter(Boolean).join('\n')
+            ragService.indexSummary(
+              summaryText,
+              { sourceId: emailId, sourceUrl: `email://${emailId}`, sourceType: 'email', title: (metadata as any)?.subject || 'Email' }
+            ).catch(() => {})
           }
           analyticsService.trackSummary({
             type: 'email',
@@ -111,6 +117,12 @@ export class EmailService {
             if (emailId) {
               cacheService.setEmailSummary(emailId, chromeResult).catch(() => {})
               this.generateReplySuggestions(emailId, emailContent, chromeResult, metadata).catch(() => {})
+              // index summary for global search
+              const summaryText = [chromeResult.summary, ...(chromeResult.action_items || [])].filter(Boolean).join('\n')
+              ragService.indexSummary(
+                summaryText,
+                { sourceId: emailId, sourceUrl: `email://${emailId}`, sourceType: 'email', title: (metadata as any)?.subject || 'Email' }
+              ).catch(() => {})
             }
             analyticsService.trackSummary({
               type: 'email',
@@ -140,6 +152,12 @@ export class EmailService {
       if (emailId) {
         cacheService.setEmailSummary(emailId, summary).catch(() => {})
         this.generateReplySuggestions(emailId, emailContent, summary, metadata).catch(() => {})
+        // index summary for global search
+        const summaryText = [summary.summary, ...(summary.action_items || [])].filter(Boolean).join('\n')
+        ragService.indexSummary(
+          summaryText,
+          { sourceId: emailId, sourceUrl: `email://${emailId}`, sourceType: 'email', title: (metadata as any)?.subject || 'Email' }
+        ).catch(() => {})
       }
 
       analyticsService.trackSummary({
