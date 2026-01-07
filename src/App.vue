@@ -22,11 +22,12 @@ import OllamaSetup from '@/components/OllamaSetup.vue'
 import SettingsPanel from '@/components/SettingsPanel.vue'
 import HoverRevealNav from '@/components/HoverRevealNav.vue'
 import PdfDropZone from '@/components/PdfDropZone.vue'
+import GlobalSearch from '@/components/GlobalSearch.vue'
 import { pdfService } from '@/services/pdf/PdfService'
 
 
 import { ScrollArea } from '@/components/ui'
-import { Loader2, RefreshCw, X, FileText, BarChart3, Settings } from 'lucide-vue-next'
+import { Loader2, RefreshCw, X, FileText, BarChart3, Settings, Search } from 'lucide-vue-next'
 
 const themeStore = useThemeStore()
 chromeAILogger.info('Side panel loaded - run chromeAILogger.runDiagnostic() for Chrome AI debug')
@@ -338,6 +339,7 @@ onUnmounted(() => {
       :active-tab="activeTab"
       :tabs="[
         { key: 'summary', icon: FileText, label: 'Summary' },
+        { key: 'search', icon: Search, label: 'Search' },
         { key: 'stats', icon: BarChart3, label: 'Stats' },
         { key: 'settings', icon: Settings, label: 'Settings' }
       ]"
@@ -400,6 +402,8 @@ onUnmounted(() => {
             @clear="clearChat"
           />
         </div>
+
+        <GlobalSearch v-else-if="aiReady && activeTab === 'search'" class="h-full" />
 
         <ScrollArea v-else-if="aiReady && activeTab === 'stats'" class="h-full">
           <div class="p-3">

@@ -2,8 +2,9 @@
 import { useThemeStore } from '@/stores/theme'
 import { SUPPORTED_LANGUAGES } from '@/utils/storage'
 import { 
-  FileText, BookOpen, Database, Trash2, HelpCircle, X, Cpu, Zap, Palette, Loader2
+  FileText, BookOpen, Database, Trash2, HelpCircle, X, Cpu, Zap, Palette, Loader2, Coffee
 } from 'lucide-vue-next'
+import { APP_CONFIG } from '@/config/constants'
 import { Toggle, ScrollArea, Checkbox, Textarea, Input, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui'
 import AIStatusCards from './AIStatusCards.vue'
 import type { DropdownPos, DownloadProgressItem } from '@/types'
@@ -297,6 +298,25 @@ const themeStore = useThemeStore()
             open guide
           </button>
         </div>
+      </div>
+
+      <!-- support -->
+      <div class="rounded-xl bg-card p-4 border border-border">
+        <div class="flex items-center gap-2.5 mb-2">
+          <div class="flex items-center justify-center w-6 h-6 rounded-md bg-amber-500/20">
+            <Coffee :size="12" class="text-amber-500" />
+          </div>
+          <span class="text-(length:--font-text-secondary) font-medium text-foreground tracking-wide">support</span>
+        </div>
+        <p class="text-(length:--font-text-secondary) text-foreground/50 mb-3">if metldr saves you time, consider buying me a coffee!</p>
+        <a 
+          :href="APP_CONFIG.buyMeACoffee" 
+          target="_blank"
+          class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-500/15 text-amber-400 hover:bg-amber-500/25 transition-colors text-(length:--font-text-secondary) font-medium"
+        >
+          <Coffee :size="14" />
+          <span>buy me a coffee</span>
+        </a>
       </div>
     </div>
   </ScrollArea>

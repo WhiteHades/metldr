@@ -10,6 +10,7 @@ import { statsService, type UsageStats, type ActivityItem } from '@/services/Sta
 import { analyticsService, type AnalyticsSummary } from '@/services/AnalyticsService'
 import { cacheService } from '@/services/CacheService'
 import { logger } from '@/services/LoggerService'
+import DonationPrompt from './DonationPrompt.vue'
 
 const log = logger.createScoped('HistoryManager')
 const POLL_INTERVAL_MS = 4000
@@ -497,6 +498,9 @@ defineExpose({ refresh: loadData, stats, analytics })
         </div>
       </Transition>
     </div>
+
+    <!-- smart donation prompt (shows after 10+ summaries, rate limited) -->
+    <DonationPrompt />
   </div>
 </template>
 
