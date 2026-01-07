@@ -31,12 +31,21 @@ export class EmailService {
     const startTime = Date.now()
     
     if (emailId && emailContent) {
+      // broadcast progress to side panel
+      const broadcastProgress = (percent: number) => {
+        chrome.runtime.sendMessage({
+          type: 'INDEXING_PROGRESS',
+          sourceId: emailId,
+          percent
+        }).catch(() => {})
+      }
+      
       ragService.indexChunks(emailContent, {
         sourceId: emailId,
         sourceUrl: `email://${emailId}`,
         sourceType: 'email',
         title: (metadata as any)?.subject || 'Email Thread'
-      }).catch(err => console.warn('[EmailService] Chunk indexing failed', err))
+      }, broadcastProgress).catch(err => console.warn('[EmailService] Chunk indexing failed', err))
     }
 
     try {

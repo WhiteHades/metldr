@@ -651,10 +651,22 @@ export class BackgroundBootstrap {
     (async () => {
       try {
         const sourceUrl = msg.metadata?.sourceUrl || msg.metadata?.sourceId || 'unknown'
+        const sourceId = msg.metadata?.sourceId || sourceUrl
+        
+        // broadcast progress to side panel
+        const broadcastProgress = (percent: number) => {
+          console.log('[BackgroundBootstrap] Broadcasting progress:', percent, 'for', sourceId.slice(0, 40))
+          chrome.runtime.sendMessage({
+            type: 'INDEXING_PROGRESS',
+            sourceId,
+            percent
+          }).catch(() => {}) // ignore if side panel closed
+        }
+        
         // wrap in concurrency manager to prevent duplicate indexing on rapid tab switches
         await concurrencyManager.execute('indexing', sourceUrl, async (signal) => {
           if (signal.aborted) throw new Error('Indexing aborted')
-          await ragService.indexChunks(msg.text, msg.metadata)
+          await ragService.indexChunks(msg.text, msg.metadata, broadcastProgress)
         })
         respond({ success: true })
       } catch (err) {
@@ -860,13 +872,15 @@ export class BackgroundBootstrap {
   }
 
   // process PDF from ArrayBuffer (content script file picker)
+  // returns summary immediately, continues indexing in background
   static _onPdfProcessArrayBuffer(
-    msg: { type: string; data: number[]; filename: string; action: 'summarize' | 'copy' },
+    msg: { type: string; data: number[]; filename: string; action: 'summarize' | 'copy'; sourceUrl?: string },
     respond: ResponseCallback
   ): void {
     (async () => {
       try {
-        const { data, filename, action } = msg
+        const { data, filename, action, sourceUrl } = msg
+        const pdfUrl = sourceUrl || `file:///${filename}`
         log.log(`pdf process arraybuffer request: ${filename} (${action})`)
         
         const arrayBuffer = new Uint8Array(data).buffer
@@ -886,6 +900,51 @@ export class BackgroundBootstrap {
             : result.summary.split(/[.!?]+/).filter(s => s.trim().length > 20).slice(0, 5)
           
           respond({ success: true, summary: { bullets: finalBullets }, text: result.fullText })
+          
+          ;(async () => {
+            try {
+              // cache summary to IDB
+              const wordCount = result.fullText.split(/\s+/).length
+              const readTimeMin = Math.max(1, Math.round(wordCount / 200))
+              const summaryData = {
+                title: filename.replace('.pdf', ''),
+                bullets: finalBullets,
+                readTime: `${readTimeMin} min`,
+                fullContent: result.fullText,
+                wordCount,
+                timestamp: Date.now(),
+                timing: { total: 0, cached: false }
+              }
+              
+              await cacheService.setPageSummary(pdfUrl, summaryData, 3600)
+              log.log(`cached PDF summary: ${filename}`)
+              
+              // broadcast progress for side panel reactivity
+              const broadcastProgress = (percent: number) => {
+                chrome.runtime.sendMessage({
+                  type: 'INDEXING_PROGRESS',
+                  sourceId: pdfUrl,
+                  percent
+                }).catch(() => {}) // ignore if side panel closed
+              }
+              
+              // index to RAG for chat functionality
+              await concurrencyManager.execute('indexing', pdfUrl, async (signal) => {
+                if (signal.aborted) throw new Error('Indexing aborted')
+                await ragService.indexChunks(result.fullText, {
+                  sourceId: pdfUrl,
+                  sourceUrl: pdfUrl,
+                  sourceType: 'pdf',
+                  title: filename.replace('.pdf', '')
+                }, broadcastProgress)
+              })
+              
+              log.log(`background indexing complete: ${filename}`)
+            } catch (bgErr) {
+              log.warn('background PDF indexing failed', (bgErr as Error).message)
+            }
+          })()
+          
         } else {
           // extract text only
           const text = await pdfService.extractFromArrayBuffer(arrayBuffer)

@@ -15,12 +15,21 @@ export class PageService {
     timing.extraction = extractionTime || 0
     
     if (url && content) {
+      // broadcast progress to side panel
+      const broadcastProgress = (percent: number) => {
+        chrome.runtime.sendMessage({
+          type: 'INDEXING_PROGRESS',
+          sourceId: url,
+          percent
+        }).catch(() => {})
+      }
+      
       ragService.indexChunks(content, {
         sourceId: url,
         sourceUrl: url,
         sourceType: 'article',
         title: title || 'Untitled Article'
-      }).catch(err => console.warn('[PageService] Chunk indexing failed', err))
+      }, broadcastProgress).catch(err => console.warn('[PageService] Chunk indexing failed', err))
     }
 
     if (!force && url) {

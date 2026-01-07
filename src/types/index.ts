@@ -506,7 +506,7 @@ export type BackgroundMessage =
   | { type: 'PDF_EXTRACT_TEXT'; url: string }
   | { type: 'OPEN_SIDE_PANEL'; focus?: string }
   | { type: 'TOGGLE_SIDE_PANEL'; focus?: string }
-  | { type: 'PDF_PROCESS_ARRAYBUFFER'; data: number[]; filename: string; action: 'summarize' | 'copy' }
+  | { type: 'PDF_PROCESS_ARRAYBUFFER'; data: number[]; filename: string; action: 'summarize' | 'copy'; sourceUrl?: string }
   | { type: 'GET_PAGE_CACHE'; url: string }
 
 export type ResponseCallback = (response: unknown) => void
@@ -642,7 +642,14 @@ export interface AppPageSummary {
 export interface AppChatMessage {
   role: 'user' | 'assistant'
   content: string
-  timing?: { total: number; model?: string }
+  timing?: { 
+    total: number
+    model?: string
+    rag?: number      // total rag time
+    embed?: number    // query embedding time
+    search?: number   // voy search time
+    llm?: number      // llm generation time
+  }
 }
 
 export interface SummaryPromptData {
