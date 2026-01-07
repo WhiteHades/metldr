@@ -159,7 +159,13 @@ export class VectorStore {
       if (record && record.value) {
         console.log('[VectorStore] Found persisted VOY index, loading into sandbox...')
         try {
-          await localModels.voyLoad(record.value)
+          // handle both compressed and legacy uncompressed data
+          let indexData = record.value as Uint8Array
+          if (record.compressed) {
+            indexData = await this.decompress(indexData)
+            console.log(`[VectorStore] Decompressed VOY index: ${record.value.length} → ${indexData.length} bytes`)
+          }
+          await localModels.voyLoad(indexData)
           this.voyIndexLoadedAt = Date.now()
           console.log(`[VectorStore] VOY index loaded from IDB (${Date.now() - startTime}ms)`)
         } catch (err) {
@@ -260,22 +266,39 @@ export class VectorStore {
   private async saveIndex(): Promise<void> {
     if (!this.loaded) return
     
-    console.log('[VectorStore] Saving VOY index to IDB...')
+    console.log('[VectorStore] Saving VOY index (compressed) to IDB...')
     try {
       const index = await localModels.voySerialize()
       if (index && index.length > 0) {
+        // gzip compress for 60-80% smaller storage
+        const compressed = await this.compress(index)
+        
         await databaseService.put(DB_CONFIGS.cache, 'page_cache', {
           url: 'system:voy_index',
-          value: index,
+          value: compressed,
+          compressed: true,
           timestamp: Date.now()
         })
-        console.log(`[VectorStore] VOY index saved (${index.length} bytes)`)
+        console.log(`[VectorStore] VOY index saved: ${index.length} → ${compressed.length} bytes (${Math.round((1 - compressed.length / index.length) * 100)}% reduction)`)
       } else {
         console.log('[VectorStore] VOY index empty, skipping save')
       }
     } catch (err) {
       console.error('[VectorStore] Save failed:', err)
     }
+  }
+
+  // gzip compression
+  private async compress(data: Uint8Array): Promise<Uint8Array> {
+    const buffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer
+    const stream = new Blob([buffer]).stream().pipeThrough(new CompressionStream('gzip'))
+    return new Uint8Array(await new Response(stream).arrayBuffer())
+  }
+
+  private async decompress(data: Uint8Array): Promise<Uint8Array> {
+    const buffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer
+    const stream = new Blob([buffer]).stream().pipeThrough(new DecompressionStream('gzip'))
+    return new Uint8Array(await new Response(stream).arrayBuffer())
   }
 
   private async storeDocument(entry: VectorEntry): Promise<void> {
