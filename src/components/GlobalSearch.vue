@@ -26,6 +26,7 @@ const chatInput = ref('')
 const messages = ref<ChatMessage[]>([])
 const loading = ref(false)
 const viewportRef = ref<HTMLDivElement | null>(null)
+const inputRef = ref<HTMLTextAreaElement | null>(null)
 const expandedSources = ref<Set<string>>(new Set())
 
 const STORAGE_KEY = 'global_chat_state'
@@ -349,13 +350,14 @@ function retryLastMessage() {
     <!-- input -->
     <div class="input-area">
       <div class="composer-bar">
-        <input 
+        <textarea
+          ref="inputRef"
           v-model="chatInput"
           @keydown="handleKeydown"
-          type="text"
           placeholder="ask a question..."
           class="composer-input"
           :disabled="loading"
+          rows="1"
         />
         
         <div class="composer-actions">
@@ -689,7 +691,6 @@ function retryLastMessage() {
 /* input area */
 .input-area {
   padding: 10px 12px;
-  border-top: 1px solid var(--color-border);
 }
 
 .composer-bar {
@@ -698,7 +699,14 @@ function retryLastMessage() {
   gap: 8px;
   padding: 8px 12px;
   background: color-mix(in oklch, var(--color-card) 60%, transparent);
+  border: 1px solid color-mix(in oklch, var(--color-border) 40%, transparent);
   border-radius: 20px;
+  transition: background 150ms ease, border-color 150ms ease;
+}
+
+.composer-bar:focus-within {
+  background: color-mix(in oklch, var(--color-card) 80%, transparent);
+  border-color: color-mix(in oklch, var(--color-border) 60%, transparent);
 }
 
 .composer-input {
@@ -709,6 +717,10 @@ function retryLastMessage() {
   font-size: 13px;
   color: var(--color-foreground);
   line-height: 1.5;
+  resize: none;
+  min-height: 20px;
+  max-height: 80px;
+  font-family: inherit;
 }
 
 .composer-input::placeholder {

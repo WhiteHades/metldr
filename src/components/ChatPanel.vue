@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, watch, onMounted } from 'vue'
+import { ref, computed, nextTick, watch, onMounted, onUnmounted } from 'vue'
 import { formatTime, stripThinking } from '@/utils/text'
 import { marked } from 'marked'
 import { ArrowUp, Square, Trash2, Loader2, MessageSquare } from 'lucide-vue-next'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui'
+import { useIndexingProgress } from '@/composables/useIndexingProgress'
 import type { AppChatMessage } from '@/types'
 
 interface Props {
@@ -14,6 +15,7 @@ interface Props {
   chatDisabled: boolean
   disabledReason?: string
   isViewingEmailThread: boolean
+  currentUrl?: string | null
 }
 
 const props = defineProps<Props>()
@@ -35,8 +37,20 @@ const isIndexingOrProcessing = computed(() => props.chatIndexing || props.summar
 const inputDisabled = computed(() => props.chatDisabled || isIndexingOrProcessing.value)
 const inputPlaceholder = computed(() => {
   if (props.summaryLoading) return 'analyzing page, please wait...'
-  if (props.chatIndexing) return 'indexing document, please wait...'
+  if (props.chatIndexing) return 'indexing document...'
   return 'ask anything about this page...'
+})
+
+// url-scoped indexing progress
+const { isIndexing, indexingProgress, indexingMessage, setupListener, cleanupListener } = 
+  useIndexingProgress(() => props.currentUrl || '')
+
+onMounted(() => {
+  setupListener()
+})
+
+onUnmounted(() => {
+  cleanupListener()
 })
 
 function focusInput() {
@@ -198,18 +212,49 @@ defineExpose({
               >
                 <div class="chat-markdown" v-html="renderMarkdown(msg.content)"></div>
               </div>
-              <div v-if="msg.timing" class="timing-badge">
-                <span>{{ formatTime(msg.timing.total) }}</span>
-                <span v-if="msg.timing.model">· {{ msg.timing.model }}</span>
+              <div v-if="msg.timing">
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger as-child>
+                      <div class="timing-badge cursor-help">
+                        <span>{{ formatTime(msg.timing.total) }}</span>
+                        <span v-if="msg.timing.model">· {{ msg.timing.model }}</span>
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent class="min-w-40 p-2.5">
+                      <div class="text-xs font-medium text-foreground mb-1.5 uppercase tracking-wide">time breakdown</div>
+                      <div class="space-y-1 text-xs">
+                        <div v-if="msg.timing.rag" class="flex justify-between gap-3">
+                          <span class="text-foreground/70">rag/prep</span>
+                          <span class="text-foreground font-mono">{{ formatTime(msg.timing.rag) }}</span>
+                        </div>
+                        <div class="flex justify-between gap-3">
+                          <span class="text-foreground/70">llm</span>
+                          <span class="text-foreground font-mono">{{ formatTime(msg.timing.llm || msg.timing.total) }}</span>
+                        </div>
+                        <div class="flex justify-between gap-3 pt-1 border-t border-zinc-800">
+                          <span class="text-foreground">total</span>
+                          <span class="text-primary font-mono font-medium">{{ formatTime(msg.timing.total) }}</span>
+                        </div>
+                        <div v-if="msg.timing.model" class="pt-1 text-foreground/60 truncate">
+                          {{ msg.timing.model }}
+                        </div>
+                      </div>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               </div>
             </div>
           </template>
           
-          <!-- indexing indicator -->
-          <div v-if="chatIndexing" class="flex items-start gap-2">
+          <!-- indexing indicator with inline progress -->
+          <div v-if="chatIndexing || isIndexing" class="flex items-start gap-2">
             <div class="indexing-indicator">
               <Loader2 :size="14" class="animate-spin text-primary" />
-              <span class="text-xs text-muted-foreground">analyzing document...</span>
+              <span class="text-xs text-muted-foreground">
+                {{ indexingMessage || 'indexing...' }}
+                <span v-if="indexingProgress > 0" class="text-primary font-medium">{{ indexingProgress }}%</span>
+              </span>
             </div>
           </div>
           

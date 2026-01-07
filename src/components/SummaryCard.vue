@@ -3,7 +3,7 @@ import { computed } from 'vue'
 import { formatTime, stripThinking } from '@/utils/text'
 import { marked } from 'marked'
 import { 
-  ChevronDown, ChevronUp, RefreshCw, Zap, Sparkles, Server, AlertCircle, FileText, Loader2 
+  ChevronDown, ChevronUp, ChevronRight, RefreshCw, Zap, Sparkles, Server, AlertCircle, FileText, Loader2 
 } from 'lucide-vue-next'
 import { Button, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui'
 import type { AppPageSummary, SummaryPromptData } from '@/types'
@@ -175,21 +175,18 @@ const hasContent = computed(() => props.pageSummary || props.summaryLoading || p
     <!-- error state with retry button -->
     <div v-else-if="summaryError" class="space-y-2">
       <!-- special state for local PDFs -->
-      <div v-if="summaryError === 'LOCAL_PDF_CLICK_TO_OPEN'" class="space-y-2">
-        <div class="flex items-center gap-2.5 p-3 rounded-lg bg-primary/10 border border-primary/30">
-          <FileText :size="16" class="text-primary shrink-0" />
-          <div class="flex-1 min-w-0">
-            <p class="text-(length:--font-text-body) font-medium text-foreground">Local PDF detected</p>
-            <p class="text-(length:--font-text-small) text-foreground/60">Click below to select and analyze</p>
-          </div>
-        </div>
-        <Button 
+      <div v-if="summaryError === 'LOCAL_PDF_CLICK_TO_OPEN'">
+        <div 
           @click="emit('open-local-pdf')"
-          class="w-full bg-primary text-primary-foreground hover:bg-primary/90"
+          class="flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-all duration-150 bg-primary/10 border border-primary/30 hover:bg-primary/20 hover:border-primary/50"
         >
-          <FileText :size="14" class="mr-2" />
-          Open PDF File
-        </Button>
+          <FileText :size="18" class="text-primary shrink-0" />
+          <div class="flex-1 min-w-0">
+            <p class="text-(length:--font-text-body) font-medium text-foreground">local PDF detected</p>
+            <p class="text-(length:--font-text-small) text-foreground/60">click to select and analyze</p>
+          </div>
+          <ChevronRight :size="16" class="text-primary/60" />
+        </div>
       </div>
       <!-- regular error -->
       <template v-else>

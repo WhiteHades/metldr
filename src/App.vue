@@ -23,6 +23,7 @@ import SettingsPanel from '@/components/SettingsPanel.vue'
 import HoverRevealNav from '@/components/HoverRevealNav.vue'
 import PdfDropZone from '@/components/PdfDropZone.vue'
 import GlobalSearch from '@/components/GlobalSearch.vue'
+// progress now shown inline in ChatPanel
 import { pdfService } from '@/services/pdf/PdfService'
 
 
@@ -57,6 +58,7 @@ const {
   chatDisabledReason,
   fetchCurrentPageSummary,
   resetSummaryState,
+  setCurrentTabUrl,
   refreshCurrentTabUrl,
   openLocalPdf
 } = usePageSummary()
@@ -70,7 +72,8 @@ const {
   clearChat: baseClearChat,
   resetChatState,
   switchToUrl,
-  syncIndexingStatus
+  syncIndexingStatus,
+  setUrlMessages
 } = useChat()
 
 const {
@@ -289,7 +292,8 @@ onMounted(async () => {
     aiReady,
     summaryMode,
     doFetchSummary,
-    switchToUrl
+    switchToUrl,
+    setUrlMessages
   )
   
   window.addEventListener('keydown', handleKeydown)
@@ -333,6 +337,8 @@ onUnmounted(() => {
 <template>
   <div class="h-screen flex flex-col bg-background text-foreground overflow-hidden">
     <div id="dropdown-portal" class="fixed inset-0 pointer-events-none z-50"></div>
+
+
 
     <HoverRevealNav 
       v-if="aiReady"
@@ -398,6 +404,7 @@ onUnmounted(() => {
             :chat-disabled="chatDisabled"
             :disabled-reason="chatDisabledReason"
             :is-viewing-email-thread="isViewingEmailThread"
+            :current-url="currentTabUrl"
             @send="sendChatMessage"
             @clear="clearChat"
           />
