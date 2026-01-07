@@ -117,6 +117,11 @@ export class BackgroundBootstrap {
         return true
       }
 
+      if (msg.type === 'GLOBAL_CHAT') {
+        this._onGlobalChat(msg as { type: string; messages: import('../types').ChatMessage[] }, respond)
+        return true
+      }
+
       if (msg.type === 'GET_EMAIL_CACHE') {
         this._onGetEmailCache(msg as GetEmailCacheMessage, respond)
         return true
@@ -460,6 +465,29 @@ export class BackgroundBootstrap {
       } catch (err) {
         log.error('onChatMessage error:', (err as Error).message)
         respond({ ok: false, error: (err as Error).message || 'chat processing failed' })
+      }
+    })()
+  }
+
+  static _onGlobalChat(msg: { type: string; messages: import('../types').ChatMessage[] }, respond: ResponseCallback): void {
+    (async () => {
+      try {
+        const { messages } = msg
+        if (!messages?.length) {
+          respond({ ok: false, error: 'no messages provided' })
+          return
+        }
+        
+        log.log('onGlobalChat processing', messages.length, 'messages')
+        const result = await PageService.globalChat(messages)
+        
+        respond({
+          ...result,
+          timing: result.timing || null
+        })
+      } catch (err) {
+        log.error('onGlobalChat error:', (err as Error).message)
+        respond({ ok: false, error: (err as Error).message || 'global chat failed' })
       }
     })()
   }

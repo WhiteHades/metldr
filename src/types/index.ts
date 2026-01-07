@@ -501,6 +501,7 @@ export type BackgroundMessage =
   | { type: 'RAG_HAS_INDEXED_CONTENT'; sourceUrl: string }
   | { type: 'RAG_SEARCH_WITH_CONTEXT'; query: string; limit?: number; sourceUrl?: string }
   | { type: 'RAG_IS_INDEXING'; sourceId: string }
+  | { type: 'GLOBAL_CHAT'; messages: ChatMessage[] }
   | { type: 'PDF_SUMMARIZE'; url: string }
   | { type: 'PDF_EXTRACT_TEXT'; url: string }
   | { type: 'OPEN_SIDE_PANEL'; focus?: string }
