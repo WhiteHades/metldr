@@ -9,6 +9,7 @@ type StorageKey =
   | 'dictDownloadProgress'
   | 'downloadingLanguages'
   | 'fontSize'
+  | 'donationState'
 
 class StorageServiceClass {
   private cache: Map<string, { value: unknown; timestamp: number }> = new Map()
