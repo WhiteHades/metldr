@@ -107,6 +107,24 @@ function updateUrlState(targetUrl: string, updater: (state: ChatState) => void):
   }
 }
 
+// set messages for a URL from external source (IDB load) - syncs with urlStates
+function setUrlMessages(url: string, messages: AppChatMessage[]): void {
+  const state = getUrlState(url)
+  state.messages = [...messages]
+  
+  // if this is the active URL, also update shared refs
+  if (url === activeUrl) {
+    chatMessages.value = [...messages]
+  }
+  log.log(`[State] set ${url.slice(0, 40)}: ${messages.length} msgs from IDB`)
+}
+
+// get messages for a URL from in-memory state
+function getUrlMessages(url: string): AppChatMessage[] {
+  const state = urlStates.get(url)
+  return state ? [...state.messages] : []
+}
+
 declare const LanguageModel: {
   availability: (opts?: { languages?: string[] }) => Promise<string | { available: string }>
   create: (options?: { 
@@ -154,6 +172,7 @@ export function useChat() {
     log.log(`[Chat] starting for ${targetUrl.slice(0, 50)}`)
     
     const userMessage = chatInput.value.trim()
+    const messageStartTime = performance.now()  // track total time from message send
     chatInput.value = ''
     
     // update target URL's state directly
@@ -287,9 +306,11 @@ export function useChat() {
         }
         
         if (contextText.length > CONTEXT_THRESHOLD) {
-          const searchRes = await sendToBackground({ type: 'RAG_SEARCH_WITH_CONTEXT', query: userMessage, limit: 5, sourceUrl: currentUrl }) as { success: boolean; context?: string }
+          const ragStart = performance.now()
+          const searchRes = await sendToBackground({ type: 'RAG_SEARCH_WITH_CONTEXT', query: userMessage, limit: 5, sourceUrl: currentUrl }) as { success: boolean; context?: string; timing?: { embed?: number; search?: number } }
+          const ragTime = Math.round(performance.now() - ragStart)
           relevantContext = searchRes?.success ? (searchRes.context || '') : ''
-          log.log(`found context from RAG: ${relevantContext.length} chars`)
+          log.log(`found context from RAG: ${relevantContext.length} chars (${ragTime}ms)`)
           
           if (!relevantContext) {
             log.log('RAG empty for large doc, triggering indexing...')
@@ -413,18 +434,31 @@ RULES:
                   
                   flushSaveChat()
                   
-                  const timing = Math.round(performance.now() - start)
-                  log.log('streaming complete', { len: fullResponse.length, timing })
+                  const llmTime = Math.round(performance.now() - start)
+                  const totalTime = Math.round(performance.now() - messageStartTime)
+                  const ragTime = totalTime - llmTime
+                  log.log('streaming complete', { len: fullResponse.length, total: totalTime, llm: llmTime, rag: ragTime })
                   
                   updateUrlState(targetUrl, state => {
                     const lastMsg = state.messages[state.messages.length - 1]
                     if (lastMsg?.role === 'assistant') {
-                      lastMsg.timing = { total: timing, model: 'gemini-nano' }
+                      lastMsg.timing = { 
+                        total: totalTime, 
+                        llm: llmTime,
+                        rag: ragTime > 100 ? ragTime : undefined,  // only show if significant
+                        model: 'gemini-nano' 
+                      }
                     }
                   })
                   
-                  chromeResult = { ok: true, content: fullResponse, model: 'gemini-nano', timing }
-                  analyticsService.trackChat('assistant', fullResponse, timing).catch(() => {})
+                  // save to IDB immediately - prevents lost response if user switched tabs during streaming
+                  const completedState = getUrlState(targetUrl)
+                  const normalizedUrl = targetUrl.split('?')[0].replace(/\/+$/, '')
+                  cacheService.setTabSession(normalizedUrl, completedState.messages, null, false)
+                    .catch(err => log.warn('post-stream save failed', err.message))
+                  
+                  chromeResult = { ok: true, content: fullResponse, model: 'gemini-nano', timing: totalTime }
+                  analyticsService.trackChat('assistant', fullResponse, totalTime).catch(() => {})
                 } catch (streamErr) {
                   log.log('streaming failed, trying non-streaming...', (streamErr as Error).message)
                   
@@ -515,14 +549,29 @@ RULES:
           const timing = Math.round(performance.now() - start)
           log.log('ollama streaming complete', { len: fullResponse.length, timing })
           
+          const llmTime = timing
+          const totalTime = Math.round(performance.now() - messageStartTime)
+          const ragTime = totalTime - llmTime
+          
           updateUrlState(targetUrl, state => {
             const lastMsg = state.messages[state.messages.length - 1]
             if (lastMsg?.role === 'assistant') {
-              lastMsg.timing = { total: timing, model }
+              lastMsg.timing = { 
+                total: totalTime, 
+                llm: llmTime,
+                rag: ragTime > 100 ? ragTime : undefined,
+                model 
+              }
             }
           })
           
-          analyticsService.trackChat('assistant', fullResponse, timing).catch(() => {})
+          // save to IDB immediately - prevents lost response if user switched tabs
+          const ollCompletedState = getUrlState(targetUrl)
+          const ollNormalizedUrl = targetUrl.split('?')[0].replace(/\/+$/, '')
+          cacheService.setTabSession(ollNormalizedUrl, ollCompletedState.messages, null, false)
+            .catch(err => log.warn('post-stream save failed', err.message))
+          
+          analyticsService.trackChat('assistant', fullResponse, totalTime).catch(() => {})
         } catch (err) {
           throw err
         }
@@ -623,6 +672,8 @@ RULES:
     switchToUrl,
     getActiveUrl,
     saveCurrentToUrlState,
-    loadFromUrlState
+    loadFromUrlState,
+    setUrlMessages,
+    getUrlMessages
   }
 }

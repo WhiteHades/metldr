@@ -405,6 +405,11 @@ export function usePageSummary() {
     summaryError.value = null
     summaryPrompt.value = null
   }
+  
+  // called on tab change to update URL for chrome:// detection
+  function setCurrentTabUrl(url: string | null): void {
+    currentTabUrl.value = url
+  }
 
   async function refreshCurrentTabUrl(): Promise<void> {
     try {
@@ -458,7 +463,8 @@ export function usePageSummary() {
       if (saveTabSession) await saveTabSession()
     } catch (err) {
       if ((err as Error).name === 'AbortError') {
-        summaryError.value = 'File selection cancelled'
+        // user cancelled file picker - revert to the "open PDF file" button UI
+        summaryError.value = 'LOCAL_PDF_CLICK_TO_OPEN'
       } else {
         log.error('openLocalPdf failed', (err as Error).message)
         summaryError.value = `PDF processing failed: ${(err as Error).message}`
@@ -488,6 +494,7 @@ export function usePageSummary() {
     acceptSummaryPrompt,
     declineSummaryPrompt,
     resetSummaryState,
+    setCurrentTabUrl,
     refreshCurrentTabUrl,
     openLocalPdf
   }

@@ -75,16 +75,19 @@ export function useTabSession() {
     url: string,
     chatMessages: Ref<AppChatMessage[]>,
     pageSummary: Ref<AppPageSummary | null>,
-    summaryCollapsed: Ref<boolean>
+    summaryCollapsed: Ref<boolean>,
+    setUrlMessages?: (url: string, messages: AppChatMessage[]) => void
   ): Promise<boolean> {
     const emailId = extractGmailThreadId(url)
     
     if (emailId) {
       const session = await cacheService.getEmailSession(emailId)
       if (session) {
-        chatMessages.value = Array.isArray(session.chatMessages) ? session.chatMessages : []
-        log.log('loaded gmail session', { emailId: emailId.slice(0, 20), msgs: chatMessages.value.length })
-        return chatMessages.value.length > 0
+        const msgs = Array.isArray(session.chatMessages) ? session.chatMessages : []
+        chatMessages.value = msgs
+        if (setUrlMessages) setUrlMessages(url, msgs)
+        log.log('loaded gmail session', { emailId: emailId.slice(0, 20), msgs: msgs.length })
+        return msgs.length > 0
       }
       log.log('no gmail session for', emailId.slice(0, 20))
       return false
@@ -113,10 +116,15 @@ export function useTabSession() {
         }
       }
       
-      chatMessages.value = Array.isArray(session.chatMessages) ? session.chatMessages : []
+      const msgs = Array.isArray(session.chatMessages) ? session.chatMessages : []
+      chatMessages.value = msgs
       pageSummary.value = session.pageSummary || null
       summaryCollapsed.value = session.summaryCollapsed || false
-      log.log('loaded tab session', { url: normalizedUrl.slice(0, 50), msgs: chatMessages.value.length })
+      
+      // sync with useChat's urlStates
+      if (setUrlMessages) setUrlMessages(url, msgs)
+      
+      log.log('loaded tab session', { url: normalizedUrl.slice(0, 50), msgs: msgs.length })
       return true
     }
     
@@ -133,7 +141,8 @@ export function useTabSession() {
     aiReady: Ref<boolean>,
     summaryMode: Ref<string>,
     fetchSummary: (force: boolean, trigger: string) => Promise<void>,
-    switchChatUrl?: (url: string) => void
+    switchChatUrl?: (url: string) => void,
+    setUrlMessages?: (url: string, messages: AppChatMessage[]) => void
   ): () => void {
     let urlPollInterval: ReturnType<typeof setInterval> | null = null
     let previousUrl: string | null = null
@@ -195,14 +204,14 @@ export function useTabSession() {
       
       if (switchChatUrl) {
         if (chatMessages.value.length === 0) {
-          await loadTabSession(newUrl, chatMessages, pageSummary, summaryCollapsed)
+          await loadTabSession(newUrl, chatMessages, pageSummary, summaryCollapsed, setUrlMessages)
           log.log('loaded chat from IDB (in-memory was empty)')
         } else {
           const dummyChatRef = ref<AppChatMessage[]>([])
-          await loadTabSession(newUrl, dummyChatRef, pageSummary, summaryCollapsed)
+          await loadTabSession(newUrl, dummyChatRef, pageSummary, summaryCollapsed, setUrlMessages)
         }
       } else {
-        await loadTabSession(newUrl, chatMessages, pageSummary, summaryCollapsed)
+        await loadTabSession(newUrl, chatMessages, pageSummary, summaryCollapsed, setUrlMessages)
       }
       
       // Always auto-fetch for PDFs, otherwise respect summaryMode
@@ -229,7 +238,7 @@ export function useTabSession() {
         }
         
         const isPdf = currentTabUrl.value.toLowerCase().endsWith('.pdf') || currentTabUrl.value.includes('.pdf?')
-        loadTabSession(currentTabUrl.value, chatMessages, pageSummary, summaryCollapsed).then(hasSession => {
+        loadTabSession(currentTabUrl.value, chatMessages, pageSummary, summaryCollapsed, setUrlMessages).then(hasSession => {
           if (!hasSession && aiReady.value && (summaryMode.value === 'auto' || isPdf)) {
             fetchSummary(false, 'auto')
           }
