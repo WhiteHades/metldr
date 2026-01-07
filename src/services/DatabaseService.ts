@@ -100,6 +100,29 @@ class DatabaseServiceClass {
     })
   }
 
+  // batch put
+  async putBatch<T>(config: DatabaseConfig, storeName: string, items: T[], chunkSize = 500): Promise<void> {
+    const db = await this.getDatabase(config)
+    
+    for (let i = 0; i < items.length; i += chunkSize) {
+      const chunk = items.slice(i, i + chunkSize)
+      
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction([storeName], 'readwrite')
+        const store = tx.objectStore(storeName)
+        
+        for (const item of chunk) {
+          store.put(item)
+        }
+        
+        tx.oncomplete = () => resolve()
+        tx.onerror = () => reject(tx.error)
+      })
+    }
+    
+    console.log(`[DatabaseService] putBatch: ${items.length} items to ${storeName}`)
+  }
+
   async delete(config: DatabaseConfig, storeName: string, key: string): Promise<void> {
     const db = await this.getDatabase(config)
 
