@@ -26,6 +26,8 @@ export class PdfToolbar {
   private sidePanelOpen = false
   private themeUnsubscribe: (() => void) | null = null
   private localPdfPrompt: HTMLElement | null = null
+  private progressBar: HTMLElement | null = null
+  private messageListener: ((message: any) => void) | null = null
 
   constructor() {
     this.detectPdfPage()
@@ -84,6 +86,61 @@ export class PdfToolbar {
     })
     
     this.setupCloseHandlers(this.shadowRoot)
+    this.setupProgressListener()
+  }
+  
+  private setupProgressListener(): void {
+    const currentUrl = window.location.href
+    
+    this.messageListener = (message: any) => {
+      if (message?.type === 'INDEXING_PROGRESS' && message.sourceId === currentUrl) {
+        this.updateProgress(message.percent)
+      }
+    }
+    
+    chrome.runtime.onMessage.addListener(this.messageListener)
+  }
+  
+  private updateProgress(percent: number): void {
+    const shadow = this.container?.shadowRoot
+    if (!shadow) return
+    
+    if (!this.progressBar) {
+      // create progress bar
+      this.progressBar = document.createElement('div')
+      this.progressBar.className = 'metldr-pdf-progress'
+      this.progressBar.innerHTML = `
+        <div class="progress-content">
+          <span class="progress-text">indexing...</span>
+          <span class="progress-percent">0%</span>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill"></div>
+        </div>
+      `
+      shadow.appendChild(this.progressBar)
+      requestAnimationFrame(() => this.progressBar?.classList.add('visible'))
+    }
+    
+    // update progress
+    const fill = this.progressBar.querySelector('.progress-fill') as HTMLElement
+    const percentText = this.progressBar.querySelector('.progress-percent')
+    if (fill) fill.style.width = `${percent}%`
+    if (percentText) percentText.textContent = `${percent}%`
+    
+    // hide when complete
+    if (percent >= 100) {
+      setTimeout(() => this.hideProgress(), 1500)
+    }
+  }
+  
+  private hideProgress(): void {
+    if (!this.progressBar) return
+    this.progressBar.classList.remove('visible')
+    setTimeout(() => {
+      this.progressBar?.remove()
+      this.progressBar = null
+    }, 200)
   }
 
   private updateStyles(theme: Theme): void {
@@ -194,8 +251,23 @@ export class PdfToolbar {
   async summarize(): Promise<void> {
     if (this.isProcessing) return
     
-    // for local PDFs, show file picker prompt directly
+    // for local PDFs, check cache first before showing file picker
     if (this.isLocalPdf) {
+      try {
+        const response = await chrome.runtime.sendMessage({
+          type: 'GET_PAGE_CACHE',
+          url: window.location.href
+        }) as { summary?: { bullets?: string[]; title?: string } } | null
+        
+        if (response?.summary?.bullets?.length) {
+          this.collapseMenu()
+          this.showResult(response.summary.bullets)
+          return
+        }
+      } catch {
+        // cache check failed, continue with file picker
+      }
+      
       this.collapseMenu()
       this.showLocalPdfPrompt('summarize')
       return
@@ -475,12 +547,13 @@ export class PdfToolbar {
       const arrayBuffer = await file.arrayBuffer()
       const uint8Array = new Uint8Array(arrayBuffer)
       
-      // send to background for processing (uses existing pdfService logic)
+      // send to background for processing with sourceUrl for proper caching
       const response = await chrome.runtime.sendMessage({
         type: 'PDF_PROCESS_ARRAYBUFFER',
         data: Array.from(uint8Array),
         filename: file.name,
-        action
+        action,
+        sourceUrl: window.location.href
       }) as { success: boolean; summary?: { bullets: string[] }; text?: string; wordCount?: number; error?: string }
       
       if (response?.success) {
@@ -872,34 +945,94 @@ export class PdfToolbar {
         width: calc(100% - 28px);
         margin: 0 14px 14px;
         padding: 10px 16px;
-        border: none;
+        border: 1px solid color-mix(in srgb, ${theme.primary} 40%, transparent);
         border-radius: 10px;
-        background: ${theme.primary};
-        color: white;
+        background: color-mix(in srgb, ${theme.primary} 15%, transparent);
+        color: ${theme.primary};
         font-size: 13px;
         font-weight: 600;
         cursor: pointer;
-        transition: all 0.2s;
+        transition: all 0.15s;
       }
       
       .prompt-action:hover {
-        opacity: 0.9;
-        transform: scale(1.02);
+        background: color-mix(in srgb, ${theme.primary} 25%, transparent);
+        border-color: color-mix(in srgb, ${theme.primary} 60%, transparent);
       }
       
       .prompt-action .icon {
         display: flex;
+      }
+      
+      /* progress bar styles */
+      .metldr-pdf-progress {
+        position: fixed;
+        bottom: 80px;
+        right: 24px;
+        z-index: 999996;
+        width: 200px;
+        padding: 10px 14px;
+        background: ${theme.bg};
+        border: 1px solid ${theme.border};
+        border-radius: 12px;
+        box-shadow: 0 4px 16px ${theme.shadow};
+        opacity: 0;
+        transform: translateY(8px);
+        transition: all 0.2s ease;
+      }
+      
+      .metldr-pdf-progress.visible {
+        opacity: 1;
+        transform: translateY(0);
+      }
+      
+      .progress-content {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 6px;
+      }
+      
+      .progress-text {
+        font-size: 11px;
+        color: ${theme.textMuted};
+      }
+      
+      .progress-percent {
+        font-size: 11px;
+        font-weight: 600;
+        color: ${theme.primary};
+      }
+      
+      .progress-bar {
+        height: 4px;
+        background: ${theme.border};
+        border-radius: 2px;
+        overflow: hidden;
+      }
+      
+      .progress-fill {
+        height: 100%;
+        width: 0%;
+        background: ${theme.primary};
+        border-radius: 2px;
+        transition: width 0.2s ease;
       }
     `
   }
 
   cleanup(): void {
     this.themeUnsubscribe?.()
+    if (this.messageListener) {
+      chrome.runtime.onMessage.removeListener(this.messageListener)
+      this.messageListener = null
+    }
     this.container?.remove()
     this.container = null
     this.fab = null
     this.menu = null
     this.resultCard = null
+    this.progressBar = null
     this.styleEl = null
   }
 }

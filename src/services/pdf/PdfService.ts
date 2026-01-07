@@ -364,12 +364,21 @@ export class PdfService {
       
       fullText += chunkText + '\n\n'
       
+      // broadcast progress to side panel
+      const broadcastProgress = (percent: number) => {
+        chrome.runtime.sendMessage({
+          type: 'INDEXING_PROGRESS',
+          sourceId: url,
+          percent
+        }).catch(() => {})
+      }
+      
       ragService.indexChunks(chunkText, {
         sourceId: url,
         sourceUrl: url,
         sourceType: 'pdf',
         title: title || 'PDF Document'
-      }).catch(err => console.warn('[PdfService] Chunk indexing failed:', err))
+      }, broadcastProgress).catch(err => console.warn('[PdfService] Chunk indexing failed:', err))
       
       chunksIndexed++
     }
