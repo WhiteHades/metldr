@@ -277,7 +277,11 @@ async function handleMessage(request: any): Promise<any> {
       case 'VOY_SEARCH':
         await ensureVoy()
         const searchResults = voyIndex.search(request.embedding, request.limit || 5)
-        data = { results: searchResults.neighbors.map((n: any) => ({ id: n.id, score: n.distance })) }
+        // voy with inner product: distance IS similarity for normalized vectors (higher = better)
+        data = { results: searchResults.neighbors.map((n: any) => ({ 
+          id: n.id, 
+          score: n.distance // inner product similarity, range ~0-1
+        })) }
         break
         
       case 'VOY_SERIALIZE':
