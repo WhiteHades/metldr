@@ -165,7 +165,9 @@ export class VectorStore {
             indexData = await this.decompress(indexData)
             console.log(`[VectorStore] Decompressed VOY index: ${record.value.length} → ${indexData.length} bytes`)
           }
-          await localModels.voyLoad(indexData)
+          // convert bytes back to string for voyLoad
+          const indexStr = new TextDecoder().decode(indexData)
+          await localModels.voyLoad(indexStr)
           this.voyIndexLoadedAt = Date.now()
           console.log(`[VectorStore] VOY index loaded from IDB (${Date.now() - startTime}ms)`)
         } catch (err) {
@@ -204,9 +206,12 @@ export class VectorStore {
       return true
     }
     
-    // fallback: check IDB directly
-    const doc = await databaseService.get<any>(DB_CONFIGS.cache, 'page_cache', `rag:article:${sourceId}:chunk:0`)
-    return !!doc
+    // fallback: check IDB for all source types
+    for (const type of ['article', 'pdf', 'email']) {
+      const doc = await databaseService.get<any>(DB_CONFIGS.cache, 'page_cache', `rag:${type}:${sourceId}:chunk:0`)
+      if (doc) return true
+    }
+    return false
   }
 
   // get doc count for verification
@@ -268,21 +273,27 @@ export class VectorStore {
     
     console.log('[VectorStore] Saving VOY index (compressed) to IDB...')
     try {
-      const index = await localModels.voySerialize()
-      if (index && index.length > 0) {
-        // gzip compress for 60-80% smaller storage
-        const compressed = await this.compress(index)
-        
-        await databaseService.put(DB_CONFIGS.cache, 'page_cache', {
-          url: 'system:voy_index',
-          value: compressed,
-          compressed: true,
-          timestamp: Date.now()
-        })
-        console.log(`[VectorStore] VOY index saved: ${index.length} → ${compressed.length} bytes (${Math.round((1 - compressed.length / index.length) * 100)}% reduction)`)
-      } else {
+      // voySerialize now returns string directly (survives chrome messaging)
+      const serializedStr = await localModels.voySerialize()
+      
+      if (!serializedStr) {
         console.log('[VectorStore] VOY index empty, skipping save')
+        return
       }
+      
+      // convert string to bytes for compression
+      const index = new TextEncoder().encode(serializedStr)
+      
+      // gzip compress for 60-80% smaller storage
+      const compressed = await this.compress(index)
+      
+      await databaseService.put(DB_CONFIGS.cache, 'page_cache', {
+        url: 'system:voy_index',
+        value: compressed,
+        compressed: true,
+        timestamp: Date.now()
+      })
+      console.log(`[VectorStore] VOY index saved: ${index.length} → ${compressed.length} bytes (${Math.round((1 - compressed.length / index.length) * 100)}% reduction)`)
     } catch (err) {
       console.error('[VectorStore] Save failed:', err)
     }
@@ -290,14 +301,12 @@ export class VectorStore {
 
   // gzip compression
   private async compress(data: Uint8Array): Promise<Uint8Array> {
-    const buffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer
-    const stream = new Blob([buffer]).stream().pipeThrough(new CompressionStream('gzip'))
+    const stream = new Blob([data]).stream().pipeThrough(new CompressionStream('gzip'))
     return new Uint8Array(await new Response(stream).arrayBuffer())
   }
 
   private async decompress(data: Uint8Array): Promise<Uint8Array> {
-    const buffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer
-    const stream = new Blob([buffer]).stream().pipeThrough(new DecompressionStream('gzip'))
+    const stream = new Blob([data]).stream().pipeThrough(new DecompressionStream('gzip'))
     return new Uint8Array(await new Response(stream).arrayBuffer())
   }
 

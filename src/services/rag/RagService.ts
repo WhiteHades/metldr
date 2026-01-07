@@ -138,7 +138,7 @@ export class RagService {
     }
   }
 
-  async indexChunks(text: string, metadata: ChunkMetadata): Promise<void> {
+  async indexChunks(text: string, metadata: ChunkMetadata, onProgress?: (percent: number) => void): Promise<void> {
     const wallClockStart = Date.now()
     await this.ensureMetadataLoaded()
 
@@ -150,7 +150,7 @@ export class RagService {
       return
     }
 
-    const indexPromise = this._doIndexChunks(text, metadata, wallClockStart)
+    const indexPromise = this._doIndexChunks(text, metadata, wallClockStart, onProgress)
     this.activeIndexing.set(metadata.sourceId, indexPromise)
     
     try {
@@ -160,7 +160,7 @@ export class RagService {
     }
   }
 
-  private async _doIndexChunks(text: string, metadata: ChunkMetadata, wallClockStart: number): Promise<void> {
+  private async _doIndexChunks(text: string, metadata: ChunkMetadata, wallClockStart: number, onProgress?: (percent: number) => void): Promise<void> {
     const stats: IndexingStats = {
       sourceId: metadata.sourceId,
       wallClockMs: 0,
@@ -170,7 +170,10 @@ export class RagService {
       skipped: false
     }
 
+    const report = (p: number) => onProgress?.(p)
+
     try {
+      report(5) // starting
       const contentHash = this.hashContent(text)
       const existingHash = this.contentHashes.get(metadata.sourceId)
       
@@ -183,14 +186,15 @@ export class RagService {
           stats.skipReason = 'unchanged'
           stats.wallClockMs = Date.now() - wallClockStart
           this.lastStats = stats
+          report(100) // done (cached)
           console.log(`[RagService] SKIPPED: ${metadata.sourceId.slice(0, 50)} (content unchanged, VOY verified) [${stats.wallClockMs}ms]`)
           return
         } else {
           console.log(`[RagService] Metadata says indexed but VOY empty, re-indexing...`)
-          // fall through to re-index
         }
       }
 
+      report(10) // chunking
       const contentType = metadata.sourceType === 'email' ? 'email' : metadata.sourceType === 'pdf' ? 'pdf' : 'article'
       const chunks = await chunkingService.chunkForEmbedding(text, contentType as 'email' | 'article' | 'pdf')
       if (chunks.length === 0) {
@@ -198,10 +202,12 @@ export class RagService {
         stats.skipReason = 'no_chunks'
         stats.wallClockMs = Date.now() - wallClockStart
         this.lastStats = stats
+        report(100)
         console.log(`[RagService] SKIPPED: No chunks to index [${stats.wallClockMs}ms]`)
         return
       }
       
+      report(20) // chunks ready
       stats.chunkCount = chunks.length
       console.log(`[RagService] INDEXING: ${chunks.length} chunks for ${metadata.sourceId.slice(0, 50)}`)
       
@@ -220,15 +226,20 @@ export class RagService {
         timestamp: Date.now()
       }))
 
-      // embed and store with timing
+      // embed and store with progress (20% -> 90%)
       const embedStart = Date.now()
-      await this.embedAndStoreBatched(entries, EMBEDDING_CONCURRENCY)
+      await this.embedAndStoreBatchedWithProgress(entries, EMBEDDING_CONCURRENCY, (batchPercent) => {
+        const scaledProgress = 20 + Math.round(batchPercent * 0.7) // 20-90%
+        report(scaledProgress)
+      })
       stats.embeddingMs = Date.now() - embedStart
       
+      report(92) // persisting
       const persistStart = Date.now()
       this.contentHashes.set(metadata.sourceId, contentHash)
       await this.persistMetadata(metadata.sourceId, contentHash, chunks.length)
       
+      report(96)
       await vectorStore.forceSave()
       stats.storageMs = Date.now() - persistStart
       
@@ -238,11 +249,13 @@ export class RagService {
       // invalidate query cache (new content indexed)
       this.queryCache.clear()
       
+      report(100) // done
       console.log(`[RagService] INDEXED: ${chunks.length} chunks for ${metadata.sourceId.slice(0, 50)}`)
       console.log(`[RagService] Timing: total=${stats.wallClockMs}ms, embed=${stats.embeddingMs}ms, persist=${stats.storageMs}ms`)
     } catch (err) {
       stats.wallClockMs = Date.now() - wallClockStart
       this.lastStats = stats
+      report(100) // end on error too
       console.error(`[RagService] Chunk indexing FAILED after ${stats.wallClockMs}ms:`, err)
     }
   }
@@ -273,6 +286,17 @@ export class RagService {
 
   // batch embed and store - uses GPU-level batching for 3x speedup
   private async embedAndStoreBatched(entries: VectorEntry[], batchSize: number): Promise<void> {
+    await this.embedAndStoreBatchedWithProgress(entries, batchSize)
+  }
+
+  // batch embed with progress callback for UI updates
+  private async embedAndStoreBatchedWithProgress(
+    entries: VectorEntry[], 
+    batchSize: number, 
+    onBatchProgress?: (percent: number) => void
+  ): Promise<void> {
+    const totalBatches = Math.ceil(entries.length / batchSize)
+    
     for (let i = 0; i < entries.length; i += batchSize) {
       const batch = entries.slice(i, i + batchSize)
       const texts = batch.map(e => e.content)
@@ -284,6 +308,11 @@ export class RagService {
       await Promise.all(
         batch.map((entry, idx) => vectorStore.add(entry, embeddings[idx]))
       )
+      
+      // report progress after each batch
+      const batchNum = Math.floor(i / batchSize) + 1
+      const percent = Math.round((batchNum / totalBatches) * 100)
+      onBatchProgress?.(percent)
     }
   }
 
@@ -590,11 +619,6 @@ export class RagService {
     } catch (err) {
       console.error('[RagService] Summary indexing failed:', err)
     }
-  }
-
-  // deprecated - kept for compatibility
-  private fuseResults(vec: SearchResult[], key: SearchResult[]): SearchResult[] {
-    return this.fuseResultsRRF(vec, key)
   }
 
   isIndexing(sourceId: string): boolean {

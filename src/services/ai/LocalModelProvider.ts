@@ -323,13 +323,13 @@ class LocalModelProvider {
     return res.data.results
   }
 
-  async voySerialize(): Promise<Uint8Array> {
+  async voySerialize(): Promise<string | null> {
     const res = await this.send({ type: 'VOY_SERIALIZE' })
     if (!res.ok) throw new Error(res.error)
     return res.data.serialized
   }
 
-  async voyLoad(data: Uint8Array): Promise<void> {
+  async voyLoad(data: string): Promise<void> {
     const res = await this.send({ type: 'VOY_LOAD', data })
     if (!res.ok) throw new Error(res.error)
   }

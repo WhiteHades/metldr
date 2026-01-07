@@ -286,13 +286,27 @@ async function handleMessage(request: any): Promise<any> {
         
       case 'VOY_SERIALIZE':
         await ensureVoy()
-        data = { serialized: voyIndex.serialize() }
+        // return serialized string directly - VectorStore will convert to bytes for compression
+        const serializedStr = voyIndex.serialize()
+        data = { serialized: serializedStr || null }
         break
         
       case 'VOY_LOAD':
         await ensureVoy()
         if (Voy && request.data) {
-          voyIndex = Voy.deserialize(request.data)
+          // accept string directly (from chrome messaging) or Uint8Array (legacy)
+          let indexStr: string
+          if (typeof request.data === 'string') {
+            indexStr = request.data
+          } else if (request.data instanceof Uint8Array) {
+            indexStr = new TextDecoder().decode(request.data)
+          } else if (Array.isArray(request.data)) {
+            // array from chrome messaging
+            indexStr = new TextDecoder().decode(new Uint8Array(request.data))
+          } else {
+            throw new Error('VOY_LOAD: Invalid data type')
+          }
+          voyIndex = Voy.deserialize(indexStr)
         }
         data = { loaded: true }
         break
