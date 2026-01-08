@@ -274,38 +274,27 @@ export function useChat() {
       let relevantContext = ''
       
       if (contextText && currentUrl) {
-        // route through background -> offscreen for persistence (survives panel close)
-        const hasIndexRes = await sendToBackground({ type: 'RAG_HAS_INDEXED_CONTENT', sourceUrl: currentUrl }) as { success: boolean; hasContent?: boolean }
-        const hasIndex = hasIndexRes?.success && hasIndexRes.hasContent
-        
-        if (!hasIndex) {
-          if (contextText.length > CONTEXT_THRESHOLD) {
-            updateUrlState(targetUrl, s => { s.indexing = true })
-            log.log(`indexing large doc for chat... ${contextText.length} chars`)
-            try {
-              await sendToBackground({
-                type: 'RAG_INDEX_CHUNKS',
-                text: contextText,
-                metadata: { sourceId: currentUrl, sourceUrl: currentUrl, sourceType: 'article', title: '' }
-              })
-            } catch (indexErr) {
-              if ((indexErr as Error).message !== 'Indexing aborted') {
-                log.warn('indexing failed', (indexErr as Error).message)
-              }
-            } finally {
-              updateUrlState(targetUrl, s => { s.indexing = false })
-            }
-          } else {
-            // fire and forget for small docs - background handles concurrency
-            sendToBackground({
-              type: 'RAG_INDEX_CHUNKS',
+        // unified indexing: ensureIndexed checks if indexed/in-progress/needed internally
+        if (contextText.length > CONTEXT_THRESHOLD) {
+          updateUrlState(targetUrl, s => { s.indexing = true })
+          log.log(`ensuring large doc indexed for chat... ${contextText.length} chars`)
+          try {
+            const ensureRes = await sendToBackground({
+              type: 'RAG_ENSURE_INDEXED',
               text: contextText,
               metadata: { sourceId: currentUrl, sourceUrl: currentUrl, sourceType: 'article', title: '' }
-            }).catch(err => log.warn('async indexing failed', (err as Error).message))
+            }) as { success: boolean; result?: string }
+            log.log(`ensureIndexed result: ${ensureRes?.result}`)
+          } catch (indexErr) {
+            const msg = (indexErr as Error).message
+            if (msg !== 'Indexing aborted' && msg !== 'Operation cancelled') {
+              log.warn('indexing failed', msg)
+            }
+          } finally {
+            updateUrlState(targetUrl, s => { s.indexing = false })
           }
-        }
-        
-        if (contextText.length > CONTEXT_THRESHOLD) {
+          
+          // search RAG
           const ragStart = performance.now()
           const searchRes = await sendToBackground({ type: 'RAG_SEARCH_WITH_CONTEXT', query: userMessage, limit: 5, sourceUrl: currentUrl }) as { success: boolean; context?: string; timing?: { embed?: number; search?: number } }
           const ragTime = Math.round(performance.now() - ragStart)
@@ -313,29 +302,17 @@ export function useChat() {
           log.log(`found context from RAG: ${relevantContext.length} chars (${ragTime}ms)`)
           
           if (!relevantContext) {
-            log.log('RAG empty for large doc, triggering indexing...')
-            updateUrlState(targetUrl, s => { s.indexing = true })
-            try {
-              await sendToBackground({
-                type: 'RAG_INDEX_CHUNKS',
-                text: contextText,
-                metadata: { sourceId: currentUrl, sourceUrl: currentUrl, sourceType: 'article', title: '' }
-              })
-              const retryRes = await sendToBackground({ type: 'RAG_SEARCH_WITH_CONTEXT', query: userMessage, limit: 5, sourceUrl: currentUrl }) as { success: boolean; context?: string }
-              relevantContext = retryRes?.success ? (retryRes.context || '') : ''
-              log.log(`RAG retry after indexing: ${relevantContext.length} chars`)
-            } catch (indexErr) {
-              log.warn('indexing failed, using truncated content', (indexErr as Error).message)
-            } finally {
-              updateUrlState(targetUrl, s => { s.indexing = false })
-            }
-            
-            if (!relevantContext) {
-              relevantContext = contextText.slice(0, CONTEXT_THRESHOLD)
-              log.log('RAG still empty after indexing, using truncated content')
-            }
+            relevantContext = contextText.slice(0, CONTEXT_THRESHOLD)
+            log.log('RAG empty, using truncated content')
           }
         } else {
+          // small docs: fire-and-forget indexing, use full content
+          sendToBackground({
+            type: 'RAG_ENSURE_INDEXED',
+            text: contextText,
+            metadata: { sourceId: currentUrl, sourceUrl: currentUrl, sourceType: 'article', title: '' }
+          }).catch(err => log.warn('async indexing failed', (err as Error).message))
+          
           relevantContext = contextText
           log.log(`using full context (${contextText.length} chars < ${CONTEXT_THRESHOLD} threshold)`)
         }

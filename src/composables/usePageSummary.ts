@@ -110,12 +110,12 @@ function parseBullets(text: string): string[] {
 // index content via background -> offscreen for persistence (survives panel close)
 async function indexToRag(text: string, metadata: { sourceId: string; sourceUrl: string; sourceType: 'article' | 'email' | 'pdf'; title?: string }) {
   try {
-    await sendToBackground({
-      type: 'RAG_INDEX_CHUNKS',
+    const res = await sendToBackground({
+      type: 'RAG_ENSURE_INDEXED',
       text,
       metadata
-    })
-    log.log('RAG indexing complete', metadata.sourceId.slice(0, 50))
+    }) as { success: boolean; result?: string }
+    log.log(`RAG ensureIndexed: ${res?.result}`, metadata.sourceId.slice(0, 50))
   } catch (err) {
     const msg = (err as Error).message
     if (msg !== 'Indexing aborted' && msg !== 'Operation cancelled') {
