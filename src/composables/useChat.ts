@@ -268,21 +268,35 @@ export function useChat() {
         }
       }
       
-      const currentUrl = targetUrl // use captured URL, not current
+      const currentUrl = targetUrl
+      
+      const isEmail = contextText.includes('EMAIL CONTENT:')
+      const docType = isEmail ? 'email thread' : 'article'
+      
+      let emailId: string | null = null
+      if (isEmail && currentUrl.includes('mail.google.com')) {
+        const hashMatch = currentUrl.match(/#[^/]+\/(?:[^/]+\/)?([A-Za-z0-9_-]{16,})$/)
+        emailId = hashMatch?.[1] || null
+        if (emailId) log.log(`extracted emailId: ${emailId.slice(0, 20)}...`)
+      }
       
       const CONTEXT_THRESHOLD = 8000
       let relevantContext = ''
       
       if (contextText && currentUrl) {
-        // unified indexing: ensureIndexed checks if indexed/in-progress/needed internally
+        // determine sourceId: emailId for emails (to match EmailService), URL for articles
+        const sourceId = isEmail && emailId ? emailId : currentUrl
+        const sourceUrl = isEmail && emailId ? `email://${emailId}` : currentUrl
+        const sourceType = isEmail ? 'email' : 'article'
+        
         if (contextText.length > CONTEXT_THRESHOLD) {
           updateUrlState(targetUrl, s => { s.indexing = true })
-          log.log(`ensuring large doc indexed for chat... ${contextText.length} chars`)
+          log.log(`ensuring large doc indexed for chat... ${contextText.length} chars, sourceId: ${sourceId.slice(0, 40)}`)
           try {
             const ensureRes = await sendToBackground({
               type: 'RAG_ENSURE_INDEXED',
               text: contextText,
-              metadata: { sourceId: currentUrl, sourceUrl: currentUrl, sourceType: 'article', title: '' }
+              metadata: { sourceId, sourceUrl, sourceType, title: '' }
             }) as { success: boolean; result?: string }
             log.log(`ensureIndexed result: ${ensureRes?.result}`)
           } catch (indexErr) {
@@ -294,9 +308,9 @@ export function useChat() {
             updateUrlState(targetUrl, s => { s.indexing = false })
           }
           
-          // search RAG
+          // search RAG (use emailId-based sourceUrl for emails when filtering)
           const ragStart = performance.now()
-          const searchRes = await sendToBackground({ type: 'RAG_SEARCH_WITH_CONTEXT', query: userMessage, limit: 5, sourceUrl: currentUrl }) as { success: boolean; context?: string; timing?: { embed?: number; search?: number } }
+          const searchRes = await sendToBackground({ type: 'RAG_SEARCH_WITH_CONTEXT', query: userMessage, limit: 5, sourceUrl }) as { success: boolean; context?: string; timing?: { embed?: number; search?: number } }
           const ragTime = Math.round(performance.now() - ragStart)
           relevantContext = searchRes?.success ? (searchRes.context || '') : ''
           log.log(`found context from RAG: ${relevantContext.length} chars (${ragTime}ms)`)
@@ -310,7 +324,7 @@ export function useChat() {
           sendToBackground({
             type: 'RAG_ENSURE_INDEXED',
             text: contextText,
-            metadata: { sourceId: currentUrl, sourceUrl: currentUrl, sourceType: 'article', title: '' }
+            metadata: { sourceId, sourceUrl, sourceType, title: '' }
           }).catch(err => log.warn('async indexing failed', (err as Error).message))
           
           relevantContext = contextText
@@ -320,9 +334,6 @@ export function useChat() {
         relevantContext = contextText
         log.log(`no URL, using full context (${contextText.length} chars)`)
       }
-
-      const isEmail = contextText.includes('EMAIL CONTENT:')
-      const docType = isEmail ? 'email thread' : 'article'
       
       const systemPrompt = relevantContext  
         ? `You are an assistant helping the user understand a ${docType}.
