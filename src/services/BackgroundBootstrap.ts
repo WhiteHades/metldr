@@ -163,6 +163,16 @@ export class BackgroundBootstrap {
         return true
       }
 
+      if (msg.type === 'RAG_ENSURE_INDEXED') {
+        this._onRagEnsureIndexed(msg as { type: string; text: string; metadata: any }, respond)
+        return true
+      }
+
+      if (msg.type === 'RAG_INDEXING_STATUS') {
+        this._onRagIndexingStatus(msg as { type: string; sourceId: string }, respond)
+        return true
+      }
+
       // pdf toolbar handlers
       if (msg.type === 'PDF_SUMMARIZE') {
         this._onPdfSummarize(msg as { type: string; url: string }, respond)
@@ -718,6 +728,51 @@ export class BackgroundBootstrap {
       } catch (err) {
         log.error('onRagSearchWithContext', (err as Error).message)
         respond({ success: false, error: (err as Error).message, context: '' })
+      }
+    })()
+  }
+
+  static _onRagEnsureIndexed(msg: { type: string; text: string; metadata: any }, respond: ResponseCallback): void {
+    (async () => {
+      try {
+        const sourceUrl = msg.metadata?.sourceUrl || msg.metadata?.sourceId || 'unknown'
+        const sourceId = msg.metadata?.sourceId || sourceUrl
+        
+        // broadcast progress to side panel
+        const broadcastProgress = (percent: number) => {
+          console.log('[BackgroundBootstrap] Broadcasting progress:', percent, 'for', sourceId.slice(0, 40))
+          chrome.runtime.sendMessage({
+            type: 'INDEXING_PROGRESS',
+            sourceId,
+            percent
+          }).catch(() => {}) // ignore if side panel closed
+        }
+        
+        // wrap in concurrency manager to prevent duplicate indexing
+        const result = await concurrencyManager.execute('indexing', sourceUrl, async (signal) => {
+          if (signal.aborted) throw new Error('Indexing aborted')
+          return await ragService.ensureIndexed(msg.text, msg.metadata, broadcastProgress)
+        })
+        
+        respond({ success: true, result })
+      } catch (err) {
+        const errMsg = (err as Error).message
+        if (errMsg !== 'Indexing aborted' && errMsg !== 'Operation cancelled') {
+          log.error('onRagEnsureIndexed', errMsg)
+        }
+        respond({ success: false, error: errMsg })
+      }
+    })()
+  }
+
+  static _onRagIndexingStatus(msg: { type: string; sourceId: string }, respond: ResponseCallback): void {
+    (async () => {
+      try {
+        const status = await ragService.getIndexingStatus(msg.sourceId)
+        respond({ success: true, status })
+      } catch (err) {
+        log.error('onRagIndexingStatus', (err as Error).message)
+        respond({ success: false, error: (err as Error).message, status: 'needed' })
       }
     })()
   }
