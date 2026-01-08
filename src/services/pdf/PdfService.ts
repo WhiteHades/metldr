@@ -52,6 +52,15 @@ export class PdfService {
       console.log(`[PdfService] Text extracted. Length: ${text.length}`)
       
       const summary = await this.strategy.execute(text)
+      
+      // index summary for global search
+      ragService.indexSummary(summary, {
+        sourceId: url,
+        sourceUrl: url,
+        sourceType: 'pdf',
+        title: url.split('/').pop() || 'PDF Document'
+      }).catch(err => console.warn('[PdfService] Summary indexing failed:', err))
+      
       return summary
     } catch (err) {
       console.error('[PdfService] Failed to summarize PDF:', err)
@@ -115,7 +124,7 @@ export class PdfService {
   }
 
   // summarize from ArrayBuffer (file picker/drag-drop)
-  async summarizeFromArrayBuffer(data: ArrayBuffer, filename?: string): Promise<{ summary: string; fullText: string }> {
+  async summarizeFromArrayBuffer(data: ArrayBuffer, filename?: string, sourceUrl?: string): Promise<{ summary: string; fullText: string }> {
     try {
       console.log('[PdfService] Processing PDF from ArrayBuffer...')
       
@@ -128,6 +137,15 @@ export class PdfService {
       console.log(`[PdfService] Text extracted. Length: ${text.length}`)
       
       const summary = await this.strategy.execute(text)
+      
+      // index summary for global search
+      const pdfUrl = sourceUrl || `file://${filename || 'document.pdf'}`
+      ragService.indexSummary(summary, {
+        sourceId: pdfUrl,
+        sourceUrl: pdfUrl,
+        sourceType: 'pdf',
+        title: filename || 'PDF Document'
+      }).catch(err => console.warn('[PdfService] Summary indexing failed:', err))
       
       return { summary, fullText: text }
     } catch (err) {
