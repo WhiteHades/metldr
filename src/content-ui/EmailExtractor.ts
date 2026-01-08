@@ -98,7 +98,7 @@ export class EmailExtractor {
             console.log('metldr: [M1] clicking:', header.tagName, header.className?.slice(0, 30))
             header.click()
             clicked++
-            await new Promise(r => setTimeout(r, 200))
+            await new Promise(r => setTimeout(r, 50))
           }
         }
         return clicked > 0 ? `InboxSDK(${clicked})` : null
@@ -110,7 +110,7 @@ export class EmailExtractor {
         if (btn && this.isElementVisible(btn)) {
           console.log('metldr: [M2] clicking Expand All button')
           btn.click()
-          await new Promise(r => setTimeout(r, 500))
+          await new Promise(r => setTimeout(r, 150))
           return 'ExpandAllBtn'
         }
         return null
@@ -125,7 +125,7 @@ export class EmailExtractor {
             console.log('metldr: [M3] clicking collapsed group')
             g.click()
             clicked++
-            await new Promise(r => setTimeout(r, 300))
+            await new Promise(r => setTimeout(r, 80))
           }
         }
         return clicked > 0 ? `CollapsedGroup(${clicked})` : null
@@ -140,7 +140,7 @@ export class EmailExtractor {
             console.log('metldr: [M4] clicking collapsed row')
             row.click()
             clicked++
-            await new Promise(r => setTimeout(r, 200))
+            await new Promise(r => setTimeout(r, 50))
           }
         }
         return clicked > 0 ? `H7Rows(${clicked})` : null
@@ -156,7 +156,7 @@ export class EmailExtractor {
             console.log('metldr: [M5] clicking message-id element')
             el.click()
             clicked++
-            await new Promise(r => setTimeout(r, 200))
+            await new Promise(r => setTimeout(r, 50))
           }
         }
         return clicked > 0 ? `MsgIdEl(${clicked})` : null
@@ -173,7 +173,7 @@ export class EmailExtractor {
             console.log('metldr: [M6] clicking .adn container')
             adn.click()
             clicked++
-            await new Promise(r => setTimeout(r, 200))
+            await new Promise(r => setTimeout(r, 50))
           }
         }
         return clicked > 0 ? `AdnContainers(${clicked})` : null
@@ -207,15 +207,14 @@ export class EmailExtractor {
           const result = await methods[i]()
           if (result) {
             methodsUsed.push(`P${pass}:${result}`)
-            await new Promise(r => setTimeout(r, 400)) // wait for DOM update
+            await new Promise(r => setTimeout(r, 100)) // wait for DOM update
           }
         } catch (e) {
           console.warn('metldr: method', i + 1, 'failed:', e)
         }
       }
       
-      // brief pause between passes for DOM to settle
-      await new Promise(r => setTimeout(r, 500))
+      await new Promise(r => setTimeout(r, 150))
     }
 
     // wait for remaining load promises
@@ -225,8 +224,6 @@ export class EmailExtractor {
         Promise.all(loadPromises),
         new Promise(r => setTimeout(r, timeoutMs))
       ])
-    } else {
-      await new Promise(r => setTimeout(r, 1500))
     }
 
     // final status
@@ -237,6 +234,9 @@ export class EmailExtractor {
     if (finalLoaded < totalMessages) {
       console.warn('metldr: warning:', totalMessages - finalLoaded, 'messages still not loaded')
     }
+
+    // immediately scroll to the last message after expansion (before extraction)
+    this.scrollToLatestMessage(threadView)
   }
 
   // check if element is visible in viewport
@@ -252,32 +252,25 @@ export class EmailExtractor {
     )
   }
 
-  private scrollSummaryIntoView(element: HTMLElement): void {
-    const rect = element.getBoundingClientRect()
-    const viewportHeight = window.innerHeight || document.documentElement.clientHeight
+  private scrollToLatestMessage(threadView: ThreadView): void {
+    const threadElement = (threadView as { getElement?: () => HTMLElement }).getElement?.()
+    const container = threadElement || document.querySelector('div[role="main"]')
+    if (!container) return
+
+    const allMessages = container.querySelectorAll('[data-message-id], .gs, .adn')
+    if (allMessages.length === 0) return
     
-    // if element is already mostly visible, skip scroll
-    const visibleTop = Math.max(0, rect.top)
-    const visibleBottom = Math.min(viewportHeight, rect.bottom)
-    const visibleHeight = Math.max(0, visibleBottom - visibleTop)
-    const elementHeight = rect.height
-    
-    if (visibleHeight >= elementHeight * 0.7) {
-      console.log('metldr: summary already visible, skipping scroll')
-      return
-    }
-    
-    element.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    console.log('metldr: scrolled summary into view')
+    const lastMessage = allMessages[allMessages.length - 1] as HTMLElement
+    const header = lastMessage.querySelector('.gE, .gH, .iw') as HTMLElement || lastMessage
+    header.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    console.log('metldr: scrolled to last message header')
   }
 
-  // extract content from thread (without UI) - used for chat and returning to threads
   private async extractThreadContent(threadView: ThreadView, threadId: string): Promise<void> {
     const subject = threadView.getSubject()
     const messages = threadView.getMessageViewsAll()
     if (!messages || messages.length === 0) return
 
-    // auto-expand collapsed messages and wait for them to load
     await this.expandAndWaitForMessages(threadView, messages)
 
     let fullText = ''
@@ -649,8 +642,6 @@ export class EmailExtractor {
       if (header) {
         UIService.injectSummary(header, summaryCard)
         this.attachRegenerateListener(summaryCard, threadId, fullText, metadata)
-        // scroll summary into view
-        this.scrollSummaryIntoView(summaryCard)
       }
       return
     }
@@ -692,14 +683,10 @@ export class EmailExtractor {
         const summaryCard = UIService.createSummaryCard(summary, threadId)
         UIService.injectSummary(header, summaryCard)
         this.attachRegenerateListener(summaryCard, threadId, fullText, metadata)
-        // scroll summary into view
-        this.scrollSummaryIntoView(summaryCard)
       }
     })
     
     UIService.injectLoading(header, summarizeButton)
-    // scroll button into view
-    this.scrollSummaryIntoView(summarizeButton)
   }
 
   findInjectionPoint(threadElement: HTMLElement | null): Element | null {
@@ -845,7 +832,6 @@ export class EmailExtractor {
       const summaryCard = UIService.createSummaryCard(summary, threadId)
       UIService.injectSummary(header, summaryCard)
       this.attachRegenerateListener(summaryCard, threadId, emailText, metadata)
-      this.scrollSummaryIntoView(summaryCard)
     }
   }
 
