@@ -501,6 +501,8 @@ export type BackgroundMessage =
   | { type: 'RAG_HAS_INDEXED_CONTENT'; sourceUrl: string }
   | { type: 'RAG_SEARCH_WITH_CONTEXT'; query: string; limit?: number; sourceUrl?: string }
   | { type: 'RAG_IS_INDEXING'; sourceId: string }
+  | { type: 'RAG_ENSURE_INDEXED'; text: string; metadata: Record<string, unknown> }
+  | { type: 'RAG_INDEXING_STATUS'; sourceId: string }
   | { type: 'GLOBAL_CHAT'; messages: ChatMessage[] }
   | { type: 'PDF_SUMMARIZE'; url: string }
   | { type: 'PDF_EXTRACT_TEXT'; url: string }
