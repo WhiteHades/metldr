@@ -368,6 +368,7 @@ export class EmailExtractor {
       const result = await new Promise<{ cached: unknown; emailCount?: number } | null>((resolve) => {
         chrome.runtime.sendMessage({ type: 'GET_EMAIL_CACHE', emailId }, (resp) => {
           if (chrome.runtime.lastError) {
+            console.warn('metldr: cache lookup error:', chrome.runtime.lastError.message)
             resolve(null)
           } else {
             resolve(resp || null)
@@ -375,7 +376,10 @@ export class EmailExtractor {
         })
       })
       
-      if (!result?.cached) return null
+      if (!result?.cached) {
+        console.log('metldr: no cached summary found for', emailId.slice(0, 20))
+        return null
+      }
       
       const cachedEmailCount = (result as any).emailCount || 0
       const needsRegeneration = currentEmailCount !== undefined && 
@@ -386,8 +390,10 @@ export class EmailExtractor {
         console.log(`metldr: cache stale - email count changed ${cachedEmailCount} -> ${currentEmailCount}`)
       }
       
+      console.log('metldr: found cached summary for', emailId.slice(0, 20))
       return { summary: result.cached, needsRegeneration }
-    } catch {
+    } catch (err) {
+      console.error('metldr: getCachedSummary error:', (err as Error).message)
       return null
     }
   }
@@ -628,9 +634,14 @@ export class EmailExtractor {
     const cached = cacheResult?.summary
     const needsRegeneration = cacheResult?.needsRegeneration || false
     
+    console.log('metldr: cache check result:', { 
+      hasCached: !!cached, 
+      needsRegeneration,
+      threadId: threadId.slice(0, 20)
+    })
+    
     if (cached) {
       if (needsRegeneration) {
-        // new emails arrived - auto-regenerate since we had a previous summary
         console.log('metldr: new emails detected, auto-regenerating summary')
         await this.autoRegenerateSummary(threadView, threadId, fullText, metadata, threadElement || null)
         return
@@ -638,10 +649,20 @@ export class EmailExtractor {
       
       console.log('metldr: using cached summary')
       const summaryCard = UIService.createSummaryCard(cached, threadId)
-      const header = this.findInjectionPoint(threadElement || null)
+      let header = this.findInjectionPoint(threadElement || null)
+      
+      // retry injection point lookup with delay if not found (gmail dom may not be ready)
+      if (!header) {
+        console.log('metldr: injection point not found, retrying...')
+        await new Promise(r => setTimeout(r, 200))
+        header = this.findInjectionPoint(threadElement || null)
+      }
+      
       if (header) {
         UIService.injectSummary(header, summaryCard)
         this.attachRegenerateListener(summaryCard, threadId, fullText, metadata)
+      } else {
+        console.warn('metldr: could not find injection point for cached summary')
       }
       return
     }
