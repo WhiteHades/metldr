@@ -39,11 +39,262 @@ export class EmailExtractor {
     return this.lastExtractedContent
   }
 
+  // expand collapsed messages with success-based retry
+  // keeps trying different methods until all messages are loaded
+  private async expandAndWaitForMessages(
+    threadView: ThreadView, 
+    messages: MessageView[], 
+    timeoutMs = 10000
+  ): Promise<void> {
+    const totalMessages = messages.length
+    const getLoadedCount = () => messages.filter(m => m.isLoaded?.() !== false).length
+    
+    let loadedCount = getLoadedCount()
+    if (loadedCount >= totalMessages) {
+      console.log('metldr: all', totalMessages, 'messages already loaded')
+      return
+    }
+
+    console.log('metldr: need to expand', totalMessages - loadedCount, 'of', totalMessages, 'messages')
+    const methodsUsed: string[] = []
+
+    // DOM DISCOVERY: log what selectors actually exist in Gmail's current DOM
+    const domScan = {
+      expandAllBtn: !!document.querySelector('[data-tooltip="Expand all"]'),
+      kx: document.querySelectorAll('.kx').length,
+      h7: document.querySelectorAll('.h7[role="listitem"]').length,
+      h7Collapsed: document.querySelectorAll('.h7[role="listitem"][aria-expanded="false"]').length,
+      gs: document.querySelectorAll('.gs').length,
+      adnCls: document.querySelectorAll('.adn').length,
+      collapsedAttr: document.querySelectorAll('[data-collapsed]').length,
+      msgHeaders: document.querySelectorAll('[data-legacy-message-id]').length
+    }
+    console.log('metldr: DOM scan BEFORE expansion:', domScan)
+
+    // set up InboxSDK load event listeners
+    const loadPromises: Promise<void>[] = []
+    const unloaded = messages.filter(m => m.isLoaded?.() === false)
+    for (const msgView of unloaded) {
+      if (msgView.on) {
+        loadPromises.push(new Promise<void>((resolve) => {
+          const timeout = setTimeout(() => resolve(), timeoutMs)
+          msgView.on!('load', () => {
+            clearTimeout(timeout)
+            resolve()
+          })
+        }))
+      }
+    }
+
+    // EXPANSION METHODS - try each and check success after
+    const methods = [
+      // method 1: InboxSDK getElement + click header
+      async () => {
+        let clicked = 0
+        for (const msgView of unloaded) {
+          const el = (msgView as { getElement?: () => HTMLElement }).getElement?.()
+          if (el) {
+            const header = el.querySelector('.gE, .gs, [data-legacy-message-id]') as HTMLElement || el
+            console.log('metldr: [M1] clicking:', header.tagName, header.className?.slice(0, 30))
+            header.click()
+            clicked++
+            await new Promise(r => setTimeout(r, 200))
+          }
+        }
+        return clicked > 0 ? `InboxSDK(${clicked})` : null
+      },
+
+      // method 2: native "Expand all" button
+      async () => {
+        const btn = document.querySelector('[data-tooltip="Expand all"], [aria-label*="Expand"]') as HTMLElement
+        if (btn && this.isElementVisible(btn)) {
+          console.log('metldr: [M2] clicking Expand All button')
+          btn.click()
+          await new Promise(r => setTimeout(r, 500))
+          return 'ExpandAllBtn'
+        }
+        return null
+      },
+
+      // method 3: .kx collapsed groups ("X more messages")
+      async () => {
+        const groups = Array.from(document.querySelectorAll('.kx, .kQ')) as HTMLElement[]
+        let clicked = 0
+        for (const g of groups) {
+          if (this.isElementVisible(g)) {
+            console.log('metldr: [M3] clicking collapsed group')
+            g.click()
+            clicked++
+            await new Promise(r => setTimeout(r, 300))
+          }
+        }
+        return clicked > 0 ? `CollapsedGroup(${clicked})` : null
+      },
+
+      // method 4: .h7 collapsed message rows
+      async () => {
+        const rows = Array.from(document.querySelectorAll('.h7[role="listitem"][aria-expanded="false"]')) as HTMLElement[]
+        let clicked = 0
+        for (const row of rows) {
+          if (this.isElementVisible(row)) {
+            console.log('metldr: [M4] clicking collapsed row')
+            row.click()
+            clicked++
+            await new Promise(r => setTimeout(r, 200))
+          }
+        }
+        return clicked > 0 ? `H7Rows(${clicked})` : null
+      },
+
+      // method 5: click any element with data-legacy-message-id
+      async () => {
+        const msgElements = Array.from(document.querySelectorAll('[data-legacy-message-id]')) as HTMLElement[]
+        let clicked = 0
+        // only click ones that look collapsed (small height)
+        for (const el of msgElements) {
+          if (el.clientHeight < 100 && this.isElementVisible(el)) {
+            console.log('metldr: [M5] clicking message-id element')
+            el.click()
+            clicked++
+            await new Promise(r => setTimeout(r, 200))
+          }
+        }
+        return clicked > 0 ? `MsgIdEl(${clicked})` : null
+      },
+
+      // method 6: .adn message containers
+      async () => {
+        const adns = Array.from(document.querySelectorAll('.adn.ads')) as HTMLElement[]
+        let clicked = 0
+        for (const adn of adns) {
+          // check if collapsed by looking for body content
+          const hasBody = adn.querySelector('.a3s')
+          if (!hasBody && this.isElementVisible(adn)) {
+            console.log('metldr: [M6] clicking .adn container')
+            adn.click()
+            clicked++
+            await new Promise(r => setTimeout(r, 200))
+          }
+        }
+        return clicked > 0 ? `AdnContainers(${clicked})` : null
+      }
+    ]
+
+    const MAX_PASSES = 5
+    let previousLoaded = 0
+    let pass = 0
+
+    while (pass < MAX_PASSES) {
+      pass++
+      loadedCount = getLoadedCount()
+      
+      console.log('metldr: === EXPANSION PASS', pass, '===', loadedCount, '/', totalMessages, 'loaded')
+      
+      if (loadedCount >= totalMessages) {
+        console.log('metldr: all messages loaded!')
+        break
+      }
+      
+      if (loadedCount === previousLoaded && pass > 1) {
+        console.log('metldr: no new messages loaded since last pass, stopping')
+        break
+      }
+      previousLoaded = loadedCount
+
+      // run all methods each pass - they re-scan DOM fresh each time
+      for (let i = 0; i < methods.length; i++) {
+        try {
+          const result = await methods[i]()
+          if (result) {
+            methodsUsed.push(`P${pass}:${result}`)
+            await new Promise(r => setTimeout(r, 400)) // wait for DOM update
+          }
+        } catch (e) {
+          console.warn('metldr: method', i + 1, 'failed:', e)
+        }
+      }
+      
+      // brief pause between passes for DOM to settle
+      await new Promise(r => setTimeout(r, 500))
+    }
+
+    // wait for remaining load promises
+    if (loadPromises.length > 0) {
+      console.log('metldr: waiting for', loadPromises.length, 'InboxSDK load events...')
+      await Promise.race([
+        Promise.all(loadPromises),
+        new Promise(r => setTimeout(r, timeoutMs))
+      ])
+    } else {
+      await new Promise(r => setTimeout(r, 1500))
+    }
+
+    // scroll to latest
+    await this.scrollToLatestMessage(threadView)
+
+    // final status
+    const finalLoaded = getLoadedCount()
+    console.log('metldr: ===== EXPANSION COMPLETE =====')
+    console.log('metldr: result:', finalLoaded, '/', totalMessages, 'messages loaded')
+    console.log('metldr: methods used:', methodsUsed.join(' → ') || 'none')
+    if (finalLoaded < totalMessages) {
+      console.warn('metldr: warning:', totalMessages - finalLoaded, 'messages still not loaded')
+    }
+  }
+
+  // check if element is visible in viewport
+  private isElementVisible(element: HTMLElement): boolean {
+    if (!element) return false
+    const style = window.getComputedStyle(element)
+    return (
+      style.display !== 'none' &&
+      style.visibility !== 'hidden' &&
+      style.opacity !== '0' &&
+      element.offsetWidth > 0 &&
+      element.offsetHeight > 0
+    )
+  }
+
+  // scroll to the latest (bottom) message in a thread
+  private async scrollToLatestMessage(threadView: ThreadView): Promise<void> {
+    const threadElement = threadView.getElement?.()
+    if (!threadElement) return
+
+    // find the scrollable container
+    const scrollContainer = threadElement.closest('[role="main"]') || 
+                            threadElement.closest('.AO') ||
+                            threadElement.parentElement
+
+    if (scrollContainer instanceof HTMLElement) {
+      const scrollableHeight = scrollContainer.scrollHeight
+      const clientHeight = scrollContainer.clientHeight
+
+      // edge case: if content fits in view (no scrollbar needed), no scroll required
+      if (scrollableHeight <= clientHeight) {
+        console.log('metldr: all messages visible, no scroll needed')
+        return
+      }
+
+      // scroll to bottom to show latest message
+      scrollContainer.scrollTo({
+        top: scrollableHeight,
+        behavior: 'smooth'
+      })
+
+      // wait for scroll to complete
+      await new Promise(r => setTimeout(r, 300))
+      console.log('metldr: scrolled to latest message')
+    }
+  }
+
   // extract content from thread (without UI) - used for chat and returning to threads
   private async extractThreadContent(threadView: ThreadView, threadId: string): Promise<void> {
     const subject = threadView.getSubject()
     const messages = threadView.getMessageViewsAll()
     if (!messages || messages.length === 0) return
+
+    // auto-expand collapsed messages and wait for them to load
+    await this.expandAndWaitForMessages(threadView, messages)
 
     let fullText = ''
     const participants = new Set<string>()
@@ -51,13 +302,17 @@ export class EmailExtractor {
     let fromName: string | null = null
     let fromEmail: string | null = null
     const toRecipients = new Set<string>()
+    let loadedCount = 0
 
     for (const msgView of messages) {
       try {
-        const sender = msgView.getSender()
-        const bodyElement = msgView.getBodyElement()
-        const body = bodyElement ? bodyElement.innerText : ''
+        const isLoaded = msgView.isLoaded?.() !== false
+        if (!isLoaded) continue // skip unloaded messages - their data throws SelectorError
 
+        loadedCount++
+
+        // extract sender metadata
+        const sender = msgView.getSender()
         if (sender) {
           if (!fromName && sender.name) fromName = sender.name
           if (!fromEmail && sender.emailAddress) fromEmail = sender.emailAddress
@@ -65,6 +320,11 @@ export class EmailExtractor {
           if (senderStr) participants.add(senderStr)
         }
 
+        // extract date
+        const dateStr = msgView.getDateString?.()
+        if (dateStr) latestDate = dateStr
+
+        // extract recipients
         try {
           const recipientContacts = await msgView.getRecipientsFull()
           if (Array.isArray(recipientContacts)) {
@@ -74,24 +334,26 @@ export class EmailExtractor {
             })
           }
         } catch {
-          const emailAddrs = msgView.getRecipientEmailAddresses()
-          emailAddrs.forEach(email => toRecipients.add(email))
+          try {
+            const emailAddrs = msgView.getRecipientEmailAddresses()
+            emailAddrs.forEach(email => toRecipients.add(email))
+          } catch { /* ignore */ }
         }
 
+        // extract body
+        const bodyElement = msgView.getBodyElement()
+        const body = bodyElement ? bodyElement.innerText : ''
         if (body && body.length > 20) {
           const senderName = sender?.name || sender?.emailAddress || 'Unknown'
-          fullText += `From: ${senderName}\n${body}\n\n`
+          const msgDate = dateStr || ''
+          fullText += `--- Message from ${senderName}${msgDate ? ` (${msgDate})` : ''} ---\n${body}\n\n`
         }
-
-        const dateStr = msgView.getDateString?.()
-        if (dateStr) latestDate = dateStr
-      } catch { /* ignore */ }
+      } catch { /* ignore individual message errors */ }
     }
 
     fullText = fullText.split('\n').filter(line => line.trim().length > 0).join('\n')
     if (!fullText || fullText.length < 50) return
 
-    // simplified metadata for chat context
     const metadata: EmailMetadata = {
       subject,
       participants: Array.from(participants),
@@ -113,7 +375,13 @@ export class EmailExtractor {
     }
 
     this.lastExtractedContent = { threadId, content: fullText, metadata }
-    console.log('metldr: extracted email content for chat', { threadId: threadId.slice(0, 20), len: fullText.length })
+    console.log('metldr: extracted email content for chat', { 
+      threadId: threadId.slice(0, 20), 
+      len: fullText.length,
+      totalMessages: messages.length,
+      loadedMessages: loadedCount,
+      participants: participants.size
+    })
   }
 
   async getCachedSummary(emailId: string): Promise<unknown> {
@@ -306,6 +574,9 @@ export class EmailExtractor {
       return
     }
 
+    // auto-expand collapsed messages and wait for them to load
+    await this.expandAndWaitForMessages(threadView, messages)
+
     let fullText = ''
     const participants = new Set<string>()
     let latestDate: string | null = null
@@ -334,12 +605,16 @@ export class EmailExtractor {
       })
     }
 
+    let loadedCount = 0
+
     for (const msgView of messages) {
       try {
-        const sender = msgView.getSender()
-        const bodyElement = msgView.getBodyElement()
-        const body = bodyElement ? bodyElement.innerText : ''
+        const isLoaded = msgView.isLoaded?.() !== false
+        if (!isLoaded) continue // skip unloaded messages - their data throws SelectorError
 
+        loadedCount++
+
+        const sender = msgView.getSender()
         if (sender) {
           if (!fromName && sender.name) fromName = sender.name
           if (!fromEmail && sender.emailAddress) fromEmail = sender.emailAddress
@@ -349,6 +624,9 @@ export class EmailExtractor {
             sender.emailAddress || ''
           if (senderStr) participants.add(senderStr)
         }
+
+        const dateStr = msgView.getDateString?.()
+        if (dateStr) latestDate = dateStr
 
         if (!replyTo && typeof msgView.getReplyTo === 'function') {
           try {
@@ -377,22 +655,27 @@ export class EmailExtractor {
           const recipientContacts = await msgView.getRecipientsFull()
           addContacts(recipientContacts, toRecipients)
         } catch {
-          // fallback to sync email only method
-          const emailAddrs = msgView.getRecipientEmailAddresses()
-          emailAddrs.forEach(email => toRecipients.add(email))
+          try {
+            const emailAddrs = msgView.getRecipientEmailAddresses()
+            emailAddrs.forEach(email => toRecipients.add(email))
+          } catch { /* ignore */ }
         }
 
+        const bodyElement = msgView.getBodyElement()
+        const body = bodyElement ? bodyElement.innerText : ''
         if (body && body.length > 20) {
           const senderName = sender?.name || sender?.emailAddress || 'Unknown'
-          fullText += `From: ${senderName}\n${body}\n\n`
+          const msgDate = dateStr || ''
+          fullText += `--- Message from ${senderName}${msgDate ? ` (${msgDate})` : ''} ---\n${body}\n\n`
         }
-
-        const dateStr = msgView.getDateString?.()
-        if (dateStr) latestDate = dateStr
-      } catch (err) {
-        console.warn('metldr: error extracting message:', err)
-      }
+      } catch { /* ignore individual message errors */ }
     }
+
+    console.log('metldr: thread extraction complete', { 
+      total: messages.length, 
+      loaded: loadedCount, 
+      participants: participants.size 
+    })
 
     fullText = fullText.split('\n').filter(line => line.trim().length > 0).join('\n')
 
@@ -490,6 +773,19 @@ export class EmailExtractor {
   }
 
   findInjectionPoint(threadElement: HTMLElement | null): Element | null {
+    const container = threadElement || document.querySelector('div[role="main"]')
+    if (!container) return null
+
+    // find all message elements in the thread and get the LAST one (most recent)
+    const allMessages = container.querySelectorAll('[data-message-id], .gs, .adn')
+    if (allMessages.length > 0) {
+      const lastMessage = allMessages[allMessages.length - 1]
+      // inject after the last message's header area
+      const header = lastMessage.querySelector('.gE, .gH, .iw') || lastMessage
+      return header
+    }
+
+    // fallback to thread header if no messages found
     if (threadElement) {
       const header = threadElement.querySelector('.gH') || 
                      threadElement.querySelector('.gE') ||
@@ -500,7 +796,7 @@ export class EmailExtractor {
     return document.querySelector('.gH') || 
            document.querySelector('.gE') ||
            document.querySelector('[data-thread-perm-id]') ||
-           document.querySelector('div[role="main"]')
+           container
   }
 
   getThreadIdFromUrl(): string | null {

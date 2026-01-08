@@ -583,6 +583,9 @@ export interface MessageView {
   getSMTPHeaders?: () => Record<string, string> | null
   getDateString?: () => string | null
   isLoaded?: () => boolean
+  getViewState?: () => 'EXPANDED' | 'COLLAPSED' | 'HIDDEN'
+  getMessageIDAsync?: () => Promise<string>
+  on?: (event: string, callback: (e: unknown) => void) => void
 }
 
 export interface Contact {
