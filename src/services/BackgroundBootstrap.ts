@@ -491,6 +491,8 @@ export class BackgroundBootstrap {
         log.log(`onGlobalChat processing ${messages.length} messages`)
         const result = await PageService.globalChat(messages)
         
+        log.log(`onGlobalChat result has ${result.sources?.length || 0} sources`)
+        
         respond({
           ...result,
           timing: result.timing || null
