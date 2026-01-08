@@ -85,10 +85,11 @@ watch(loading, scrollToBottom)
 
 function renderContent(content: string, sources?: ChatSource[]): string {
   if (!content) return ''
+  console.log('[GlobalSearch.renderContent] sources:', sources?.length, sources?.map(s => ({ index: s.index, title: s.title?.slice(0, 30) })))
   let processed = content.replace(/\[(\d+)\]/g, (match, num) => {
     const idx = parseInt(num)
     const source = sources?.find(s => s.index === idx)
-    if (source?.url) {
+    if (source) {
       return `<a href="#" class="citation" data-source-index="${idx}">[${idx}]</a>`
     }
     return `<span class="citation-dead">[${idx}]</span>`
@@ -146,8 +147,8 @@ function truncate(text: string | undefined | null, len = 100): string {
 
 function formatScore(score: number): string {
   if (!score || typeof score !== 'number' || score <= 0) return ''
-  // clamp to 100% max and show only if meaningful
-  const pct = Math.min(Math.round(score * 100), 100)
+  // scores are now 0-100 directly
+  const pct = Math.min(Math.round(score), 100)
   return pct > 0 ? `${pct}%` : ''
 }
 
@@ -189,7 +190,9 @@ async function sendMessage() {
       return
     }
     
+    console.log('[GlobalSearch] raw response:', { ok: response.ok, hasContent: !!response.content, hasSources: !!response.sources, sourcesType: typeof response.sources, sourcesLen: response.sources?.length })
     const dedupedSources = dedupeSourcesByUrl(response.sources || [])
+    console.log('[GlobalSearch] received sources:', response.sources?.length, 'deduped:', dedupedSources.length, dedupedSources)
     
     messages.value.push({
       role: 'assistant',
@@ -269,13 +272,13 @@ function retryLastMessage() {
       <div v-else class="conversation">
         <template v-for="(msg, i) in messages" :key="i">
           <!-- user query -->
-          <div v-if="msg.role === 'user'" class="msg-user">
+          <div v-if="msg.role === 'user'" class="msg-user message-appear">
             <span class="msg-badge">Q</span>
             <span class="msg-text">{{ msg.content }}</span>
           </div>
           
           <!-- assistant answer -->
-          <div v-else class="msg-assistant" :class="{ error: msg.error }">
+          <div v-else class="msg-assistant message-appear" :class="{ error: msg.error }">
             <div class="msg-header">
               <span class="msg-badge answer">A</span>
               <span v-if="msg.timing" class="msg-timing">{{ formatTime(msg.timing.total) }}</span>
@@ -334,11 +337,14 @@ function retryLastMessage() {
                 </div>
               </div>
             </div>
+            <div v-else-if="msg.role === 'assistant' && !msg.error && msg.content?.includes('[1]')" class="sources-missing">
+              <span class="sources-missing-text">sources not available</span>
+            </div>
           </div>
         </template>
         
         <!-- loading -->
-        <div v-if="loading" class="msg-assistant loading">
+        <div v-if="loading" class="msg-assistant loading message-appear">
           <div class="msg-header">
             <span class="msg-badge answer">A</span>
           </div>
@@ -665,6 +671,19 @@ function retryLastMessage() {
   font-style: italic;
 }
 
+.sources-missing {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: color-mix(in oklch, var(--color-muted) 30%, transparent);
+  border-radius: 6px;
+}
+
+.sources-missing-text {
+  font-size: 11px;
+  color: var(--color-muted-foreground);
+  font-style: italic;
+}
+
 /* loading */
 .loading-dots {
   display: flex;
@@ -767,5 +786,21 @@ function retryLastMessage() {
 
 .send-btn:disabled {
   cursor: not-allowed;
+}
+
+/* message animations */
+.message-appear {
+  animation: messageSlideIn 0.25s ease-out forwards;
+}
+
+@keyframes messageSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 </style>
