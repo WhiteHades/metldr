@@ -139,53 +139,58 @@ export class VectorStore {
   }
 
   private async ensureIndexLoaded(): Promise<void> {
-    // check if sandbox was recreated (side panel closed/reopened)
-    const sandboxRecreated = await this.checkSandboxLifecycle()
-    if (sandboxRecreated && this.loaded) {
+    // if already loaded and sandbox hasn't changed, return immediately
+    if (this.loaded) {
+      const sandboxRecreated = await this.checkSandboxLifecycle()
+      if (!sandboxRecreated) return
+      // sandbox changed, need to reload - reset state
       console.log('[VectorStore] Forcing reload due to sandbox recreation')
       this.loaded = false
       this.loadingPromise = null
     }
-    
-    if (this.loaded) return
+
+    // if another load is in progress, wait for it
     if (this.loadingPromise) return this.loadingPromise
 
-    this.loadingPromise = (async () => {
-      const startTime = Date.now()
-      console.log('[VectorStore] Loading index...')
-      
-      // load voy index from IDB
-      const record = await databaseService.get<any>(DB_CONFIGS.cache, 'page_cache', 'system:voy_index')
-      if (record && record.value) {
-        console.log('[VectorStore] Found persisted VOY index, loading into sandbox...')
-        try {
-          // handle both compressed and legacy uncompressed data
-          let indexData = record.value as Uint8Array
-          if (record.compressed) {
-            indexData = await this.decompress(indexData)
-            console.log(`[VectorStore] Decompressed VOY index: ${record.value.length} → ${indexData.length} bytes`)
-          }
-          // convert bytes back to string for voyLoad
-          const indexStr = new TextDecoder().decode(indexData)
-          await localModels.voyLoad(indexStr)
-          this.voyIndexLoadedAt = Date.now()
-          console.log(`[VectorStore] VOY index loaded from IDB (${Date.now() - startTime}ms)`)
-        } catch (err) {
-          console.error('[VectorStore] VOY load failed, starting fresh:', err)
-        }
-      } else {
-        console.log('[VectorStore] No persisted VOY index found, starting fresh.')
-      }
-      
-      // rebuild inverted index from stored documents
-      await this.rebuildInvertedIndex()
-      
-      this.loaded = true
-      this.lastSandboxId = localModels.getSandboxId()
-      console.log(`[VectorStore] Index ready. ${this.invertedIndex.getDocCount()} docs in inverted index. (${Date.now() - startTime}ms total)`)
-    })()
-
+    // set loading promise SYNCHRONOUSLY before any async work
+    // this prevents race conditions when multiple calls come in
+    this.loadingPromise = this._doLoad()
     await this.loadingPromise
+  }
+
+  private async _doLoad(): Promise<void> {
+    const startTime = Date.now()
+    console.log('[VectorStore] Loading index...')
+    
+    // load voy index from IDB
+    const record = await databaseService.get<any>(DB_CONFIGS.cache, 'page_cache', 'system:voy_index')
+    if (record && record.value) {
+      console.log('[VectorStore] Found persisted VOY index, loading into sandbox...')
+      try {
+        // handle both compressed and legacy uncompressed data
+        let indexData = record.value as Uint8Array
+        if (record.compressed) {
+          indexData = await this.decompress(indexData)
+          console.log(`[VectorStore] Decompressed VOY index: ${record.value.length} → ${indexData.length} bytes`)
+        }
+        // convert bytes back to string for voyLoad
+        const indexStr = new TextDecoder().decode(indexData)
+        await localModels.voyLoad(indexStr)
+        this.voyIndexLoadedAt = Date.now()
+        console.log(`[VectorStore] VOY index loaded from IDB (${Date.now() - startTime}ms)`)
+      } catch (err) {
+        console.error('[VectorStore] VOY load failed, starting fresh:', err)
+      }
+    } else {
+      console.log('[VectorStore] No persisted VOY index found, starting fresh.')
+    }
+    
+    // rebuild inverted index from stored documents
+    await this.rebuildInvertedIndex()
+    
+    this.loaded = true
+    this.lastSandboxId = localModels.getSandboxId()
+    console.log(`[VectorStore] Index ready. ${this.invertedIndex.getDocCount()} docs in inverted index. (${Date.now() - startTime}ms total)`)
   }
 
   // force reload from IDB - call when index seems stale
