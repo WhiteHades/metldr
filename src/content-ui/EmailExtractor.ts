@@ -229,9 +229,6 @@ export class EmailExtractor {
       await new Promise(r => setTimeout(r, 1500))
     }
 
-    // scroll to latest
-    await this.scrollToLatestMessage(threadView)
-
     // final status
     const finalLoaded = getLoadedCount()
     console.log('metldr: ===== EXPANSION COMPLETE =====')
@@ -255,36 +252,23 @@ export class EmailExtractor {
     )
   }
 
-  // scroll to the latest (bottom) message in a thread
-  private async scrollToLatestMessage(threadView: ThreadView): Promise<void> {
-    const threadElement = threadView.getElement?.()
-    if (!threadElement) return
-
-    // find the scrollable container
-    const scrollContainer = threadElement.closest('[role="main"]') || 
-                            threadElement.closest('.AO') ||
-                            threadElement.parentElement
-
-    if (scrollContainer instanceof HTMLElement) {
-      const scrollableHeight = scrollContainer.scrollHeight
-      const clientHeight = scrollContainer.clientHeight
-
-      // edge case: if content fits in view (no scrollbar needed), no scroll required
-      if (scrollableHeight <= clientHeight) {
-        console.log('metldr: all messages visible, no scroll needed')
-        return
-      }
-
-      // scroll to bottom to show latest message
-      scrollContainer.scrollTo({
-        top: scrollableHeight,
-        behavior: 'smooth'
-      })
-
-      // wait for scroll to complete
-      await new Promise(r => setTimeout(r, 300))
-      console.log('metldr: scrolled to latest message')
+  private scrollSummaryIntoView(element: HTMLElement): void {
+    const rect = element.getBoundingClientRect()
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight
+    
+    // if element is already mostly visible, skip scroll
+    const visibleTop = Math.max(0, rect.top)
+    const visibleBottom = Math.min(viewportHeight, rect.bottom)
+    const visibleHeight = Math.max(0, visibleBottom - visibleTop)
+    const elementHeight = rect.height
+    
+    if (visibleHeight >= elementHeight * 0.7) {
+      console.log('metldr: summary already visible, skipping scroll')
+      return
     }
+    
+    element.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    console.log('metldr: scrolled summary into view')
   }
 
   // extract content from thread (without UI) - used for chat and returning to threads
@@ -384,110 +368,46 @@ export class EmailExtractor {
     })
   }
 
-  async getCachedSummary(emailId: string): Promise<unknown> {
+  // cache format: { summary, emailCount }
+  async getCachedSummary(emailId: string, currentEmailCount?: number): Promise<{ summary: unknown; needsRegeneration: boolean } | null> {
     if (!chrome?.runtime?.sendMessage) return null
     try {
-      return await new Promise((resolve) => {
+      const result = await new Promise<{ cached: unknown; emailCount?: number } | null>((resolve) => {
         chrome.runtime.sendMessage({ type: 'GET_EMAIL_CACHE', emailId }, (resp) => {
           if (chrome.runtime.lastError) {
             resolve(null)
           } else {
-            resolve(resp?.cached || null)
+            resolve(resp || null)
           }
         })
       })
+      
+      if (!result?.cached) return null
+      
+      const cachedEmailCount = (result as any).emailCount || 0
+      const needsRegeneration = currentEmailCount !== undefined && 
+                                cachedEmailCount > 0 && 
+                                currentEmailCount !== cachedEmailCount
+      
+      if (needsRegeneration) {
+        console.log(`metldr: cache stale - email count changed ${cachedEmailCount} -> ${currentEmailCount}`)
+      }
+      
+      return { summary: result.cached, needsRegeneration }
     } catch {
       return null
     }
   }
 
-  async cacheSummary(emailId: string, summary: unknown): Promise<void> {
+  async cacheSummary(emailId: string, summary: unknown, emailCount?: number): Promise<void> {
     if (!chrome?.runtime?.sendMessage) return
     try {
       await new Promise<void>((resolve) => {
-        chrome.runtime.sendMessage({ type: 'SET_EMAIL_CACHE', emailId, summary }, () => {
+        chrome.runtime.sendMessage({ type: 'SET_EMAIL_CACHE', emailId, summary, emailCount }, () => {
           resolve()
         })
       })
     } catch {
-    }
-  }
-
-  async tryChromeSummary(emailText: string, metadata: EmailMetadata): Promise<unknown> {
-    const startTime = Date.now()
-    try {
-      if (typeof Summarizer === 'undefined') {
-        console.log('metldr: Summarizer API not available')
-        return null
-      }
-
-      const avail = await Summarizer.availability()
-      if (avail === 'unavailable') {
-        console.log('metldr: Summarizer not available')
-        return null
-      }
-
-      console.log('metldr: using Chrome AI for email summary')
-
-      const detectedLang = await languageService.detect(emailText.substring(0, 500))
-      console.log('metldr: detected email language:', detectedLang)
-
-      let context = ''
-      if (metadata.subject) context += `Subject: ${metadata.subject}\n`
-      if (metadata.from) context += `From: ${metadata.from}\n`
-      if (metadata.to) context += `To: ${metadata.to}\n`
-      if (metadata.date) context += `Date: ${metadata.date}\n`
-
-      const supportedLanguages = languageService.getSupportedLanguages()
-
-      const summarizer = await Summarizer.create({
-        type: 'key-points',
-        length: 'medium',
-        format: 'markdown',
-        expectedInputLanguages: supportedLanguages,
-        expectedContextLanguages: supportedLanguages,
-        outputLanguage: detectedLang
-      })
-
-      try {
-        const result = await summarizer.summarize(emailText, { context })
-        const elapsed = Date.now() - startTime
-        
-        // parse chrome ai result into our format
-        const bullets = result
-          .split('\n')
-          .map((l: string) => l.trim())
-          .filter((l: string) => /^[-•*]|^\d+\./.test(l))
-          .map((l: string) => l.replace(/^[-•*]\s*/, '').replace(/^\d+\.\s*/, '').trim())
-          .filter((l: string) => l.length > 10)
-          .slice(0, 5)
-
-        // determine intent from content heuristics
-        let intent = 'Other'
-        const text = emailText.toLowerCase()
-        if (text.includes('invoice') || text.includes('receipt')) intent = 'Invoice'
-        else if (text.includes('booking') || text.includes('reservation') || text.includes('flight')) intent = 'Travel Itinerary'
-        else if (text.includes('meeting') || text.includes('calendar')) intent = 'Meeting Request'
-        else if (text.includes('order') || text.includes('shipped') || text.includes('tracking')) intent = 'Order Confirmation'
-        else if (text.includes('password') || text.includes('security') || text.includes('login')) intent = 'Security Alert'
-
-        return {
-          summary: bullets.length > 0 ? bullets.join(' ') : result.substring(0, 200),
-          action_items: [],
-          dates: [],
-          key_facts: { booking_reference: null, amount: null, sender_org: null },
-          intent,
-          urgency: 'normal',
-          model: 'gemini-nano',
-          provider: 'chrome-ai',
-          time_ms: elapsed
-        }
-      } finally {
-        summarizer.destroy()
-      }
-    } catch (err) {
-      console.log('metldr: chrome ai summary failed:', (err as Error).message)
-      return null
     }
   }
 
@@ -709,15 +629,28 @@ export class EmailExtractor {
     this.lastExtractedContent = { threadId, content: fullText, metadata }
 
     const threadElement = threadView.getElement?.()
+    const currentEmailCount = metadata.emailCount
 
-    const cached = await this.getCachedSummary(threadId)
+    const cacheResult = await this.getCachedSummary(threadId, currentEmailCount)
+    const cached = cacheResult?.summary
+    const needsRegeneration = cacheResult?.needsRegeneration || false
+    
     if (cached) {
+      if (needsRegeneration) {
+        // new emails arrived - auto-regenerate since we had a previous summary
+        console.log('metldr: new emails detected, auto-regenerating summary')
+        await this.autoRegenerateSummary(threadView, threadId, fullText, metadata, threadElement || null)
+        return
+      }
+      
       console.log('metldr: using cached summary')
       const summaryCard = UIService.createSummaryCard(cached, threadId)
       const header = this.findInjectionPoint(threadElement || null)
       if (header) {
         UIService.injectSummary(header, summaryCard)
         this.attachRegenerateListener(summaryCard, threadId, fullText, metadata)
+        // scroll summary into view
+        this.scrollSummaryIntoView(summaryCard)
       }
       return
     }
@@ -739,15 +672,8 @@ export class EmailExtractor {
       
       console.log('metldr: requesting summary...')
       
-      let summary = await this.tryChromeSummary(fullText, metadata)
-      
-      if (summary) {
-        console.log('metldr: using chrome ai summary')
-        await this.cacheSummary(threadId, summary)
-      } else {
-        console.log('metldr: chrome ai unavailable, trying background (ollama)...')
-        summary = await this.getSummaryFromBackground(fullText, threadId, metadata)
-      }
+      // always use background service for consistent quality with fact extraction
+      const summary = await this.getSummaryFromBackground(fullText, threadId, metadata)
       
       console.log('metldr: summary response:', summary)
       
@@ -766,10 +692,14 @@ export class EmailExtractor {
         const summaryCard = UIService.createSummaryCard(summary, threadId)
         UIService.injectSummary(header, summaryCard)
         this.attachRegenerateListener(summaryCard, threadId, fullText, metadata)
+        // scroll summary into view
+        this.scrollSummaryIntoView(summaryCard)
       }
     })
     
     UIService.injectLoading(header, summarizeButton)
+    // scroll button into view
+    this.scrollSummaryIntoView(summarizeButton)
   }
 
   findInjectionPoint(threadElement: HTMLElement | null): Element | null {
@@ -889,6 +819,34 @@ export class EmailExtractor {
       await new Promise(r => setTimeout(r, delayMs))
     }
     return false
+  }
+
+  async autoRegenerateSummary(
+    _threadView: ThreadView, 
+    threadId: string, 
+    emailText: string, 
+    metadata: EmailMetadata, 
+    threadElement: HTMLElement | null
+  ): Promise<void> {
+    const header = this.findInjectionPoint(threadElement)
+    if (!header) return
+
+    // show loading
+    const loadingDiv = UIService.createLoadingIndicator(threadElement || document.body)
+    UIService.injectLoading(header, loadingDiv)
+    
+    console.log('metldr: auto-regenerating summary due to new emails...')
+    
+    const summary = await this.getSummaryFromBackground(emailText, threadId, metadata, true)
+    
+    loadingDiv.remove()
+    
+    if (summary) {
+      const summaryCard = UIService.createSummaryCard(summary, threadId)
+      UIService.injectSummary(header, summaryCard)
+      this.attachRegenerateListener(summaryCard, threadId, emailText, metadata)
+      this.scrollSummaryIntoView(summaryCard)
+    }
   }
 
   async regenerateSummary(threadId: string, emailText: string, metadata: EmailMetadata): Promise<void> {

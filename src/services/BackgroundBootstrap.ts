@@ -478,7 +478,7 @@ export class BackgroundBootstrap {
           return
         }
         
-        log.log('onGlobalChat processing', messages.length, 'messages')
+        log.log(`onGlobalChat processing ${messages.length} messages`)
         const result = await PageService.globalChat(messages)
         
         respond({
@@ -614,19 +614,26 @@ export class BackgroundBootstrap {
   static _onGetEmailCache(msg: GetEmailCacheMessage, respond: ResponseCallback): void {
     (async () => {
       try {
-        const cached = await cacheService.getEmailSummary(msg.emailId)
-        respond({ cached })
+        const session = await cacheService.getEmailSession(msg.emailId)
+        respond({ 
+          cached: session?.summary || null,
+          emailCount: (session as any)?.emailCount || 0
+        })
       } catch (err) {
         log.error('onGetEmailCache]', (err as Error).message)
-        respond({ cached: null })
+        respond({ cached: null, emailCount: 0 })
       }
     })()
   }
 
-  static _onSetEmailCache(msg: SetEmailCacheMessage, respond: ResponseCallback): void {
+  static _onSetEmailCache(msg: SetEmailCacheMessage & { emailCount?: number }, respond: ResponseCallback): void {
     (async () => {
       try {
-        await cacheService.setEmailSummary(msg.emailId, msg.summary)
+        // store summary with emailCount for staleness detection
+        await cacheService.updateEmailSession(msg.emailId, { 
+          summary: msg.summary,
+          ...(msg.emailCount !== undefined && { emailCount: msg.emailCount } as any)
+        })
         respond({ success: true })
       } catch (err) {
         log.error('onSetEmailCache]', (err as Error).message)
