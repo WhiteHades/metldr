@@ -337,7 +337,7 @@ export class RagService {
       ])
       
       // 3. RRF fusion with adaptive weights
-      const fused = this.fuseResultsRRF(vectorResults, keywordResults, 60, processed)
+      const fused = this.fuseResultsByScore(vectorResults, keywordResults, processed)
       
       // 4. overlap reranking
       const reranked = this.rerankByOverlap(processed, fused.slice(0, 50))
@@ -414,13 +414,42 @@ export class RagService {
     }>
   }> {
     try {
-      const results = await this.search(query, limit * 2)
+      const results = await this.search(query, limit * 4)
       if (results.length === 0) return { context: '', sources: [] }
       
-      results.sort((a, b) => b.score - a.score)
-      const top = results.slice(0, limit)
+      // extract significant query terms using shared method
+      const queryTerms = this.extractQueryKeywords(query)
       
-      const sources = top.map((r, i) => {
+      // score results with keyword boost (but don't filter - always return something)
+      const scored = results.map(r => {
+        const content = r.entry.content.toLowerCase()
+        const title = ((r.entry.metadata?.title as string) || '').toLowerCase()
+        const text = content + ' ' + title
+        
+        // count matching keywords
+        let matchedTerms = 0
+        for (const term of queryTerms) {
+          if (text.includes(term)) matchedTerms++
+        }
+        const keywordScore = queryTerms.length > 0 ? matchedTerms / queryTerms.length : 0.5
+        
+        // boost for keyword matches (max 2x for 100% match)
+        const boost = 1 + keywordScore
+        const adjustedScore = Math.min(100, Math.round(r.score * boost))
+        
+        return { ...r, score: adjustedScore, keywordScore, matchedTerms }
+      })
+      
+      // sort by adjusted score
+      scored.sort((a, b) => b.score - a.score)
+      const top = scored.slice(0, limit)
+      
+      // filter displayed sources: only show sources within 30 points of top score
+      const topScore = top[0]?.score || 0
+      const minDisplayScore = Math.max(30, topScore - 30)
+      const relevantTop = top.filter(r => r.score >= minDisplayScore)
+      
+      const sources = relevantTop.map((r, i) => {
         const meta = r.entry.metadata || {}
         return {
           index: i + 1,
@@ -432,7 +461,7 @@ export class RagService {
         }
       })
       
-      // build context with numbered source markers
+      // build context with ALL top results (LLM gets full context, UI shows filtered)
       const contextParts = top.map((r, i) => {
         const meta = r.entry.metadata || {}
         const title = meta.title || meta.sourceUrl || r.entry.id
@@ -471,7 +500,7 @@ export class RagService {
     }
   }
 
-  // query preprocessing - typo fixes, expansion (+10% accuracy, +5ms)
+  // query preprocessing with expansion for better retrieval
   private preprocessQuery(query: string): string {
     let processed = query.toLowerCase().trim()
     
@@ -479,68 +508,170 @@ export class RagService {
     const typos: Record<string, string> = {
       'oder': 'order', 'sumary': 'summary', 'emai': 'email',
       'reciet': 'receipt', 'invocie': 'invoice', 'reciept': 'receipt',
-      'purchse': 'purchase', 'delivry': 'delivery', 'shiping': 'shipping'
+      'purchse': 'purchase', 'delivry': 'delivery', 'shiping': 'shipping',
+      'confrim': 'confirm', 'paymnt': 'payment', 'addresss': 'address'
     }
     
     for (const [typo, fix] of Object.entries(typos)) {
       processed = processed.replace(new RegExp(`\\b${typo}\\b`, 'gi'), fix)
     }
     
-    // expand common terms for better embedding match
-    processed = processed
-      .replace(/\bpdf\b/gi, 'pdf document')
-      .replace(/\bai\b/gi, 'artificial intelligence')
+    // domain-specific synonym expansion (improves keyword matching)
+    const synonyms: Record<string, string[]> = {
+      'order': ['purchase', 'transaction', 'confirmed'],
+      'payment': ['paid', 'bkash', 'transaction', 'amount'],
+      'delivery': ['shipped', 'delivered', 'shipping', 'courier'],
+      'receipt': ['invoice', 'confirmation', 'order'],
+      'daraz': ['order', 'shopping', 'purchase', 'delivery'],
+      'email': ['mail', 'message', 'inbox'],
+      'article': ['news', 'post', 'story', 'content'],
+      'pdf': ['document', 'file', 'paper']
+    }
     
-    return processed
+    // add synonyms to query for better keyword matching
+    const words = processed.split(/\s+/)
+    const expanded = new Set(words)
+    for (const word of words) {
+      if (synonyms[word]) {
+        // add first 2 synonyms to avoid query bloat
+        synonyms[word].slice(0, 2).forEach(s => expanded.add(s))
+      }
+    }
+    
+    return Array.from(expanded).join(' ')
   }
 
-  // reciprocal rank fusion with adaptive weights
-  private fuseResultsRRF(vec: SearchResult[], key: SearchResult[], k = 60, query?: string): SearchResult[] {
-    // adaptive weights based on query type
+  // extract significant keywords for strict matching
+  private extractQueryKeywords(query: string): string[] {
+    const stopwords = new Set([
+      'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+      'of', 'with', 'by', 'from', 'as', 'is', 'was', 'are', 'were', 'been',
+      'be', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
+      'should', 'may', 'might', 'must', 'can', 'this', 'that', 'these', 'those',
+      'i', 'me', 'my', 'you', 'your', 'we', 'our', 'they', 'their', 'it', 'its',
+      'what', 'which', 'who', 'whom', 'where', 'when', 'why', 'how',
+      'all', 'each', 'every', 'both', 'few', 'more', 'most', 'other', 'some',
+      'any', 'no', 'not', 'only', 'own', 'same', 'so', 'than', 'too', 'very',
+      'just', 'also', 'now', 'here', 'there', 'then', 'once', 'again'
+    ])
+    
+    return query.toLowerCase()
+      .split(/\s+/)
+      .filter(t => t.length > 2 && !stopwords.has(t))
+  }
+
+  private fuseResultsByScore(vec: SearchResult[], key: SearchResult[], query?: string): SearchResult[] {
     const queryType = query ? this.classifyQueryType(query) : 'hybrid'
-    const weights = queryType === 'keyword' 
-      ? { vector: 0.3, keyword: 0.7 }  // short queries favor keyword
-      : queryType === 'semantic'
-      ? { vector: 0.8, keyword: 0.2 }  // long queries favor semantic
-      : { vector: 0.6, keyword: 0.4 }  // default
     
-    const scores = new Map<string, { result: SearchResult; rrf: number }>()
+    const vecIds = new Set(vec.map(r => r.entry.id))
+    const keyIds = new Set(key.map(r => r.entry.id))
+    const overlapCount = [...vecIds].filter(id => keyIds.has(id)).length
+    const overlapRatio = Math.max(vecIds.size, keyIds.size) > 0 
+      ? overlapCount / Math.max(vecIds.size, keyIds.size) 
+      : 0
     
-    // semantic rank scores with weight
+    // adaptive weights: high overlap = trust both, low overlap = boost the method with better coverage
+    let weights: { vector: number; keyword: number }
+    if (overlapRatio > 0.5) {
+      // high agreement  trust both equally, hybrid matches are very reliable
+      weights = { vector: 0.5, keyword: 0.5 }
+    } else if (queryType === 'keyword') {
+      weights = { vector: 0.35, keyword: 0.65 }
+    } else if (queryType === 'semantic') {
+      weights = { vector: 0.65, keyword: 0.35 }
+    } else {
+      weights = { vector: 0.5, keyword: 0.5 }
+    }
+    
+    const scores = new Map<string, { 
+      result: SearchResult
+      vectorScore: number
+      keywordScore: number
+      vecRank: number
+      keyRank: number
+    }>()
+    
+    const vecScores = vec.map(r => r.score)
+    const keyScores = key.map(r => r.score)
+    const vecMean = vecScores.length > 0 ? vecScores.reduce((a,b) => a+b, 0) / vecScores.length : 0
+    const keyMean = keyScores.length > 0 ? keyScores.reduce((a,b) => a+b, 0) / keyScores.length : 0
+    const vecStd = Math.sqrt(vecScores.reduce((sum, s) => sum + (s - vecMean) ** 2, 0) / (vecScores.length || 1)) || 1
+    const keyStd = Math.sqrt(keyScores.reduce((sum, s) => sum + (s - keyMean) ** 2, 0) / (keyScores.length || 1)) || 1
+    
+    // add vector results with zscore normalization mapped to 0-100
     vec.forEach((r, rank) => {
-      let rrf = weights.vector / (k + rank + 1)
-      // boost summaries 1.3x
-      if (r.entry.metadata?.isSummary) rrf *= 1.3
-      scores.set(r.entry.id, { result: r, rrf })
+      const zScore = (r.score - vecMean) / vecStd
+      const normalizedScore = Math.min(100, Math.max(0, 50 + zScore * 25))
+      scores.set(r.entry.id, { 
+        result: r, 
+        vectorScore: normalizedScore,
+        keywordScore: 0,
+        vecRank: rank,
+        keyRank: -1
+      })
     })
     
-    // keyword rank scores with weight
+    // merge keyword results
     key.forEach((r, rank) => {
-      let rrfAdd = weights.keyword / (k + rank + 1)
-      if (r.entry.metadata?.isSummary) rrfAdd *= 1.3
-      
+      const zScore = (r.score - keyMean) / keyStd
+      const normalizedScore = Math.min(100, Math.max(0, 50 + zScore * 25))
       if (scores.has(r.entry.id)) {
         const existing = scores.get(r.entry.id)!
-        existing.rrf += rrfAdd
+        existing.keywordScore = normalizedScore
+        existing.keyRank = rank
         existing.result.matchType = 'hybrid'
       } else {
-        scores.set(r.entry.id, { result: r, rrf: rrfAdd })
+        scores.set(r.entry.id, { 
+          result: r, 
+          vectorScore: 0,
+          keywordScore: normalizedScore,
+          vecRank: -1,
+          keyRank: rank
+        })
       }
     })
     
-    // sort by RRFs
-    const sorted = Array.from(scores.values()).sort((a, b) => b.rrf - a.rrf)
-    const maxRrf = sorted[0]?.rrf || 1
-    const minRrf = sorted[sorted.length - 1]?.rrf || 0
-    const range = maxRrf - minRrf || 1
+    const results = Array.from(scores.values()).map(s => {
+      const weightedScore = s.vectorScore * weights.vector + s.keywordScore * weights.keyword
+      
+      let hybridBonus = 0
+      if (s.vecRank >= 0 && s.keyRank >= 0) {
+        const rankDiff = Math.abs(s.vecRank - s.keyRank)
+        hybridBonus = Math.max(5, 25 - rankDiff * 3)
+      }
+
+      const summaryBoost = s.result.entry.metadata?.isSummary ? 8 : 0
+      
+      const finalScore = Math.min(100, weightedScore + hybridBonus + summaryBoost)
+      
+      return {
+        ...s.result,
+        score: Math.round(finalScore),
+        sourceUrl: s.result.entry.metadata?.sourceUrl as string || ''
+      }
+    })
     
-    return sorted.map(s => ({
-      ...s.result,
-      score: Math.round(((s.rrf - minRrf) / range) * 60 + 40) // 40-100% range
-    }))
+    // sort by score
+    results.sort((a, b) => b.score - a.score)
+    
+    const seenSources = new Map<string, number>()
+    const diverseResults = results.map(r => {
+      const sourceBase = r.sourceUrl.split('?')[0].split('#')[0]
+      const occurrences = seenSources.get(sourceBase) || 0
+      seenSources.set(sourceBase, occurrences + 1)
+      
+      // reduce score for 2nd, 3rd, etc. chunks from same source
+      const diversityPenalty = occurrences > 0 ? occurrences * 15 : 0
+      
+      return {
+        ...r,
+        score: Math.max(0, r.score - diversityPenalty)
+      }
+    })
+    
+    return diverseResults.sort((a, b) => b.score - a.score)
   }
   
-  // classify query for adaptive weights
   private classifyQueryType(query: string): 'semantic' | 'keyword' | 'hybrid' {
     const words = query.split(/\s+/).length
     if (words <= 2) return 'keyword'
@@ -555,26 +686,17 @@ export class RagService {
     const reranked = results.map(r => {
       const docText = r.entry.content.toLowerCase()
       
-      // query term coverage in doc
       let matched = 0
       for (const term of queryTerms) {
         if (docText.includes(term)) matched++
       }
       const overlap = matched / queryTerms.size
       
-      // small bonus for overlap (max +10 points)
-      return { ...r, score: r.score + overlap * 10 }
+      // bonus for overlap (max +15 points), cap at 100
+      return { ...r, score: Math.min(100, r.score + Math.round(overlap * 15)) }
     }).sort((a, b) => b.score - a.score)
     
-    // re-normalize to 40-100 range
-    const max = reranked[0]?.score || 1
-    const min = reranked[reranked.length - 1]?.score || 0
-    const range = max - min || 1
-    
-    return reranked.map(r => ({
-      ...r,
-      score: Math.round(((r.score - min) / range) * 60 + 40)
-    }))
+    return reranked
   }
 
   async indexSummary(summaryText: string, metadata: ChunkMetadata): Promise<void> {
@@ -635,6 +757,41 @@ export class RagService {
   
   getMetadataCount(): number {
     return this.contentHashes.size
+  }
+
+  // unified entry point: check if indexed, wait if in-progress, or index if needed
+  async ensureIndexed(
+    text: string, 
+    metadata: ChunkMetadata, 
+    onProgress?: (percent: number) => void
+  ): Promise<'already-indexed' | 'was-indexing' | 'indexed-now'> {
+    await this.ensureMetadataLoaded()
+
+    // check if already indexed
+    const hasContent = await this.hasIndexedContent(metadata.sourceId)
+    if (hasContent) {
+      console.log(`[RagService] ensureIndexed: already indexed ${metadata.sourceId.slice(0, 50)}`)
+      return 'already-indexed'
+    }
+
+    // check if indexing in progress
+    const existing = this.activeIndexing.get(metadata.sourceId)
+    if (existing) {
+      console.log(`[RagService] ensureIndexed: waiting on in-progress ${metadata.sourceId.slice(0, 50)}`)
+      await existing
+      return 'was-indexing'
+    }
+
+    await this.indexChunks(text, metadata, onProgress)
+    return 'indexed-now'
+  }
+
+  async getIndexingStatus(sourceId: string): Promise<'indexed' | 'in-progress' | 'needed'> {
+    if (this.activeIndexing.has(sourceId)) return 'in-progress'
+    
+    await this.ensureMetadataLoaded()
+    const hasContent = await this.hasIndexedContent(sourceId)
+    return hasContent ? 'indexed' : 'needed'
   }
 }
 
