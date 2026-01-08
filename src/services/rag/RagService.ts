@@ -415,6 +415,7 @@ export class RagService {
   }> {
     try {
       const results = await this.search(query, limit * 4)
+      console.log('[RagService.searchWithSources] search results:', results.length)
       if (results.length === 0) return { context: '', sources: [] }
       
       // extract significant query terms using shared method
@@ -444,11 +445,15 @@ export class RagService {
       scored.sort((a, b) => b.score - a.score)
       const top = scored.slice(0, limit)
       
-      // filter displayed sources: only show sources within 30 points of top score
+      // filter low-score sources but keep at least 1
       const topScore = top[0]?.score || 0
-      const minDisplayScore = Math.max(30, topScore - 30)
-      const relevantTop = top.filter(r => r.score >= minDisplayScore)
+      const minDisplayScore = Math.max(20, topScore - 40)
+      let relevantTop = top.filter(r => r.score >= minDisplayScore)
+      if (relevantTop.length === 0 && top.length > 0) {
+        relevantTop = [top[0]] // always keep at least the best result
+      }
       
+      // build sources with consistent indices
       const sources = relevantTop.map((r, i) => {
         const meta = r.entry.metadata || {}
         return {
@@ -461,13 +466,14 @@ export class RagService {
         }
       })
       
-      // build context with ALL top results (LLM gets full context, UI shows filtered)
-      const contextParts = top.map((r, i) => {
+      // build context with SAME filtered results (indices match sources)
+      const contextParts = relevantTop.map((r, i) => {
         const meta = r.entry.metadata || {}
         const title = meta.title || meta.sourceUrl || r.entry.id
         return `[${i + 1}] ${title}:\n${r.entry.content}`
       })
       
+      console.log('[RagService.searchWithSources] returning sources:', sources.length, 'context length:', contextParts.join('').length)
       return {
         context: contextParts.join('\n\n'),
         sources
