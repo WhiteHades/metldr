@@ -401,6 +401,7 @@ export function usePageSummary() {
   function resetSummaryState() {
     pageSummary.value = null
     pageMetadata.value = null
+    summaryLoading.value = false
     summaryCollapsed.value = false
     summaryError.value = null
     summaryPrompt.value = null
