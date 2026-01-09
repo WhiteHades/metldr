@@ -22,6 +22,8 @@ const MAX_DISMISSES = 3
 
 const state = ref<DonationState>(DEFAULT_STATE)
 const totalSummaries = ref(0)
+const tokensInputTotal = ref(0)
+const tokensOutputTotal = ref(0)
 const loaded = ref(false)
 
 export function useDonation() {
@@ -35,6 +37,8 @@ export function useDonation() {
       ])
       state.value = stored
       totalSummaries.value = analytics.totalSummaries
+      tokensInputTotal.value = analytics.totalTokensInput || 0
+      tokensOutputTotal.value = analytics.totalTokensOutput || 0
       loaded.value = true
     } catch {
       loaded.value = true
@@ -60,6 +64,15 @@ export function useDonation() {
     return `${minutes} minutes`
   })
 
+  // estimate money saved vs paid APIs (claude opus 4.1 - most expensive)
+  const moneySaved = computed(() => {
+    const tokensIn = tokensInputTotal.value
+    const tokensOut = tokensOutputTotal.value
+    // claude opus 4.1: $0.015/1K input, $0.01/1K output
+    const savings = (tokensIn / 1000 * 0.015) + (tokensOut / 1000 * 0.01)
+    return savings.toFixed(2)
+  })
+
   async function dismissPrompt(): Promise<void> {
     state.value = {
       ...state.value,
@@ -82,6 +95,7 @@ export function useDonation() {
     load,
     shouldShowPrompt,
     timeSaved,
+    moneySaved,
     totalSummaries,
     dismissPrompt,
     markDonated
