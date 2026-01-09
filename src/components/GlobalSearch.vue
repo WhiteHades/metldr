@@ -28,6 +28,7 @@ const loading = ref(false)
 const viewportRef = ref<HTMLDivElement | null>(null)
 const inputRef = ref<HTMLTextAreaElement | null>(null)
 const expandedSources = ref<Set<string>>(new Set())
+const isInitialLoad = ref(true) // guard to prevent saving during initial load
 
 const STORAGE_KEY = 'global_chat_state'
 
@@ -43,33 +44,48 @@ const exampleQueries = [
 
 marked.setOptions({ breaks: true, gfm: true })
 
-// persist messages
+// persist messages (skip during initial load to prevent race condition)
 watch(messages, async (newMsgs) => {
+  if (isInitialLoad.value) {
+    console.log('[GlobalSearch] skipping save during initial load')
+    return
+  }
   try {
+    const toSave = newMsgs.map(m => ({ ...m, sources: m.sources || [] }))
+    console.log('[GlobalSearch] saving messages:', toSave.length, 'sources per msg:', toSave.map(m => m.sources?.length || 0))
     await chrome.storage.local.set({ 
       [STORAGE_KEY]: { 
-        messages: newMsgs.map(m => ({ ...m, sources: m.sources || [] })),
+        messages: toSave,
         timestamp: Date.now()
       }
     })
-  } catch {}
+  } catch (e) {
+    console.error('[GlobalSearch] save failed:', e)
+  }
 }, { deep: true })
 
 onMounted(async () => {
   try {
     const stored = await chrome.storage.local.get(STORAGE_KEY) as Record<string, { messages?: ChatMessage[]; timestamp?: number }>
     const state = stored[STORAGE_KEY]
+    console.log('[GlobalSearch] loading state:', state ? 'found' : 'empty', 'msgs:', state?.messages?.length, 'sources per msg:', state?.messages?.map(m => m.sources?.length || 0))
     if (state?.messages?.length) {
       const age = Date.now() - (state.timestamp || 0)
       if (age < 60 * 60 * 1000) {
-        // ensure sources is always an array
         messages.value = state.messages.map(m => ({
           ...m,
           sources: Array.isArray(m.sources) ? m.sources : []
         }))
+        console.log('[GlobalSearch] loaded messages:', messages.value.length, 'sources:', messages.value.map(m => m.sources?.length || 0))
+      } else {
+        console.log('[GlobalSearch] state too old, age:', age)
       }
     }
-  } catch {}
+  } catch (e) {
+    console.error('[GlobalSearch] load failed:', e)
+  } finally {
+    isInitialLoad.value = false
+  }
 })
 
 function scrollToBottom() {
