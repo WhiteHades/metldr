@@ -506,8 +506,9 @@ export class UIService {
 
   static _buildSummaryHTML(theme: Theme, summaryText: string, actions: string[], dates: string[], confidence: string, confColor: string, modelName: string, summary: Summary, threadId: string, intent: string | null): string {
     let fallbackIdx = 0
+    // limit to max 2 labels to prevent ui clutter
     const intentBadges = intent 
-      ? intent.split('/').map(tag => tag.trim()).filter(Boolean).map(tag => {
+      ? intent.split('/').map(tag => tag.trim()).filter(Boolean).slice(0, 2).map(tag => {
           const tagKey = tag.toLowerCase()
           let style = INTENT_COLORS[tagKey]
           if (!style) {
