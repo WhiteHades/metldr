@@ -17,25 +17,25 @@ const MESSAGES = [
   {
     icon: Sparkles,
     headline: 'local ai, zero cost',
-    text: `you've saved $${'{savings}'} vs cloud apis. 100% private, 100% free. consider supporting?`,
+    text: `you've saved $\${'{savings}'} vs cloud api's. exciting features coming, support if you can!`,
     size: 'compact'
   },
   {
     icon: Shield,
     headline: 'privacy-first ai',
-    text: 'no data leaves your device. no subscriptions. just a bsc grad who loves local ai. support if you can!',
+    text: 'no data leaves your device. free and private. more features coming - support a dev who just started!',
     size: 'normal'
   },
   {
     icon: Zap,
     headline: 'powered by you',
-    text: 'open source, no tracking, no api costs. supporting means keeping it free for everyone.',
+    text: 'open source, no tracking, no api costs. supporting means helping a solo dev keep building.',
     size: 'wide'
   },
   {
     icon: Heart,
     headline: 'quick note',
-    text: 'metldr is free forever. but if you find it useful, a small donation helps a solo dev keep building.',
+    text: 'metldr is free. if you find it useful, a small donation helps a solo dev keep adding features.',
     size: 'compact'
   }
 ]
