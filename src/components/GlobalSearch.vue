@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, watch, onMounted } from 'vue'
-import { Search, Loader2, Mail, Globe, FileText, ArrowUp, Trash2, Copy, ChevronDown, ChevronUp, RefreshCw, ExternalLink } from 'lucide-vue-next'
+import { Mail, Globe, FileText, Copy, ChevronDown, ChevronUp, RefreshCw, ExternalLink } from 'lucide-vue-next'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui'
+import ChatComposer from '@/components/ChatComposer.vue'
 import { marked } from 'marked'
 import { formatTime } from '@/utils/text'
 
@@ -26,7 +27,7 @@ const chatInput = ref('')
 const messages = ref<ChatMessage[]>([])
 const loading = ref(false)
 const viewportRef = ref<HTMLDivElement | null>(null)
-const inputRef = ref<HTMLTextAreaElement | null>(null)
+const composerRef = ref<InstanceType<typeof ChatComposer> | null>(null)
 const expandedSources = ref<Set<string>>(new Set())
 const isInitialLoad = ref(true) // guard to prevent saving during initial load
 
@@ -370,41 +371,16 @@ function retryLastMessage() {
     </div>
 
     <!-- input -->
-    <div class="input-area">
-      <div class="composer-bar">
-        <textarea
-          ref="inputRef"
-          v-model="chatInput"
-          @keydown="handleKeydown"
-          placeholder="ask a question..."
-          class="composer-input"
-          :disabled="loading"
-          rows="1"
-        />
-        
-        <div class="composer-actions">
-          <TooltipProvider v-if="messages.length > 0 && !loading">
-            <Tooltip>
-              <TooltipTrigger as-child>
-                <button @click="clearChat" class="composer-btn text-muted-foreground hover:text-destructive">
-                  <Trash2 :size="14" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent>clear</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-          
-          <button
-            @click="sendMessage"
-            :disabled="isEmpty || loading"
-            class="send-btn"
-            :class="{ active: !isEmpty && !loading }"
-          >
-            <Loader2 v-if="loading" :size="14" class="animate-spin" />
-            <ArrowUp v-else :size="14" />
-          </button>
-        </div>
-      </div>
+    <div class="shrink-0 p-3 pt-2">
+      <ChatComposer
+        ref="composerRef"
+        v-model="chatInput"
+        placeholder="ask anything about this page..."
+        :loading="loading"
+        :show-clear="messages.length > 0"
+        @send="sendMessage"
+        @clear="clearChat"
+      />
     </div>
   </div>
 </template>
@@ -721,87 +697,6 @@ function retryLastMessage() {
 @keyframes bounce {
   0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
   40% { transform: scale(1); opacity: 1; }
-}
-
-/* input area */
-.input-area {
-  padding: 10px 12px;
-}
-
-.composer-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  background: color-mix(in oklch, var(--color-card) 60%, transparent);
-  border: 1px solid color-mix(in oklch, var(--color-border) 40%, transparent);
-  border-radius: 20px;
-  transition: background 150ms ease, border-color 150ms ease;
-}
-
-.composer-bar:focus-within {
-  background: color-mix(in oklch, var(--color-card) 80%, transparent);
-  border-color: color-mix(in oklch, var(--color-border) 60%, transparent);
-}
-
-.composer-input {
-  flex: 1;
-  background: transparent;
-  border: none;
-  outline: none;
-  font-size: 13px;
-  color: var(--color-foreground);
-  line-height: 1.5;
-  resize: none;
-  min-height: 20px;
-  max-height: 80px;
-  font-family: inherit;
-}
-
-.composer-input::placeholder {
-  color: var(--color-muted-foreground);
-}
-
-.composer-input:disabled {
-  opacity: 0.5;
-}
-
-.composer-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.composer-btn {
-  padding: 6px;
-  background: transparent;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: all 150ms ease;
-}
-
-.send-btn {
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--color-muted);
-  border: none;
-  border-radius: 8px;
-  color: var(--color-muted-foreground);
-  cursor: pointer;
-  transition: all 150ms ease;
-}
-
-.send-btn.active {
-  background: var(--color-foreground);
-  color: var(--color-background);
-}
-
-.send-btn:disabled {
-  cursor: not-allowed;
 }
 
 /* message animations */
