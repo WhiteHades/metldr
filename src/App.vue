@@ -293,7 +293,8 @@ onMounted(async () => {
     summaryMode,
     doFetchSummary,
     switchToUrl,
-    setUrlMessages
+    setUrlMessages,
+    resetSummaryState
   )
   
   window.addEventListener('keydown', handleKeydown)
