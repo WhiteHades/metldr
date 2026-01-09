@@ -2,8 +2,9 @@
 import { ref, computed, nextTick, watch, onMounted, onUnmounted } from 'vue'
 import { formatTime, stripThinking } from '@/utils/text'
 import { marked } from 'marked'
-import { ArrowUp, Square, Trash2, Loader2, MessageSquare } from 'lucide-vue-next'
+import { MessageSquare, Loader2 } from 'lucide-vue-next'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui'
+import ChatComposer from '@/components/ChatComposer.vue'
 import { useIndexingProgress } from '@/composables/useIndexingProgress'
 import type { AppChatMessage } from '@/types'
 
@@ -27,9 +28,8 @@ const emit = defineEmits<{
 }>()
 
 const viewportRef = ref<HTMLDivElement | null>(null)
-const textareaRef = ref<HTMLTextAreaElement | null>(null)
+const composerRef = ref<InstanceType<typeof ChatComposer> | null>(null)
 
-const isEmpty = computed(() => !chatInput.value.trim())
 const isRunning = computed(() => props.chatLoading)
 const isThreadEmpty = computed(() => props.chatMessages.length === 0 && !props.chatLoading)
 
@@ -54,7 +54,7 @@ onUnmounted(() => {
 })
 
 function focusInput() {
-  textareaRef.value?.focus()
+  composerRef.value?.focus()
 }
 
 function scrollToBottom(smooth = false) {
@@ -68,20 +68,8 @@ function scrollToBottom(smooth = false) {
   })
 }
 
-function autoResize() {
-  if (textareaRef.value) {
-    textareaRef.value.style.height = 'auto'
-    textareaRef.value.style.height = Math.min(textareaRef.value.scrollHeight, 120) + 'px'
-  }
-}
-
 watch(() => props.chatMessages.length, () => scrollToBottom(true))
 watch(() => props.chatLoading, () => scrollToBottom())
-watch(chatInput, autoResize)
-
-onMounted(() => {
-  autoResize()
-})
 
 // configure marked for better output
 marked.setOptions({
@@ -97,9 +85,8 @@ function renderMarkdown(text: string): string {
 }
 
 function handleSend() {
-  if (!isEmpty.value && !isRunning.value && !isIndexingOrProcessing.value) {
+  if (!isRunning.value && !isIndexingOrProcessing.value) {
     emit('send')
-    nextTick(autoResize)
   }
 }
 
@@ -107,16 +94,9 @@ function handleClear() {
   emit('clear')
 }
 
-function handleKeydown(e: KeyboardEvent) {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault()
-    handleSend()
-  }
-}
-
 defineExpose({
   viewportRef,
-  textareaRef,
+  composerRef,
   focusInput
 })
 </script>
@@ -130,51 +110,17 @@ defineExpose({
         </div>
       </div>
       <div class="composer w-full">
-        <div class="composer-bar">
-          <textarea
-            ref="textareaRef"
-            v-model="chatInput"
-            @keydown="handleKeydown"
-            placeholder="ask anything about this page..."
-            :disabled="chatDisabled"
-            rows="1"
-            class="composer-input"
-          />
-          
-          <div class="flex items-center gap-1 shrink-0">
-            <TooltipProvider v-if="chatMessages.length > 0">
-              <Tooltip>
-                <TooltipTrigger as-child>
-                  <button
-                    @click="handleClear"
-                    class="w-7 h-7 rounded-md flex items-center justify-center text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-all duration-150"
-                  >
-                    <Trash2 :size="13" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent>clear chat</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-            
-            <div class="relative w-7 h-7">
-              <button
-                v-if="isRunning"
-                class="absolute inset-0 rounded-md bg-destructive flex items-center justify-center text-destructive-foreground transition-all duration-200"
-              >
-                <Square :size="11" class="fill-current" />
-              </button>
-              <button
-                v-else
-                @click="handleSend"
-                :disabled="isEmpty"
-                class="absolute inset-0 rounded-md flex items-center justify-center transition-all duration-200"
-                :class="isEmpty ? 'bg-muted text-muted-foreground' : 'bg-foreground text-background hover:bg-foreground/90'"
-              >
-                <ArrowUp :size="14" :stroke-width="2.5" />
-              </button>
-            </div>
-          </div>
-        </div>
+        <ChatComposer
+          ref="composerRef"
+          v-model="chatInput"
+          placeholder="ask anything about this page..."
+          :disabled="chatDisabled"
+          :loading="isRunning"
+          :show-clear="chatMessages.length > 0"
+          :show-stop="true"
+          @send="handleSend"
+          @clear="handleClear"
+        />
       </div>
     </div>
 
@@ -225,11 +171,11 @@ defineExpose({
                       <div class="text-xs font-medium text-foreground mb-1.5 uppercase tracking-wide">time breakdown</div>
                       <div class="space-y-1 text-xs">
                         <div v-if="msg.timing.rag" class="flex justify-between gap-3">
-                          <span class="text-foreground/70">rag/prep</span>
+                          <span class="text-foreground/70">processing</span>
                           <span class="text-foreground font-mono">{{ formatTime(msg.timing.rag) }}</span>
                         </div>
                         <div class="flex justify-between gap-3">
-                          <span class="text-foreground/70">llm</span>
+                          <span class="text-foreground/70">ai</span>
                           <span class="text-foreground font-mono">{{ formatTime(msg.timing.llm || msg.timing.total) }}</span>
                         </div>
                         <div class="flex justify-between gap-3 pt-1 border-t border-zinc-800">
@@ -272,55 +218,17 @@ defineExpose({
       </div>
 
       <div class="shrink-0 p-3 pt-2">
-        <div class="composer" :class="{ 'composer-disabled': isIndexingOrProcessing }">
-          <div class="composer-bar">
-            <textarea
-              ref="textareaRef"
-              v-model="chatInput"
-              @keydown="handleKeydown"
-              :placeholder="inputPlaceholder"
-              :disabled="inputDisabled"
-              rows="1"
-              class="composer-input"
-              :class="{ 'cursor-not-allowed opacity-50': isIndexingOrProcessing }"
-            />
-            
-            <div class="flex items-center gap-1 shrink-0">
-              <TooltipProvider v-if="chatMessages.length > 0">
-                <Tooltip>
-                  <TooltipTrigger as-child>
-                    <button
-                      @click="handleClear"
-                      class="w-7 h-7 rounded-md flex items-center justify-center text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-all duration-150"
-                    >
-                      <Trash2 :size="13" />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent>clear chat</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-              
-              <div class="relative w-7 h-7">
-                <button
-                  v-if="isRunning"
-                  class="absolute inset-0 rounded-md bg-destructive flex items-center justify-center text-destructive-foreground transition-all duration-200"
-                >
-                  <Square :size="11" class="fill-current" />
-                </button>
-                <button
-                  v-else
-                  @click="handleSend"
-                  :disabled="isEmpty || isIndexingOrProcessing"
-                  class="absolute inset-0 rounded-md flex items-center justify-center transition-all duration-200"
-                  :class="(isEmpty || isIndexingOrProcessing) ? 'bg-muted text-muted-foreground cursor-not-allowed' : 'bg-foreground text-background hover:bg-foreground/90'"
-                >
-                  <Loader2 v-if="isIndexingOrProcessing" :size="14" class="animate-spin" />
-                  <ArrowUp v-else :size="14" :stroke-width="2.5" />
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+        <ChatComposer
+          ref="composerRef"
+          v-model="chatInput"
+          :placeholder="inputPlaceholder"
+          :disabled="inputDisabled"
+          :loading="isRunning"
+          :show-clear="chatMessages.length > 0"
+          :show-stop="true"
+          @send="handleSend"
+          @clear="handleClear"
+        />
       </div>
     </template>
   </div>
@@ -329,7 +237,7 @@ defineExpose({
 <style scoped>
 .composer-bar {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: 6px;
   padding: 8px 10px;
   background: color-mix(in oklch, var(--color-card) 60%, transparent);
