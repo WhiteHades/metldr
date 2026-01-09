@@ -270,6 +270,7 @@ export function useChat() {
       
       const currentUrl = targetUrl
       
+      // detect content type and extract appropriate sourceId
       const isEmail = contextText.includes('EMAIL CONTENT:')
       const docType = isEmail ? 'email thread' : 'article'
       
@@ -280,16 +281,16 @@ export function useChat() {
         if (emailId) log.log(`extracted emailId: ${emailId.slice(0, 20)}...`)
       }
       
+      const sourceId = isEmail && emailId ? emailId : currentUrl
+      const sourceUrl = isEmail && emailId ? `email://${emailId}` : currentUrl
+      const sourceType = isEmail ? 'email' : 'article'
+      
       const CONTEXT_THRESHOLD = 8000
       let relevantContext = ''
       
       if (contextText && currentUrl) {
-        // determine sourceId: emailId for emails (to match EmailService), URL for articles
-        const sourceId = isEmail && emailId ? emailId : currentUrl
-        const sourceUrl = isEmail && emailId ? `email://${emailId}` : currentUrl
-        const sourceType = isEmail ? 'email' : 'article'
-        
         if (contextText.length > CONTEXT_THRESHOLD) {
+          // show indexing progress UI while waiting
           updateUrlState(targetUrl, s => { s.indexing = true })
           log.log(`ensuring large doc indexed for chat... ${contextText.length} chars, sourceId: ${sourceId.slice(0, 40)}`)
           try {
@@ -308,19 +309,25 @@ export function useChat() {
             updateUrlState(targetUrl, s => { s.indexing = false })
           }
           
-          // search RAG (use emailId-based sourceUrl for emails when filtering)
+          // search RAG for relevant chunks
           const ragStart = performance.now()
-          const searchRes = await sendToBackground({ type: 'RAG_SEARCH_WITH_CONTEXT', query: userMessage, limit: 5, sourceUrl }) as { success: boolean; context?: string; timing?: { embed?: number; search?: number } }
+          const searchRes = await sendToBackground({ 
+            type: 'RAG_SEARCH_WITH_CONTEXT', 
+            query: userMessage, 
+            limit: 5, 
+            sourceUrl 
+          }) as { success: boolean; context?: string }
           const ragTime = Math.round(performance.now() - ragStart)
           relevantContext = searchRes?.success ? (searchRes.context || '') : ''
-          log.log(`found context from RAG: ${relevantContext.length} chars (${ragTime}ms)`)
+          log.log(`RAG search: ${relevantContext.length} chars (${ragTime}ms)`)
           
+          // fallback to truncated if RAG returns nothing
           if (!relevantContext) {
             relevantContext = contextText.slice(0, CONTEXT_THRESHOLD)
             log.log('RAG empty, using truncated content')
           }
         } else {
-          // small docs: fire-and-forget indexing, use full content
+          // small docs: fire-and-forget indexing, use full content directly
           sendToBackground({
             type: 'RAG_ENSURE_INDEXED',
             text: contextText,
