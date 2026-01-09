@@ -1,23 +1,22 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { 
-  FileText, Clock, Loader2, ChevronRight, ChevronUp, Trash2, 
+  FileText, Clock, Loader2, 
   MessageSquare, Globe, Mail, Flame, BookOpen,
-  Cpu, History, TrendingUp, BarChart3, Zap, Timer, Reply, Sparkles
+  Cpu, TrendingUp, BarChart3, Zap, Timer, Sparkles, DollarSign, Heart, Coffee
 } from 'lucide-vue-next'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui'
-import { statsService, type UsageStats, type ActivityItem } from '@/services/StatsService'
+import { statsService, type UsageStats } from '@/services/StatsService'
 import { analyticsService, type AnalyticsSummary } from '@/services/AnalyticsService'
-import { cacheService } from '@/services/CacheService'
 import { logger } from '@/services/LoggerService'
-import DonationPrompt from './DonationPrompt.vue'
+import { APP_CONFIG } from '@/config/constants'
 
 const log = logger.createScoped('HistoryManager')
 const POLL_INTERVAL_MS = 4000
 
 const props = defineProps<{ limit?: number }>()
 
-const activities = ref<ActivityItem[]>([])
+const activities = ref<never[]>([])
 const stats = ref<UsageStats>({
   totalEmails: 0, totalPages: 0, totalInteractions: 0,
   estimatedTimeSaved: 0, thisWeek: 0, today: 0,
@@ -25,35 +24,21 @@ const stats = ref<UsageStats>({
 })
 const analytics = ref<AnalyticsSummary | null>(null)
 const loading = ref<boolean>(true)
-const showRecentActivity = ref(true)
 let messageListener: ((message: { type: string }) => void) | null = null
 let pollIntervalId: ReturnType<typeof setInterval> | null = null
 
 async function loadData(): Promise<void> {
   try {
-    const [statsData, activityData, analyticsData] = await Promise.all([
+    const [statsData, analyticsData] = await Promise.all([
       statsService.getStats(),
-      statsService.getRecentActivity(props.limit ?? 10),
       analyticsService.getAnalyticsSummary(30)
     ])
     stats.value = statsData
-    activities.value = activityData
     analytics.value = analyticsData
   } catch (error) {
     log.error('failed to load stats:', error)
   } finally {
     loading.value = false
-  }
-}
-
-async function clearHistory(): Promise<void> {
-  if (!confirm('clear all activity history?')) return
-  try {
-    await Promise.all([cacheService.clearAll(), analyticsService.clearAllData()])
-    activities.value = []
-    analytics.value = null
-  } catch (err) {
-    log.error('failed to clear history:', err)
   }
 }
 
@@ -68,14 +53,6 @@ function formatTimestamp(ts: number): string {
   const diffDays = Math.floor(diffHours / 24)
   if (diffDays < 7) return `${diffDays}d ago`
   return date.toLocaleDateString()
-}
-
-function openActivity(item: ActivityItem): void {
-  if (item.type === 'email') {
-    chrome.tabs.create({ url: `https://mail.google.com/mail/u/0/#inbox/${item.id}` })
-  } else {
-    chrome.tabs.create({ url: item.id })
-  }
 }
 
 // formatters
@@ -160,6 +137,36 @@ const contentBreakdown = computed(() => {
     }
   ].filter(c => c.count > 0)
 })
+
+// api pricing per 1K tokens (input, output) - 2026 top models
+const API_PRICING = [
+  { provider: 'OpenAI', model: 'GPT-5 Pro', input: 0.015, output: 0.12, color: 'emerald' },
+  { provider: 'OpenAI', model: 'GPT-5', input: 0.00125, output: 0.01, color: 'emerald' },
+  { provider: 'OpenAI', model: 'GPT-5 Mini', input: 0.00025, output: 0.002, color: 'emerald' },
+  { provider: 'Anthropic', model: 'Claude Opus 4.1', input: 0.015, output: 0.01, color: 'orange' },
+  { provider: 'Anthropic', model: 'Claude Sonnet 4.5', input: 0.003, output: 0.01, color: 'orange' },
+  { provider: 'Anthropic', model: 'Claude Haiku 4.5', input: 0.001, output: 0.01, color: 'orange' },
+  { provider: 'xAI', model: 'Grok 4', input: 0.003, output: 0.015, color: 'cyan' },
+  { provider: 'xAI', model: 'Grok 4 Fast', input: 0.0002, output: 0.0005, color: 'cyan' },
+  { provider: 'Google', model: 'Gemini 2.5 Pro', input: 0.00125, output: 0.01, color: 'blue' }
+]
+
+// calculate cost savings for each provider/model
+// formula: (tokens_in / 1000 * input_price) + (tokens_out / 1000 * output_price)
+const costSavings = computed(() => {
+  const inK = tokensIn.value / 1000  // tokens to thousands
+  const outK = tokensOut.value / 1000
+  if (inK === 0 && outK === 0) return []
+  
+  return API_PRICING.map(p => ({
+    ...p,
+    savings: (inK * p.input) + (outK * p.output)
+  })).sort((a, b) => b.savings - a.savings)
+})
+
+const totalSavingsMax = computed(() => costSavings.value[0]?.savings || 0)
+
+
 
 
 onMounted(async () => {
@@ -320,7 +327,7 @@ defineExpose({ refresh: loadData, stats, analytics })
               <TooltipTrigger as-child>
                 <span class="section-badge">{{ fmtNum(tokensIn + tokensOut) }} tokens</span>
               </TooltipTrigger>
-              <TooltipContent>{{ fmtNum(tokensIn) }} input / {{ fmtNum(tokensOut) }} output</TooltipContent>
+              <TooltipContent>{{ fmtNum(tokensIn) }} in / {{ fmtNum(tokensOut) }} out (4 chars ≈ 1 token)</TooltipContent>
             </Tooltip>
           </TooltipProvider>
         </div>
@@ -367,7 +374,7 @@ defineExpose({ refresh: loadData, stats, analytics })
                   <span class="perf-lbl">model</span>
                 </div>
               </TooltipTrigger>
-              <TooltipContent>Most used model</TooltipContent>
+              <TooltipContent>most used model</TooltipContent>
             </Tooltip>
           </TooltipProvider>
         </div>
@@ -452,6 +459,41 @@ defineExpose({ refresh: loadData, stats, analytics })
           </div>
         </div>
       </div>
+
+      <!-- cost savings -->
+      <div v-if="costSavings.length" class="section-card savings-card">
+        <div class="section-header">
+          <DollarSign :size="11" class="text-emerald-400" />
+          <span>Money Saved</span>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger as-child>
+                <span class="section-badge savings">${{ totalSavingsMax.toFixed(2) }}</span>
+              </TooltipTrigger>
+              <TooltipContent>vs most expensive API ({{ costSavings[0]?.model }})</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </div>
+        
+        <div class="savings-list">
+          <TooltipProvider v-for="(item, i) in costSavings.slice(0, 6)" :key="item.model">
+            <Tooltip>
+              <TooltipTrigger as-child>
+                <div class="savings-row" :class="{ top: i === 0 }">
+                  <span class="savings-provider" :class="item.color">{{ item.provider }}</span>
+                  <span class="savings-model">{{ item.model }}</span>
+                  <span class="savings-amount" :class="item.color">${{ item.savings.toFixed(2) }}</span>
+                </div>
+              </TooltipTrigger>
+              <TooltipContent>${{ item.input }}/1K in · ${{ item.output }}/1K out</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </div>
+        
+        <div class="savings-footer">
+          <span class="savings-note">running 100% locally = $0</span>
+        </div>
+      </div>
     </template>
 
     <!-- empty state -->
@@ -461,46 +503,21 @@ defineExpose({ refresh: loadData, stats, analytics })
       <p class="sub">start summarising to see stats</p>
     </div>
 
-    <!-- recent activity -->
-    <div class="activity-section">
-      <button @click="showRecentActivity = !showRecentActivity" class="activity-header">
-        <div class="header-left">
-          <History :size="10" class="text-muted-foreground" />
-          <span>Recent</span>
-          <span v-if="activities.length" class="count">{{ activities.length }}</span>
-        </div>
-        <ChevronUp :size="11" :class="['chevron', { collapsed: !showRecentActivity }]" />
-      </button>
-
-      <Transition name="slide">
-        <div v-if="showRecentActivity" class="activity-content">
-          <div v-if="!activities.length" class="activity-empty">no recent activity</div>
-          <div v-else class="activity-list">
-            <div v-for="item in activities" :key="item.id" class="activity-item" @click="openActivity(item)">
-              <div class="item-icon" :class="item.type">
-                <Mail v-if="item.type === 'email'" :size="9" />
-                <Globe v-else :size="9" />
-              </div>
-              <div class="item-content">
-                <p class="item-title">{{ item.title }}</p>
-                <div class="item-meta">
-                  <span>{{ formatTimestamp(item.timestamp) }}</span>
-                  <span v-if="item.hasSummary" class="tag violet">summary</span>
-                  <span v-if="item.hasChat" class="tag cyan">{{ item.chatCount }}</span>
-                </div>
-              </div>
-              <ChevronRight :size="10" class="item-arrow" />
-            </div>
-          </div>
-          <button v-if="activities.length" @click="clearHistory" class="clear-btn">
-            <Trash2 :size="9" /> clear
-          </button>
-        </div>
-      </Transition>
+    <!-- permanent donation card (always visible in stats) -->
+    <div class="donation-card">
+      <div class="donation-header">
+        <Heart :size="14" class="heart-pulse" />
+        <span class="donation-title">support metldr</span>
+      </div>
+      <p class="donation-text">
+        you've saved <strong class="savings-highlight">${{ totalSavingsMax.toFixed(2) }}</strong> using local ai.
+        100% free, private, no subscriptions.
+      </p>
+      <a :href="APP_CONFIG.buyMeACoffee" target="_blank" class="donate-btn-static">
+        <Coffee :size="12" />
+        <span>buy me a coffee</span>
+      </a>
     </div>
-
-    <!-- smart donation prompt (shows after 10+ summaries, rate limited) -->
-    <DonationPrompt />
   </div>
 </template>
 
@@ -1104,5 +1121,175 @@ defineExpose({ refresh: loadData, stats, analytics })
 .slide-enter-to, .slide-leave-from {
   opacity: 1;
   max-height: 400px;
+}
+
+/* cost savings */
+.savings-card {
+  background: linear-gradient(135deg, 
+    color-mix(in oklch, #34d399 8%, var(--color-card)),
+    var(--color-card)
+  );
+  border-color: color-mix(in oklch, #34d399 20%, var(--color-border));
+}
+
+.section-badge.savings {
+  background: color-mix(in oklch, #34d399 20%, transparent);
+  color: #34d399;
+}
+
+.savings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.savings-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  background: color-mix(in oklch, var(--color-muted) 40%, transparent);
+  border-radius: 6px;
+  font-size: var(--font-text-body);
+  cursor: help;
+  transition: background 0.15s ease;
+}
+
+.savings-row:hover {
+  background: color-mix(in oklch, var(--color-muted) 70%, transparent);
+}
+
+.savings-row.top {
+  background: color-mix(in oklch, #34d399 15%, transparent);
+  border: 1px solid color-mix(in oklch, #34d399 25%, transparent);
+}
+
+.savings-provider {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: var(--color-muted);
+}
+
+.savings-provider.emerald { 
+  background: color-mix(in oklch, #34d399 20%, transparent); 
+  color: #34d399; 
+}
+.savings-provider.orange { 
+  background: color-mix(in oklch, #fb923c 20%, transparent); 
+  color: #fb923c; 
+}
+.savings-provider.cyan { 
+  background: color-mix(in oklch, #22d3ee 20%, transparent); 
+  color: #22d3ee; 
+}
+.savings-provider.blue { 
+  background: color-mix(in oklch, #60a5fa 20%, transparent); 
+  color: #60a5fa; 
+}
+
+.savings-model {
+  flex: 1;
+  color: var(--color-foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.savings-amount {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: var(--font-text-body);
+  font-weight: 700;
+}
+
+.savings-amount.emerald { color: #34d399; }
+.savings-amount.orange { color: #fb923c; }
+.savings-amount.cyan { color: #22d3ee; }
+.savings-amount.blue { color: #60a5fa; }
+
+.savings-footer {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid color-mix(in oklch, var(--color-border) 50%, transparent);
+}
+
+.savings-note {
+  font-size: var(--font-text-small);
+  color: var(--color-muted-foreground);
+  font-style: italic;
+}
+
+/* permanent donation card */
+.donation-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: linear-gradient(135deg, 
+    color-mix(in oklch, #f59e0b 8%, var(--color-card)),
+    var(--color-card)
+  );
+  border: 1px solid color-mix(in oklch, #f59e0b 25%, var(--color-border));
+  border-radius: 0.75rem;
+}
+
+.donation-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.heart-pulse {
+  color: #f59e0b;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.15); }
+}
+
+.donation-title {
+  font-size: var(--font-text-body);
+  font-weight: 600;
+  color: var(--color-foreground);
+}
+
+.donation-text {
+  font-size: var(--font-text-small);
+  color: var(--color-muted-foreground);
+  line-height: 1.4;
+  margin: 0;
+}
+
+.savings-highlight {
+  color: #34d399;
+  font-weight: 700;
+}
+
+.donate-btn-static {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: #f59e0b;
+  color: #000;
+  border: none;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  width: fit-content;
+}
+
+.donate-btn-static:hover {
+  background: #fbbf24;
+  transform: translateY(-1px);
 }
 </style>
