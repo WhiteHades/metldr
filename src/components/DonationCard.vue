@@ -24,9 +24,8 @@ const donationUrl = APP_CONFIG.buyMeACoffee
         you've saved <strong class="savings">${{ savings.toFixed(2) }}</strong> using local ai.
       </template>
       <template v-else>
-        if metldr saves you time, consider supporting development!
+        if metldr saves you time, consider supporting development of free and private ai solutions.
       </template>
-      100% free, private, no subscriptions.
     </p>
     
     <a :href="donationUrl" target="_blank" class="donate-btn">
