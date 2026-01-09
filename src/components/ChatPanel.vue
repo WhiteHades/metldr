@@ -117,7 +117,6 @@ defineExpose({
           :disabled="chatDisabled"
           :loading="isRunning"
           :show-clear="chatMessages.length > 0"
-          :show-stop="true"
           @send="handleSend"
           @clear="handleClear"
         />
@@ -225,7 +224,6 @@ defineExpose({
           :disabled="inputDisabled"
           :loading="isRunning"
           :show-clear="chatMessages.length > 0"
-          :show-stop="true"
           @send="handleSend"
           @clear="handleClear"
         />
