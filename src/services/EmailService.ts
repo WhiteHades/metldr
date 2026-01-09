@@ -249,11 +249,27 @@ export class EmailService {
 
         if (!result.ok) return null
 
-        // parse JSON from response
-        const jsonMatch = result.content?.match(/\{[\s\S]*\}/)
-        if (!jsonMatch) return null
-
-        const parsed = JSON.parse(jsonMatch[0]) as ParsedReplies
+        // parse JSON from response - try to extract clean JSON object
+        const content = result.content || ''
+        let parsed: ParsedReplies | null = null
+        
+        const jsonMatch = content.match(/\{[\s\S]*"replies"[\s\S]*\}/)
+        if (jsonMatch) {
+          try {
+            parsed = JSON.parse(jsonMatch[0]) as ParsedReplies
+          } catch {
+            const repliesMatch = content.match(/"replies"\s*:\s*\[([\s\S]*?)\]/)
+            if (repliesMatch) {
+              try {
+                parsed = { replies: JSON.parse(`[${repliesMatch[1]}]`) }
+              } catch {
+                return null
+              }
+            }
+          }
+        }
+        
+        if (!parsed) return null
         const replies = (parsed.replies || []).map((r, idx) => ({
           id: `reply_${idx}`,
           tone: r.tone || 'professional',
