@@ -489,10 +489,6 @@ defineExpose({ refresh: loadData, stats, analytics })
             </Tooltip>
           </TooltipProvider>
         </div>
-        
-        <div class="savings-footer">
-          <span class="savings-note">running 100% locally = $0</span>
-        </div>
       </div>
     </template>
 
@@ -511,7 +507,7 @@ defineExpose({ refresh: loadData, stats, analytics })
       </div>
       <p class="donation-text">
         you've saved <strong class="savings-highlight">${{ totalSavingsMax.toFixed(2) }}</strong> using local ai.
-        100% free, private, no subscriptions.
+        free and private. exciting features coming soon - support a dev who just started!
       </p>
       <a :href="APP_CONFIG.buyMeACoffee" target="_blank" class="donate-btn-static">
         <Coffee :size="12" />
@@ -566,7 +562,9 @@ defineExpose({ refresh: loadData, stats, analytics })
 
 .hero-data {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -604,6 +602,11 @@ defineExpose({ refresh: loadData, stats, analytics })
   letter-spacing: 0.03em;
   color: var(--color-muted-foreground);
   margin-bottom: 6px;
+}
+
+.section-header > svg {
+  flex-shrink: 0;
+  transform: translateY(-1px);
 }
 
 .section-value {
@@ -763,6 +766,11 @@ defineExpose({ refresh: loadData, stats, analytics })
   align-items: center;
   gap: 5px;
   cursor: help;
+}
+
+.usage-item > svg {
+  flex-shrink: 0;
+  transform: translateY(-1px);
 }
 
 .usage-val {
@@ -1147,7 +1155,7 @@ defineExpose({ refresh: loadData, stats, analytics })
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 8px;
+  padding: 6px 8px;
   background: color-mix(in oklch, var(--color-muted) 40%, transparent);
   border-radius: 6px;
   font-size: var(--font-text-body);
@@ -1160,8 +1168,8 @@ defineExpose({ refresh: loadData, stats, analytics })
 }
 
 .savings-row.top {
-  background: color-mix(in oklch, #34d399 15%, transparent);
-  border: 1px solid color-mix(in oklch, #34d399 25%, transparent);
+  background: color-mix(in oklch, #ef4444 15%, transparent);
+  border: 1px solid color-mix(in oklch, #ef4444 25%, transparent);
 }
 
 .savings-provider {
