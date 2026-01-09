@@ -142,7 +142,8 @@ export function useTabSession() {
     summaryMode: Ref<string>,
     fetchSummary: (force: boolean, trigger: string) => Promise<void>,
     switchChatUrl?: (url: string) => void,
-    setUrlMessages?: (url: string, messages: AppChatMessage[]) => void
+    setUrlMessages?: (url: string, messages: AppChatMessage[]) => void,
+    resetSummaryState?: () => void
   ): () => void {
     let urlPollInterval: ReturnType<typeof setInterval> | null = null
     let previousUrl: string | null = null
@@ -193,12 +194,19 @@ export function useTabSession() {
         switchChatUrl(newUrl)
       }
       
-      // only clear if switchChatUrl wasn't provided (legacy fallback)
+      // reset ALL summary state (including summaryLoading) for clean slate
+      if (resetSummaryState) {
+        resetSummaryState()
+      } else {
+        // legacy fallback if resetSummaryState not provided
+        pageSummary.value = null
+        summaryCollapsed.value = false
+      }
+      
+      // only clear chat if switchChatUrl wasn't provided (legacy fallback)
       if (!switchChatUrl) {
         chatMessages.value = []
       }
-      pageSummary.value = null
-      summaryCollapsed.value = false
       
       previousUrl = newUrl
       
