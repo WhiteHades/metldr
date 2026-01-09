@@ -51,9 +51,25 @@ watch(messages, async (newMsgs) => {
     console.log('[GlobalSearch] skipping save during initial load')
     return
   }
+  
+  const toSave = newMsgs.map(m => ({
+    ...m,
+    // deep clone sources to prevent reactivity issues
+    sources: Array.isArray(m.sources) && m.sources.length > 0
+      ? m.sources.map(s => ({
+          index: s.index,
+          title: s.title,
+          url: s.url,
+          type: s.type,
+          score: s.score,
+          snippet: s.snippet
+        }))
+      : []
+  }))
+  
+  console.log('[GlobalSearch] saving messages:', toSave.length, 'sources per msg:', toSave.map(m => m.sources?.length || 0))
+  
   try {
-    const toSave = newMsgs.map(m => ({ ...m, sources: m.sources || [] }))
-    console.log('[GlobalSearch] saving messages:', toSave.length, 'sources per msg:', toSave.map(m => m.sources?.length || 0))
     await chrome.storage.local.set({ 
       [STORAGE_KEY]: { 
         messages: toSave,
@@ -75,7 +91,17 @@ onMounted(async () => {
       if (age < 60 * 60 * 1000) {
         messages.value = state.messages.map(m => ({
           ...m,
-          sources: Array.isArray(m.sources) ? m.sources : []
+          sources: Array.isArray(m.sources) 
+            ? m.sources.map((s, idx) => ({
+                ...s,
+                index: s.index ?? (idx + 1),
+                title: s.title || 'Source',
+                url: s.url || '',
+                type: s.type || 'page',
+                score: s.score || 0,
+                snippet: s.snippet || ''
+              }))
+            : []
         }))
         console.log('[GlobalSearch] loaded messages:', messages.value.length, 'sources:', messages.value.map(m => m.sources?.length || 0))
       } else {
@@ -290,14 +316,12 @@ function retryLastMessage() {
         <template v-for="(msg, i) in messages" :key="i">
           <!-- user query -->
           <div v-if="msg.role === 'user'" class="msg-user message-appear">
-            <span class="msg-badge">Q</span>
             <span class="msg-text">{{ msg.content }}</span>
           </div>
           
           <!-- assistant answer -->
           <div v-else class="msg-assistant message-appear" :class="{ error: msg.error }">
             <div class="msg-header">
-              <span class="msg-badge answer">A</span>
               <span v-if="msg.timing" class="msg-timing">{{ formatTime(msg.timing.total) }}</span>
               <div class="msg-actions">
                 <TooltipProvider v-if="msg.error">
@@ -362,15 +386,12 @@ function retryLastMessage() {
         
         <!-- loading -->
         <div v-if="loading" class="msg-assistant loading message-appear">
-          <div class="msg-header">
-            <span class="msg-badge answer">A</span>
-          </div>
+          <div class="msg-header"></div>
           <div class="loading-dots"><span></span><span></span><span></span></div>
         </div>
       </div>
     </div>
 
-    <!-- input -->
     <div class="shrink-0 p-3 pt-2">
       <ChatComposer
         ref="composerRef"
