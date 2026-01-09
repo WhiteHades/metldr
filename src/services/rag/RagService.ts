@@ -2,6 +2,7 @@ import { vectorStore } from './VectorStore'
 import { embeddingProvider } from './EmbeddingProvider'
 import { chunkingService } from './ChunkingService'
 import { databaseService, DB_CONFIGS } from '../DatabaseService'
+import { aiGateway } from '../ai/AIGateway'
 import { LRUCache } from 'lru-cache'
 import type { VectorEntry, SearchResult } from '../../types'
 
@@ -326,14 +327,15 @@ export class RagService {
     }
 
     try {
-      // 1. preprocess query
-      const processed = this.preprocessQuery(query)
+      // 1. expand query with LLM (for global search - adds related terms)
+      const expanded = await this.expandQueryWithLLM(query)
+      const processed = this.preprocessQuery(expanded)
       
-      // 2. parallel retrieval with larger pool
+      // 2. parallel retrieval
       const queryEmbedding = await embeddingProvider.embedQuery(processed)
       const [vectorResults, keywordResults] = await Promise.all([
-        vectorStore.search(Array.from(queryEmbedding), limit * 3),
-        vectorStore.searchKeyword(processed, limit * 3)
+        vectorStore.search(Array.from(queryEmbedding), limit * 5),
+        vectorStore.searchKeyword(processed, limit * 5)
       ])
       
       // 3. RRF fusion with adaptive weights
@@ -352,6 +354,50 @@ export class RagService {
       console.error('[RagService] Search failed:', err)
       return []
     }
+  }
+
+  // llm-based query expansion for global search
+  private async expandQueryWithLLM(query: string): Promise<string> {
+    try {
+      const response = await aiGateway.complete({
+        systemPrompt: `You are a search query expander. Analyze the query and generate diverse search terms that maximize finding relevant content.
+
+Rules:
+- Output ONLY comma-separated terms, no explanation
+- Generate 10-15 diverse terms
+- Include synonyms, related concepts, different phrasings
+- Cover both broad and specific variations
+- Consider different contexts where this might appear`,
+        userPrompt: `Query: "${query}"
+
+Generate search terms by:
+1. Rephrasing the question differently
+2. Adding synonyms for each key concept  
+3. Including related subcategories and domains
+4. Adding technical AND casual variations
+5. Considering transaction types (invoices, receipts, registrations, confirmations)`,
+        maxTokens: 100
+      })
+      
+      if (response.ok && response.content) {
+        const expanded = response.content
+          .replace(/[\"\'\n]/g, '')
+          .split(/[,;]/)
+          .map((t: string) => t.trim().toLowerCase())
+          .filter((t: string) => t.length > 2 && t.length < 40 && !t.includes(':'))
+          .slice(0, 12)
+        
+        if (expanded.length > 0) {
+          const result = `${query} ${expanded.join(' ')}`
+          console.log(`[RagService] LLM expanded: "${query}" → +${expanded.length} terms`)
+          return result
+        }
+      }
+    } catch (err) {
+      console.log('[RagService] LLM expansion failed, using original:', err)
+    }
+    
+    return query
   }
 
   async searchWithContext(query: string, limit = 3, sourceUrl?: string): Promise<string> {
@@ -442,16 +488,30 @@ export class RagService {
       })
       
       // sort by adjusted score
-      scored.sort((a, b) => b.score - a.score)
-      const top = scored.slice(0, limit)
-      
-      // filter low-score sources but keep at least 1
-      const topScore = top[0]?.score || 0
-      const minDisplayScore = Math.max(20, topScore - 40)
-      let relevantTop = top.filter(r => r.score >= minDisplayScore)
-      if (relevantTop.length === 0 && top.length > 0) {
-        relevantTop = [top[0]] // always keep at least the best result
-      }
+    scored.sort((a, b) => b.score - a.score)
+    
+    // dedupe by source URL to show diverse sources
+    const seenUrls = new Set<string>()
+    const deduped = scored.filter(r => {
+      const url = (r.entry.metadata?.sourceUrl as string) || r.entry.id
+      const baseUrl = url.split(':chunk:')[0]  // remove chunk suffix
+      if (seenUrls.has(baseUrl)) return false
+      seenUrls.add(baseUrl)
+      return true
+    })
+    
+    const top = deduped.slice(0, limit)
+    
+    // filter lowscore sources but keep minimum 2 for diversity
+    const topScore = top[0]?.score || 0
+    const minDisplayScore = Math.max(15, topScore - 50) 
+    let relevantTop = top.filter(r => r.score >= minDisplayScore)
+    if (relevantTop.length < 2 && top.length >= 2) {
+      relevantTop = top.slice(0, 2)  // keep at least 2 diverse sources
+    }
+    if (relevantTop.length === 0 && top.length > 0) {
+      relevantTop = [top[0]]
+    }  
       
       // build sources with consistent indices
       const sources = relevantTop.map((r, i) => {
@@ -506,45 +566,9 @@ export class RagService {
     }
   }
 
-  // query preprocessing with expansion for better retrieval
+  // basic query preprocessing (LLM handles semantic expansion)
   private preprocessQuery(query: string): string {
-    let processed = query.toLowerCase().trim()
-    
-    // common typo fixes
-    const typos: Record<string, string> = {
-      'oder': 'order', 'sumary': 'summary', 'emai': 'email',
-      'reciet': 'receipt', 'invocie': 'invoice', 'reciept': 'receipt',
-      'purchse': 'purchase', 'delivry': 'delivery', 'shiping': 'shipping',
-      'confrim': 'confirm', 'paymnt': 'payment', 'addresss': 'address'
-    }
-    
-    for (const [typo, fix] of Object.entries(typos)) {
-      processed = processed.replace(new RegExp(`\\b${typo}\\b`, 'gi'), fix)
-    }
-    
-    // domain-specific synonym expansion (improves keyword matching)
-    const synonyms: Record<string, string[]> = {
-      'order': ['purchase', 'transaction', 'confirmed'],
-      'payment': ['paid', 'bkash', 'transaction', 'amount'],
-      'delivery': ['shipped', 'delivered', 'shipping', 'courier'],
-      'receipt': ['invoice', 'confirmation', 'order'],
-      'daraz': ['order', 'shopping', 'purchase', 'delivery'],
-      'email': ['mail', 'message', 'inbox'],
-      'article': ['news', 'post', 'story', 'content'],
-      'pdf': ['document', 'file', 'paper']
-    }
-    
-    // add synonyms to query for better keyword matching
-    const words = processed.split(/\s+/)
-    const expanded = new Set(words)
-    for (const word of words) {
-      if (synonyms[word]) {
-        // add first 2 synonyms to avoid query bloat
-        synonyms[word].slice(0, 2).forEach(s => expanded.add(s))
-      }
-    }
-    
-    return Array.from(expanded).join(' ')
+    return query.toLowerCase().trim()
   }
 
   // extract significant keywords for strict matching
