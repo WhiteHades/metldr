@@ -128,7 +128,49 @@ export class PageService {
     return bullets
   }
 
-  static async chat(messages: ChatMessage[], pageContext: PageContext | null, model: string | null): Promise<ChatResult> {
+  private static async _enhanceContextWithSummaries(
+    context: string,
+    sources: Array<{ index: number; url: string; type: string }>
+  ): Promise<string> {
+    const summaryParts: string[] = []
+    
+    for (const source of sources) {
+      if (!source.url) continue
+      
+      try {
+        let summary: string | null = null
+        
+        if (source.type === 'email') {
+          const emailId = source.url.replace('email://', '').split('/').pop()
+          if (emailId) {
+            const cached = await cacheService.getEmailSummary(emailId) as { bullets?: string[]; keyPoints?: string[] } | null
+            if (cached?.bullets?.length) {
+              summary = cached.bullets.join('. ')
+            } else if (cached?.keyPoints?.length) {
+              summary = cached.keyPoints.join('. ')
+            }
+          }
+        } else {
+          const cached = await cacheService.getPageSummary(source.url) as { bullets?: string[] } | null
+          if (cached?.bullets?.length) {
+            summary = cached.bullets.join('. ')
+          }
+        }
+        
+        if (summary) {
+          summaryParts.push(`[${source.index}] SUMMARY: ${summary}`)
+        }
+      } catch {
+        // skip if fetch fails
+      }
+    }
+    
+    if (summaryParts.length === 0) return context
+    
+    return `SUMMARIES:\n${summaryParts.join('\n')}\n\nDETAILED SOURCES:\n${context}`
+  }
+
+  static async chat(messages: ChatMessage[], pageContext: PageContext | null, _model: string | null): Promise<ChatResult> {
     const startTime = performance.now()
     
     let contextText = pageContext?.fullContent || ''
@@ -157,53 +199,33 @@ export class PageService {
     }
 
     const systemPrompt = (contextText 
-      ? AIPrompts.chat.withContext({ content: contextText }) // Context from *current* page
-      : AIPrompts.chat.noContext) + ragContext // + Context from *other* docs
+      ? AIPrompts.chat.withContext({ content: contextText })
+      : AIPrompts.chat.noContext) + ragContext
 
-    // use aiGateway.complete which respects provider preference
+    const chatHistory = messages
+      .filter(m => m.content !== lastUserMsg)
+      .slice(-6)
+      .map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }))
+
     const result = await aiGateway.complete({
       systemPrompt,
       userPrompt: lastUserMsg,
+      messages: chatHistory,
       temperature: 0.3
     })
     
     if (result.ok) {
-      const isChrome = aiGateway.getPreference() === 'chrome-ai'
       return {
         ok: true,
         content: result.content,
         timing: { 
           total: Math.round(performance.now() - startTime), 
-          model: isChrome ? 'gemini-nano' : (model || 'ollama')
+          model: result.model || (aiGateway.getPreference() === 'chrome-ai' ? 'gemini-nano' : 'ollama')
         }
       }
     }
 
-    // fallback to ollama directly if gateway failed
-    let selectedModel = model
-    if (!selectedModel) selectedModel = await OllamaService.selectBest('page_summary')
-    
-    if (!selectedModel) {
-      return { ok: false, error: result.error || 'no ai available' }
-    }
-
-    const useLongTimeout = contextText.length > 2000
-
-    try {
-      const ollamaResult = await OllamaService.complete(
-        selectedModel,
-        [{ role: 'system', content: systemPrompt }, ...messages.slice(-6)],
-        { temperature: 0.2, longContext: useLongTimeout }
-      )
-      
-      return {
-        ...ollamaResult,
-        timing: { total: Math.round(performance.now() - startTime), model: selectedModel }
-      }
-    } catch (err) {
-      console.error('[PageService.chat]', (err as Error).message)
-      return { ok: false, error: (err as Error).message || 'chat failed' }
-    }
+    return { ok: false, error: result.error || 'ai generation failed' }
   }
 
   static async globalChat(
@@ -218,7 +240,7 @@ export class PageService {
       return { ok: false, error: 'no user message' }
     }
     
-    const { context, sources } = await ragService.searchWithSources(lastUserMsg, 5)
+    const { context, sources } = await ragService.searchWithSources(lastUserMsg, 8)
     console.log('[PageService.globalChat] sources from RAG:', sources?.length, sources)
     
     if (!context) {
@@ -230,60 +252,48 @@ export class PageService {
       }
     }
     
-    const systemPrompt = `You are metldr, a helpful assistant with access to the user's saved emails, articles, and documents.
+    const enhancedContext = await this._enhanceContextWithSummaries(context, sources)
+    
+    const systemPrompt = `You are metldr, answering questions from the user's saved emails, articles, and documents.
 
 SOURCES:
-${context}
+${enhancedContext}
 
 RULES:
-- Give a SHORT, concise answer (2-4 sentences per source max)
-- Only cite ONCE at the end of relevant info using [1], [2], etc. - NOT on every line
-- Focus on the most important details (dates, amounts, names, IDs)
-- If multiple sources, summarize each briefly
-- If info not found, say so briefly
-- Use plain text, minimal formatting`
+- Extract and state the key facts from each source (dates, amounts, names, order IDs, etc.)
+- For each relevant source, write 1-2 sentences with the specific details found
+- Cite once at end of each item: [1], [2], etc.
+- Don't say "details not available" - if info exists in the source, extract it
+- Be direct and factual, no fluff`
+
+    // build chat history (exclude current message, it's passed as userPrompt)
+    const chatHistory = messages
+      .filter(m => m.content !== lastUserMsg)
+      .slice(-6)
+      .map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }))
 
     const result = await aiGateway.complete({
       systemPrompt,
       userPrompt: lastUserMsg,
+      messages: chatHistory,
       temperature: 0.3
     })
     
     if (result.ok) {
-      const isChrome = aiGateway.getPreference() === 'chrome-ai'
       return {
         ok: true,
         content: result.content,
         sources,
         timing: { 
           total: Math.round(performance.now() - startTime), 
-          model: isChrome ? 'gemini-nano' : 'ollama'
+          model: result.model || (aiGateway.getPreference() === 'chrome-ai' ? 'gemini-nano' : 'ollama')
         }
       }
     }
     
-    // fallback to ollama
-    const selectedModel = await OllamaService.selectBest('page_summary')
-    if (!selectedModel) {
-      return { ok: false, error: result.error || 'no ai available', sources }
-    }
-    
-    try {
-      const ollamaResult = await OllamaService.complete(
-        selectedModel,
-        [{ role: 'system', content: systemPrompt }, ...messages.slice(-6)],
-        { temperature: 0.2 }
-      )
-      
-      return {
-        ...ollamaResult,
-        sources,
-        timing: { total: Math.round(performance.now() - startTime), model: selectedModel }
-      }
-    } catch (err) {
-      console.error('[PageService.globalChat]', (err as Error).message)
-      return { ok: false, error: (err as Error).message, sources }
-    }
+    return { ok: false, error: result.error || 'ai generation failed', sources }
   }
 }
+
+
 

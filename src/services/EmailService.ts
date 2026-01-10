@@ -148,7 +148,7 @@ export class EmailService {
         throw new Error('no ai available')
       }
 
-      const model = await OllamaService.selectBest('email_summary')
+      const model = await OllamaService.getUserSelected() || await OllamaService.selectBest('email_summary')
       if (!model) throw new Error('no models available')
 
       const summary = await this._generateSummary(facts, snippet, metadata, model)
@@ -401,7 +401,8 @@ export class EmailService {
       // try ollama (either as preference or fallback)
       const { available } = await OllamaService.checkAvailable()
       if (available) {
-        const model = await OllamaService.selectBest('email_summary')
+        // prefer user's selected model
+        const model = await OllamaService.getUserSelected() || await OllamaService.selectBest('email_summary')
         if (model) {
           const suggestions = await this._generateReplies(snippet, summary, metadata, model)
           

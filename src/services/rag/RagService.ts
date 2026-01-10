@@ -356,26 +356,33 @@ export class RagService {
     }
   }
 
-  // llm-based query expansion for global search
+  // llm-based query expansion for global search with fallback
   private async expandQueryWithLLM(query: string): Promise<string> {
+    // fallback: simple keyword expansion without LLM
+    const fallbackExpand = (q: string): string => {
+      const synonyms: Record<string, string[]> = {
+        'order': ['purchase', 'bought', 'confirmation', 'shipping'],
+        'orders': ['purchases', 'bought', 'confirmations', 'shipping'],
+        'invoice': ['bill', 'receipt', 'payment', 'statement'],
+        'invoices': ['bills', 'receipts', 'payments', 'statements'],
+        'email': ['mail', 'message', 'notification'],
+        'emails': ['mails', 'messages', 'notifications'],
+        'article': ['post', 'blog', 'news', 'story'],
+        'articles': ['posts', 'blogs', 'news', 'stories']
+      }
+      const words = q.toLowerCase().split(/\s+/)
+      const extras: string[] = []
+      for (const w of words) {
+        if (synonyms[w]) extras.push(...synonyms[w])
+      }
+      return extras.length > 0 ? `${q} ${extras.join(' ')}` : q
+    }
+
     try {
       const response = await aiGateway.complete({
-        systemPrompt: `You are a search query expander. Analyze the query and generate diverse search terms that maximize finding relevant content.
-
-Rules:
-- Output ONLY comma-separated terms, no explanation
-- Generate 10-15 diverse terms
-- Include synonyms, related concepts, different phrasings
-- Cover both broad and specific variations
-- Consider different contexts where this might appear`,
-        userPrompt: `Query: "${query}"
-
-Generate search terms by:
-1. Rephrasing the question differently
-2. Adding synonyms for each key concept  
-3. Including related subcategories and domains
-4. Adding technical AND casual variations
-5. Considering transaction types (invoices, receipts, registrations, confirmations)`,
+        systemPrompt: `You are a search query expander. Output ONLY comma-separated search terms, no explanation.
+Generate 10-15 diverse terms: synonyms, related concepts, different phrasings.`,
+        userPrompt: `Query: "${query}"`,
         maxTokens: 100
       })
       
@@ -394,10 +401,11 @@ Generate search terms by:
         }
       }
     } catch (err) {
-      console.log('[RagService] LLM expansion failed, using original:', err)
+      console.log('[RagService] LLM expansion failed, using fallback:', err)
     }
     
-    return query
+    // use fallback expansion
+    return fallbackExpand(query)
   }
 
   async searchWithContext(query: string, limit = 3, sourceUrl?: string): Promise<string> {
@@ -460,61 +468,48 @@ Generate search terms by:
     }>
   }> {
     try {
+      // fetch more results for comprehensive coverage
       const results = await this.search(query, limit * 4)
       console.log('[RagService.searchWithSources] search results:', results.length)
       if (results.length === 0) return { context: '', sources: [] }
       
-      // extract significant query terms using shared method
+      // extract significant query terms
       const queryTerms = this.extractQueryKeywords(query)
       
-      // score results with keyword boost (but don't filter - always return something)
+      // score results with keyword boost
       const scored = results.map(r => {
         const content = r.entry.content.toLowerCase()
         const title = ((r.entry.metadata?.title as string) || '').toLowerCase()
         const text = content + ' ' + title
         
-        // count matching keywords
         let matchedTerms = 0
         for (const term of queryTerms) {
           if (text.includes(term)) matchedTerms++
         }
         const keywordScore = queryTerms.length > 0 ? matchedTerms / queryTerms.length : 0.5
-        
-        // boost for keyword matches (max 2x for 100% match)
         const boost = 1 + keywordScore
         const adjustedScore = Math.min(100, Math.round(r.score * boost))
         
         return { ...r, score: adjustedScore, keywordScore, matchedTerms }
       })
       
-      // sort by adjusted score
-    scored.sort((a, b) => b.score - a.score)
-    
-    // dedupe by source URL to show diverse sources
-    const seenUrls = new Set<string>()
-    const deduped = scored.filter(r => {
-      const url = (r.entry.metadata?.sourceUrl as string) || r.entry.id
-      const baseUrl = url.split(':chunk:')[0]  // remove chunk suffix
-      if (seenUrls.has(baseUrl)) return false
-      seenUrls.add(baseUrl)
-      return true
-    })
-    
-    const top = deduped.slice(0, limit)
-    
-    // filter lowscore sources but keep minimum 2 for diversity
-    const topScore = top[0]?.score || 0
-    const minDisplayScore = Math.max(15, topScore - 50) 
-    let relevantTop = top.filter(r => r.score >= minDisplayScore)
-    if (relevantTop.length < 2 && top.length >= 2) {
-      relevantTop = top.slice(0, 2)  // keep at least 2 diverse sources
-    }
-    if (relevantTop.length === 0 && top.length > 0) {
-      relevantTop = [top[0]]
-    }  
+      scored.sort((a, b) => b.score - a.score)
       
-      // build sources with consistent indices
-      const sources = relevantTop.map((r, i) => {
+      // dedupe by source URL (keep highest-scored chunk per source)
+      const seenUrls = new Set<string>()
+      const deduped = scored.filter(r => {
+        const url = (r.entry.metadata?.sourceUrl as string) || r.entry.id
+        const baseUrl = url.split(':chunk:')[0].split('?')[0].replace(/\/$/, '')
+        if (seenUrls.has(baseUrl)) return false
+        seenUrls.add(baseUrl)
+        return true
+      })
+      
+      // take top results without aggressive score filtering
+      // just use the limit directly - let the LLM decide relevance
+      const top = deduped.slice(0, limit)
+      
+      const sources = top.map((r, i) => {
         const meta = r.entry.metadata || {}
         return {
           index: i + 1,
@@ -526,8 +521,7 @@ Generate search terms by:
         }
       })
       
-      // build context with SAME filtered results (indices match sources)
-      const contextParts = relevantTop.map((r, i) => {
+      const contextParts = top.map((r, i) => {
         const meta = r.entry.metadata || {}
         const title = meta.title || meta.sourceUrl || r.entry.id
         return `[${i + 1}] ${title}:\n${r.entry.content}`
