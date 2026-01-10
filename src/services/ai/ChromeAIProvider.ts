@@ -294,6 +294,11 @@ export class ChromeAIProvider extends AIProvider {
   async detectLanguage(request: AIDetectLanguageRequest): Promise<AIDetectLanguageResponse> {
     const start = performance.now()
 
+    if (this.isServiceWorker()) {
+      const result = await this.relayToOffscreen('detectLanguage', { text: request.text })
+      return { ...result, timing: Math.round(performance.now() - start) }
+    }
+
     try {
       if (typeof LanguageDetector === 'undefined') {
         return { ok: false, error: 'LanguageDetector API not available' }

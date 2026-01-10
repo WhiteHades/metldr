@@ -64,6 +64,34 @@ async function handleChromeAI(msg: any): Promise<any> {
         }
       }
       
+      case 'detectLanguage': {
+        if (typeof LanguageDetector === 'undefined') {
+          return { ok: false, error: 'LanguageDetector not available' }
+        }
+        const ldAvail = await LanguageDetector.availability()
+        if (ldAvail === 'unavailable') {
+          return { ok: false, error: 'LanguageDetector unavailable' }
+        }
+        
+        const detector = await LanguageDetector.create()
+        try {
+          const results = await detector.detect(payload.text)
+          if (!results?.length) {
+            return { ok: false, error: 'no language detected' }
+          }
+          const top = results[0]
+          return { 
+            ok: true, 
+            language: top.detectedLanguage, 
+            confidence: top.confidence, 
+            allResults: results, 
+            provider: 'chrome-ai' 
+          }
+        } finally {
+          detector.destroy()
+        }
+      }
+      
       case 'capabilities': {
         const caps = {
           complete: typeof LanguageModel !== 'undefined',

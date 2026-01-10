@@ -252,34 +252,36 @@ Define "${word}" (15-20 words max, considering context). Respond only with JSON.
     }
   }
 
-  /**
-   * detect language using hybrid approach:
-   * 1. regex patterns (fastest, for common scripts)
-   * 2. chrome language detector api (high accuracy)
-   * 3. ollama fallback (if chrome ai unavailable)
-   */
-  static async detectLanguage(word: string, sentence = ''): Promise<string> {
-    const text = sentence || word
 
-    // tier 1: regex pattern matching (fastest)
-    const regexResult = this._detectLanguageByRegex(text)
+  static async detectLanguage(word: string, sentence = ''): Promise<string> {
+    const detectionText = sentence && sentence.length > word.length ? sentence : word
+
+    const regexResult = this._detectLanguageByRegex(detectionText)
     if (regexResult) {
       console.log('[WordService.detectLanguage] detected via regex:', regexResult)
       return regexResult
     }
 
-    // tier 2: chrome language detector api
     try {
-      const chromeResult = await aiGateway.detectLanguage({ text })
+      const textForDetection = detectionText.length >= 20 ? detectionText : 
+        (sentence.length >= 20 ? sentence : `${sentence} ${word}`.trim())
+      
+      const chromeResult = await aiGateway.detectLanguage({ text: textForDetection })
       if (chromeResult.ok && chromeResult.language) {
-        console.log('[WordService.detectLanguage] detected via', chromeResult.provider, ':', chromeResult.language)
+        const confidence = chromeResult.confidence || 0
+        
+        if (confidence >= 0.5 || !chromeResult.allResults) {
+          console.log('[WordService.detectLanguage] detected via', chromeResult.provider, ':', chromeResult.language, `(confidence: ${(confidence * 100).toFixed(0)}%)`)
+          return chromeResult.language
+        }
+        
+        console.log('[WordService.detectLanguage] low confidence detection:', chromeResult.language, `(${(confidence * 100).toFixed(0)}%)`)
         return chromeResult.language
       }
     } catch (err) {
       console.log('[WordService.detectLanguage] ai gateway error:', (err as Error).message)
     }
 
-    // tier 3: ollama fallback (handled by aiGateway internally)
     return 'en'
   }
 
