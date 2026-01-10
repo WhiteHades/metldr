@@ -198,9 +198,9 @@ const features = [
 ];
 
 const recommendedModels = [
-  { name: 'llama3.2:1b', size: '1b', desc: 'recommended default', speed: 'fast_' },
-  { name: 'gemma3:1b', size: '1b', desc: 'ultra-fast, lightweight', speed: 'fast_' },
-  { name: 'qwen3:1.4b', size: '1.4b', desc: 'compact & capable', speed: 'fast_' },
+  { name: 'llama3.2:1b', size: '1b', desc: 'recommended default', speed: 'fast' },
+  { name: 'gemma3:1b', size: '1b', desc: 'ultra-fast, lightweight', speed: 'fast' },
+  { name: 'qwen3:1.4b', size: '1.4b', desc: 'compact & capable', speed: 'fast' },
   { name: 'gemma3n:e2b', size: '2b', desc: 'efficient edge model', speed: 'fast' },
   { name: 'deepseek-r1:1.5b', size: '1.5b', desc: 'reasoning focused', speed: 'fast' },
   { name: 'qwen3:1.7b', size: '1.7b', desc: 'balanced performance', speed: 'fast' },
@@ -277,13 +277,13 @@ function setupSectionObserver() {
 let sectionObserver = null;
 
 const categories = [
-  { id: 'all', label: 'all', icon: null },
-  { id: 'chrome-ai', label: 'chrome ai', icon: Bot },
-  { id: 'ollama', label: 'ollama', icon: Cpu },
-  { id: 'webgpu', label: 'webgpu / rag', icon: Zap },
-  { id: 'pdf', label: 'pdfs', icon: FileText },
-  { id: 'gmail', label: 'gmail', icon: Mail },
-  { id: 'general', label: 'general', icon: HelpCircle }
+  { id: 'all', label: 'all' },
+  { id: 'chrome-ai', label: 'chrome ai' },
+  { id: 'ollama', label: 'ollama' },
+  { id: 'webgpu', label: 'webgpu / rag' },
+  { id: 'pdf', label: 'pdfs' },
+  { id: 'gmail', label: 'gmail' },
+  { id: 'general', label: 'general' }
 ];
 
 const troubleshootingItems = [
@@ -706,10 +706,15 @@ onUnmounted(() => {
     <!-- top nav bar -->
     <nav class="top-nav">
       <div class="nav-pill">
-        <button @click="scrollToSection('hero')" :class="{ active: activeSection === 'hero' }">home</button>
-        <button @click="scrollToSection('features')" :class="{ active: activeSection === 'features' }">features</button>
-        <button @click="scrollToSection('setup')" :class="{ active: activeSection === 'setup' }">setup</button>
-        <button @click="scrollToSection('troubleshooting')" :class="{ active: activeSection === 'troubleshooting' }">help</button>
+        <div class="nav-logo">
+          <img src="/icon-48.png" alt="metldr" width="40" height="40" />
+        </div>
+        <div class="nav-buttons">
+          <button @click="scrollToSection('hero')" :class="{ active: activeSection === 'hero' }">home</button>
+          <button @click="scrollToSection('features')" :class="{ active: activeSection === 'features' }">features</button>
+          <button @click="scrollToSection('setup')" :class="{ active: activeSection === 'setup' }">setup</button>
+          <button @click="scrollToSection('troubleshooting')" :class="{ active: activeSection === 'troubleshooting' }">help</button>
+        </div>
       </div>
     </nav>
     
@@ -748,9 +753,9 @@ onUnmounted(() => {
       <!-- hero -->
       <section ref="heroRef" class="hero">
         <div class="hero-glow"></div>
-      
+        
         <h1 class="title">
-          welcome to
+          <span class="welcome-text">welcome to </span>
           <span class="gradient-text">metldr</span>
         </h1>
         
@@ -760,18 +765,9 @@ onUnmounted(() => {
         </p>
         
         <div class="hero-features">
-          <div class="hero-feature">
-            <Shield :size="18" />
-            <span>100% private</span>
-          </div>
-          <div class="hero-feature">
-            <Zap :size="18" />
-            <span>runs locally</span>
-          </div>
-          <div class="hero-feature">
-            <Globe :size="18" />
-            <span>works offline</span>
-          </div>
+          <div class="hero-feature">100% private</div>
+          <div class="hero-feature">runs locally</div>
+          <div class="hero-feature">works offline</div>
         </div>
       </section>
       
@@ -1161,8 +1157,7 @@ onUnmounted(() => {
               class="category-pill"
               :class="{ active: activeCategory === cat.id }"
             >
-              <component v-if="cat.icon" :is="cat.icon" :size="14" />
-              <span>{{ cat.label }}</span>
+              {{ cat.label }}
             </button>
           </div>
         </div>
@@ -1247,8 +1242,9 @@ onUnmounted(() => {
 
 .nav-pill {
   display: flex;
+  align-items: center;
   gap: 4px;
-  padding: 4px;
+  padding: 6px;
   background: rgba(18, 18, 24, 0.85);
   backdrop-filter: blur(40px) saturate(180%);
   -webkit-backdrop-filter: blur(40px) saturate(180%);
@@ -1260,13 +1256,32 @@ onUnmounted(() => {
     inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
+.nav-logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-left: 4px;
+  margin-right: 8px;
+}
+
+.nav-logo img {
+  border-radius: 8px;
+  display: block;
+}
+
+.nav-buttons {
+  display: flex;
+  gap: 4px;
+}
+
 .nav-pill button {
   padding: 8px 16px;
   background: transparent;
   border: none;
   border-radius: 100px;
   color: #a1a1aa;
-  font-family: 'IBM Plex Sans', inherit;
+  font-family: 'IBM Plex Sans', sans-serif;
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
@@ -1429,10 +1444,14 @@ onUnmounted(() => {
 
 .title {
   font-size: clamp(48px, 10vw, 80px);
-  font-weight: 700;
+  font-weight: 400;
   line-height: 1.05;
   margin-bottom: 28px;
   letter-spacing: -0.03em;
+}
+
+.welcome-text {
+  font-weight: 700;
 }
 
 .gradient-text {
@@ -1441,6 +1460,7 @@ onUnmounted(() => {
   background-clip: text;
   -webkit-text-fill-color: transparent;
   display: inline-block;
+  font-weight: 700;
 }
 
 .subtitle {
