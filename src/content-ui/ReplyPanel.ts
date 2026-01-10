@@ -126,25 +126,23 @@ export class ReplyPanel {
     })
   }
 
-  // generate replies async without blocking UI
   private async generateRepliesAsync(threadId: string): Promise<void> {
-    // try chrome ai writer first (works in content script)
+    const cachedResponse = await this.fetchSuggestions(threadId)
+    if (cachedResponse?.success && cachedResponse.suggestions?.length) {
+      this.suggestions = cachedResponse.suggestions
+      console.log('metldr: cached suggestions loaded instantly:', this.suggestions.length)
+      this.onSuggestionsReady()
+      return
+    }
+
     const chromeReplies = await this.tryChromeReplies()
     if (chromeReplies?.length) {
       this.suggestions = chromeReplies
       console.log('metldr: chrome ai generated', chromeReplies.length, 'replies')
       this.onSuggestionsReady()
     } else {
-      // fallback to background/ollama
-      const response = await this.fetchSuggestions(threadId)
-      if (response?.success && response.suggestions?.length) {
-        this.suggestions = response.suggestions
-        console.log('metldr: suggestions ready:', this.suggestions.length)
-        this.onSuggestionsReady()
-      } else {
-        console.log('metldr: suggestions not ready, will poll')
-        this.startPolling(threadId)
-      }
+      console.log('metldr: no cached/chrome suggestions, polling for background generation')
+      this.startPolling(threadId)
     }
   }
 
