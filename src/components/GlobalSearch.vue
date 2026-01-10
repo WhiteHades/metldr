@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, watch, onMounted } from 'vue'
+defineOptions({ name: 'GlobalSearch' })
 import { Mail, Globe, FileText, Copy, ChevronDown, ChevronUp, RefreshCw, ExternalLink } from 'lucide-vue-next'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui'
 import ChatComposer from '@/components/ChatComposer.vue'
@@ -291,7 +292,7 @@ function retryLastMessage() {
 </script>
 
 <template>
-  <div class="search-panel">
+  <div class="search-panel panel-appear">
     <!-- main content -->
     <div ref="viewportRef" class="viewport">
       <!-- empty state -->
@@ -720,15 +721,31 @@ function retryLastMessage() {
   40% { transform: scale(1); opacity: 1; }
 }
 
+/* panel entry animation - matches parent fade transition */
+.panel-appear {
+  animation: panelFadeIn 150ms ease forwards;
+}
+
+@keyframes panelFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* message animations */
 .message-appear {
-  animation: messageSlideIn 0.25s ease-out forwards;
+  animation: messageSlideIn 0.2s ease-out forwards;
 }
 
 @keyframes messageSlideIn {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(6px);
   }
   to {
     opacity: 1;
