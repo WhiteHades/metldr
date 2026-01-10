@@ -209,8 +209,18 @@ function dedupeSourcesByUrl(sources: ChatSource[]): ChatSource[] {
       seen.set(key, s)
     }
   }
-  // re-index
   return Array.from(seen.values()).map((s, i) => ({ ...s, index: i + 1 }))
+}
+
+// filter sources to only those cited in the content (keep original indices)
+function filterCitedSources(content: string, sources: ChatSource[]): ChatSource[] {
+  const citedIndices = new Set<number>()
+  const matches = content.matchAll(/\[(\d+)\]/g)
+  for (const m of matches) {
+    citedIndices.add(parseInt(m[1]))
+  }
+  if (citedIndices.size === 0) return []
+  return sources.filter(s => citedIndices.has(s.index))
 }
 
 async function sendMessage() {
@@ -236,12 +246,13 @@ async function sendMessage() {
     
     console.log('[GlobalSearch] raw response:', { ok: response.ok, hasContent: !!response.content, hasSources: !!response.sources, sourcesType: typeof response.sources, sourcesLen: response.sources?.length })
     const dedupedSources = dedupeSourcesByUrl(response.sources || [])
-    console.log('[GlobalSearch] received sources:', response.sources?.length, 'deduped:', dedupedSources.length, dedupedSources)
+    const citedSources = filterCitedSources(response.content || '', dedupedSources)
+    console.log('[GlobalSearch] sources:', response.sources?.length, '→ deduped:', dedupedSources.length, '→ cited:', citedSources.length)
     
     messages.value.push({
       role: 'assistant',
       content: response.content || '',
-      sources: dedupedSources,
+      sources: citedSources,
       timing: response.timing
     })
   } catch (err) {
