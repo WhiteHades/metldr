@@ -380,8 +380,12 @@ export class RagService {
 
     try {
       const response = await aiGateway.complete({
-        systemPrompt: `You are a search query expander. Output ONLY comma-separated search terms, no explanation.
-Generate 10-15 diverse terms: synonyms, related concepts, different phrasings.`,
+        systemPrompt: `You are a search query optimizer. Output ONLY comma-separated search terms, no explanation.
+RULES:
+1. If user asks about what they "read", "saw", "forgot" - extract the TOPIC keywords only
+2. Ignore personal phrases like "what was the pdf i read about" - focus on the subject
+3. Generate 8-12 diverse terms: synonyms, related concepts, different phrasings
+Example: "what was the pdf i read about islam and ummah" → "islam, ummah, muslim, islamic, community, faith, prophetic, religion"`,
         userPrompt: `Query: "${query}"`,
         maxTokens: 100
       })
@@ -560,14 +564,39 @@ Generate 10-15 diverse terms: synonyms, related concepts, different phrasings.`,
     }
   }
 
-  // basic query preprocessing (LLM handles semantic expansion)
+  // query preprocessing: strips personal/memory phrases, focuses on topic keywords
   private preprocessQuery(query: string): string {
-    return query.toLowerCase().trim()
+    let q = query.toLowerCase().trim()
+    
+    // strip personal/memory phrases that don't help search
+    const memoryPhrases = [
+      /\bwhat was (the|that|a)?\s*/gi,
+      /\bwhere did i (read|see|find)\s*(about)?\s*/gi,
+      /\bi (read|saw|found|remember|recall|forgot)\s*(about|that)?\s*/gi,
+      /\bcan you (find|remind|tell me)\s*(about)?\s*/gi,
+      /\bdo you (remember|know)\s*(about)?\s*/gi,
+      /\bthat i (read|saw|found)\s*(about)?\s*/gi,
+      /\bi forgot (about|what)?\s*/gi,
+      /\bremind me (about|of|what)?\s*/gi,
+      /\bwhat did i\s*/gi,
+      /\bshow me (the|that|a)?\s*/gi,
+      /\bfind (the|that|a|my)?\s*/gi
+    ]
+    
+    for (const phrase of memoryPhrases) {
+      q = q.replace(phrase, ' ')
+    }
+    
+    // collapse multiple spaces
+    q = q.replace(/\s+/g, ' ').trim()
+    
+    return q
   }
 
   // extract significant keywords for strict matching
   private extractQueryKeywords(query: string): string[] {
     const stopwords = new Set([
+      // standard stopwords
       'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
       'of', 'with', 'by', 'from', 'as', 'is', 'was', 'are', 'were', 'been',
       'be', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
@@ -576,7 +605,10 @@ Generate 10-15 diverse terms: synonyms, related concepts, different phrasings.`,
       'what', 'which', 'who', 'whom', 'where', 'when', 'why', 'how',
       'all', 'each', 'every', 'both', 'few', 'more', 'most', 'other', 'some',
       'any', 'no', 'not', 'only', 'own', 'same', 'so', 'than', 'too', 'very',
-      'just', 'also', 'now', 'here', 'there', 'then', 'once', 'again'
+      'just', 'also', 'now', 'here', 'there', 'then', 'once', 'again',
+      // memory/personal terms (user asking about their history)
+      'read', 'saw', 'found', 'remember', 'recall', 'forgot', 'remind',
+      'show', 'find', 'tell', 'know', 'about', 'thing'
     ])
     
     return query.toLowerCase()
