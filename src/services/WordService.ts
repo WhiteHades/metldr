@@ -40,18 +40,19 @@ export class WordService {
     console.log('[WordService] looking up:', word_lc, 'context:', context)
 
     const langs = context.languages || ['en']
-    const isNonEnglish = (langs[0] && langs[0] !== 'en') || /[^\x00-\x7f]/.test(word)
 
     const tryLocal = async (): Promise<WordLookupResult | null> => {
       for (const langCode of langs) {
         try {
           const hasStore = await dictionaryService.hasLanguage(langCode)
+          console.log(`[WordService] local check ${langCode}: hasStore=${hasStore}`)
           if (!hasStore) continue
           const localResult = await dictionaryService.find(word_lc, [langCode])
           if (localResult) {
-            console.log('[WordService] found in local dict')
+            console.log('[WordService] found in local dict for', langCode)
             return localResult
           }
+          console.log(`[WordService] not found in local dict for ${langCode}`)
         } catch (err) {
           console.error('[WordService] local tier error:', (err as Error).message)
         }
@@ -88,31 +89,97 @@ export class WordService {
       return null
     }
 
-    // english → local then api; non english → api then local. both end with ollama
-    if (isNonEnglish) {
-      const apiHit = await tryApi()
-      if (apiHit) return apiHit
-      const localHit = await tryLocal()
-      if (localHit) return localHit
-    } else {
-      const localHit = await tryLocal()
-      if (localHit) return localHit
-      const apiHit = await tryApi()
-      if (apiHit) return apiHit
+    // pipeline: api → chrome ai → local → ollama
+    const apiHit = await tryApi()
+    if (apiHit) return apiHit
+
+    // chrome ai
+    try {
+      const chromeResult = await this._generateFromChromeAI(word_lc, context)
+      if (chromeResult) {
+        console.log('[WordService] generated via Chrome AI')
+        return chromeResult
+      }
+    } catch (err) {
+      console.log('[WordService] chrome ai tier error:', (err as Error).message)
     }
 
+    const localHit = await tryLocal()
+    if (localHit) return localHit
+
+    // ollama
     try {
       const model = await OllamaService.getUserSelected() || await OllamaService.selectBest('word_lookup')
-      if (!model) throw new Error('no models available')
-
-      const result = await this._generateFromLLM(word_lc, context, model)
-      console.log('[WordService] generated via LLM')
-      return result
+      if (model) {
+        const result = await this._generateFromLLM(word_lc, context, model)
+        console.log('[WordService] generated via Ollama')
+        return result
+      }
     } catch (err) {
-      console.error('[WordService] llm tier error:', (err as Error).message)
+      console.log('[WordService] ollama tier error:', (err as Error).message)
     }
 
     return null
+  }
+
+  static async _generateFromChromeAI(word: string, context: LookupContext): Promise<WordLookupResult | null> {
+    const contextStr = context.fullSentence
+      ? `Context: "${context.fullSentence}"`
+      : (context.contextBefore || context.contextAfter
+        ? `Context: "${context.contextBefore} [${word}] ${context.contextAfter}"`
+        : '')
+
+    const lang = context.languages?.[0] || 'en'
+    const prompt = `${contextStr}\n\nDefine "${word}" (${lang}). Return: part of speech, definition (15-20 words in English), example sentence, 2 synonyms.`
+
+    // json schema for structured output
+    const responseConstraint = {
+      type: 'object',
+      properties: {
+        pos: { type: 'string', enum: ['noun', 'verb', 'adjective', 'adverb', 'preposition', 'conjunction', 'pronoun', 'interjection', 'article', 'other'] },
+        def: { type: 'string' },
+        example: { type: 'string' },
+        synonyms: { type: 'array', items: { type: 'string' }, maxItems: 3 }
+      },
+      required: ['pos', 'def']
+    }
+
+    const result = await aiGateway.complete({
+      systemPrompt: 'You are a dictionary. Define words concisely.',
+      userPrompt: prompt,
+      temperature: 0,
+      responseConstraint
+    })
+
+    if (!result.ok || !result.content) return null
+
+    try {
+      const parsed = JSON.parse(result.content.trim())
+      return {
+        definitions: [{
+          definition: parsed.def || parsed.definition || result.content,
+          partOfSpeech: parsed.pos || 'unknown',
+          example: parsed.example || null,
+          synonyms: parsed.synonyms || []
+        }],
+        synonyms: parsed.synonyms || [],
+        language: lang,
+        source: 'chrome-ai'
+      }
+    } catch {
+      // fallback if json parse fails
+      return {
+        definitions: [{
+          definition: result.content.trim(),
+          partOfSpeech: 'unknown',
+          example: null,
+          synonyms: []
+        }],
+        synonyms: [],
+        language: lang,
+        source: 'chrome-ai'
+      }
+    }
   }
 
   static _formatFromApi(entry: ApiEntry, langCode: string): WordLookupResult {
@@ -256,12 +323,6 @@ Define "${word}" (15-20 words max, considering context). Respond only with JSON.
   static async detectLanguage(word: string, sentence = ''): Promise<string> {
     const detectionText = sentence && sentence.length > word.length ? sentence : word
 
-    const regexResult = this._detectLanguageByRegex(detectionText)
-    if (regexResult) {
-      console.log('[WordService.detectLanguage] detected via regex:', regexResult)
-      return regexResult
-    }
-
     try {
       const textForDetection = detectionText.length >= 20 ? detectionText : 
         (sentence.length >= 20 ? sentence : `${sentence} ${word}`.trim())
@@ -269,46 +330,13 @@ Define "${word}" (15-20 words max, considering context). Respond only with JSON.
       const chromeResult = await aiGateway.detectLanguage({ text: textForDetection })
       if (chromeResult.ok && chromeResult.language) {
         const confidence = chromeResult.confidence || 0
-        
-        if (confidence >= 0.5 || !chromeResult.allResults) {
-          console.log('[WordService.detectLanguage] detected via', chromeResult.provider, ':', chromeResult.language, `(confidence: ${(confidence * 100).toFixed(0)}%)`)
-          return chromeResult.language
-        }
-        
-        console.log('[WordService.detectLanguage] low confidence detection:', chromeResult.language, `(${(confidence * 100).toFixed(0)}%)`)
+        console.log('[WordService.detectLanguage] detected via', chromeResult.provider, ':', chromeResult.language, `(confidence: ${(confidence * 100).toFixed(0)}%)`)
         return chromeResult.language
       }
     } catch (err) {
-      console.log('[WordService.detectLanguage] ai gateway error:', (err as Error).message)
+      console.log('[WordService.detectLanguage] ai error:', (err as Error).message)
     }
 
     return 'en'
-  }
-
-  /**
-   * fast regex-based language detection for common scripts
-   */
-  private static _detectLanguageByRegex(text: string): string | null {
-    const patterns: Record<string, RegExp> = {
-      'de': /[äöüßÄÖÜ]/i,
-      'fr': /[àâäéèêëïîôùûüÿç]/i,
-      'es': /[ñáéíóúüÑÁÉÍÓÚ]/i,
-      'it': /[àèéìíîòóùú]/i,
-      'pt': /[àáâãéêíóôõúüç]/i,
-      'ru': /[а-яё]/i,
-      'ja': /[ひらがなカタカナ漢字]/i,
-      'zh': /[一-龯]/i,
-      'ko': /[가-힣]/i,
-      'ar': /[ا-ي]/i,
-      'he': /[א-ת]/i,
-      'th': /[ก-๙]/i,
-      'vi': /[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i,
-    }
-
-    for (const [lang, pattern] of Object.entries(patterns)) {
-      if (pattern.test(text)) return lang
-    }
-
-    return null
   }
 }

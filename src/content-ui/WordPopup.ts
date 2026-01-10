@@ -10,15 +10,12 @@ export class WordPopup {
   private clickListener: ((e: MouseEvent) => void) | null = null
   private isGmail: boolean
   private isCleaningUp = false
-  // triple-click prevention: delay popup to detect third click
   private pendingPopupTimeout: ReturnType<typeof setTimeout> | null = null
   private lastDblClickTime = 0
 
   constructor() {
     this.isGmail = window.location.hostname.includes('mail.google.com')
-    // cancel pending popup on any click (catches triple-click)
     document.addEventListener('click', () => {
-      // if click happens within 300ms of dblclick, it's likely a triple-click
       if (Date.now() - this.lastDblClickTime < 300 && this.pendingPopupTimeout) {
         clearTimeout(this.pendingPopupTimeout)
         this.pendingPopupTimeout = null
@@ -26,24 +23,31 @@ export class WordPopup {
     })
   }
 
+  private detectPageLanguage(): string | undefined {
+    const htmlLang = document.documentElement.lang?.split('-')[0]?.toLowerCase()
+    if (htmlLang && htmlLang.length === 2) return htmlLang
+    
+    const hostname = window.location.hostname
+    const subdomainMatch = hostname.match(/^([a-z]{2})\./)
+    if (subdomainMatch) return subdomainMatch[1]
+    
+    return undefined
+  }
+
   async handleTextSelection(e: MouseEvent): Promise<void> {
     if (this.isGmail || this.isCleaningUp) return
 
-    // record dblclick time for triple-click detection
     this.lastDblClickTime = Date.now()
 
-    // cancel any pending popup
     if (this.pendingPopupTimeout) {
       clearTimeout(this.pendingPopupTimeout)
       this.pendingPopupTimeout = null
     }
 
-    // skip if clicking inside popup
     if (this.container && this.container.contains(e.target as Node)) {
       return
     }
 
-    // skip input fields - never activate on text inputs
     const target = e.target as HTMLElement
     const tagName = target.tagName?.toLowerCase()
     const isEditable = target.isContentEditable
@@ -53,7 +57,6 @@ export class WordPopup {
       return
     }
     
-    // also check parent elements for contenteditable
     let parent = target.parentElement
     while (parent) {
       if (parent.isContentEditable || inputTypes.includes(parent.tagName?.toLowerCase())) {
@@ -65,7 +68,6 @@ export class WordPopup {
     const selection = window.getSelection()
     const selectedText = selection?.toString().trim() || ''
 
-    // cleanup previous popup
     if (this.container) {
       this.cleanup()
       await new Promise(resolve => setTimeout(resolve, 150))
@@ -73,10 +75,7 @@ export class WordPopup {
 
     if (!selectedText) return
 
-    // strict single-word validation:
-    // - must be exactly one word (no spaces)
-    // - must be reasonable length (< 30 chars)
-    // - must contain only letters (allow accents, hyphens)
+
     const hasSpaces = /\s/.test(selectedText)
     const isTooLong = selectedText.length > 30
     const isTooShort = selectedText.length < 2
@@ -116,12 +115,11 @@ export class WordPopup {
       const fullSentence = fullText.substring(sentenceStart, sentenceEnd).trim()
       const contextBefore = fullText.substring(sentenceStart, offset).trim()
       const contextAfter = fullText.substring(offset + selectedText.length, sentenceEnd).trim()
-
-      // delay popup to allow triple-click detection
-      // if third click comes, the click listener cancels this timeout
+      
+      const pageLang = this.detectPageLanguage()
       this.pendingPopupTimeout = setTimeout(() => {
         this.pendingPopupTimeout = null
-        this.show(selectedText, rect, { contextBefore, contextAfter, fullSentence })
+        this.show(selectedText, rect, { contextBefore, contextAfter, fullSentence, pageLang })
       }, 250)
     }
   }
@@ -614,7 +612,7 @@ export class WordPopup {
       color: ${UIService.currentTheme.text || '#e0e0e0'};
       margin: 0;
     `
-    defText.textContent = def.definition
+    defText.innerHTML = UIService.renderMarkdown(def.definition)
     defBlock.appendChild(defText)
 
     if (def.example) {

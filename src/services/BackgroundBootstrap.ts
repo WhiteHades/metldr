@@ -273,7 +273,6 @@ export class BackgroundBootstrap {
 
         log.log('generating reply suggestions', { emailId, force: forceRegenerate })
 
-        // delete cached suggestions if force regenerating
         if (forceRegenerate) {
           try {
             await cacheService.deleteReplySuggestions(emailId)
@@ -282,7 +281,6 @@ export class BackgroundBootstrap {
           }
         }
 
-        // check if we already have suggestions
         if (!forceRegenerate) {
           const cached = await EmailService.getCachedReplies(emailId)
           if (cached && cached.length > 0) {
@@ -291,7 +289,6 @@ export class BackgroundBootstrap {
           }
         }
 
-        // get cached summary to build context
         const cachedSummary = await cacheService.getEmailSummary(emailId)
         if (!cachedSummary) {
           log.log('no cached summary for thread, cannot generate suggestions')
@@ -299,14 +296,12 @@ export class BackgroundBootstrap {
           return
         }
 
-        // request email content from current tab
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
         if (!tab?.id) {
           respond({ success: false, error: 'no active tab' })
           return
         }
 
-        // get email content from content script
         let emailContent = ''
         let metadata = null
         try {
@@ -323,10 +318,8 @@ export class BackgroundBootstrap {
           log.log('could not extract email content', (err as Error).message)
         }
 
-        // if we couldn't get email content, try to generate with just the summary
         if (!emailContent) {
           log.log('no email content, generating with summary context only')
-          // create a minimal email content from summary
           const summary = cachedSummary as { summary?: string; action_items?: string[] }
           emailContent = `Summary: ${summary.summary || ''}\nAction items: ${(summary.action_items || []).join(', ')}`
         }
@@ -396,17 +389,21 @@ export class BackgroundBootstrap {
         
         console.log('[BackgroundBootstrap._onWordLookup] looking up:', word, 'langs:', languages)
 
-
-        let detectedLang = 'en'
-        try {
-          const contextText = context?.fullSentence || 
-            `${context?.contextBefore || ''} ${word} ${context?.contextAfter || ''}`.trim()
-          
-          detectedLang = await WordService.detectLanguage(word, contextText)
-          console.log('[BackgroundBootstrap._onWordLookup] detected language:', detectedLang)
-        } catch (err) {
-          console.log('[BackgroundBootstrap._onWordLookup] detection failed:', (err as Error).message)
-          detectedLang = 'en'
+        let detectedLang = context?.pageLang || 'en'
+        
+        if (!context?.pageLang) {
+          try {
+            const contextText = context?.fullSentence || 
+              `${context?.contextBefore || ''} ${word} ${context?.contextAfter || ''}`.trim()
+            
+            detectedLang = await WordService.detectLanguage(word, contextText)
+            console.log('[BackgroundBootstrap._onWordLookup] detected language:', detectedLang)
+          } catch (err) {
+            console.log('[BackgroundBootstrap._onWordLookup] detection failed:', (err as Error).message)
+            detectedLang = 'en'
+          }
+        } else {
+          console.log('[BackgroundBootstrap._onWordLookup] using page language hint:', detectedLang)
         }
 
         const priorityLangs = [detectedLang]
@@ -421,7 +418,6 @@ export class BackgroundBootstrap {
 
         if (result) {
           console.log('[BackgroundBootstrap._onWordLookup] found result, source:', result.source)
-          // track analytics for real-time stat sync
           const cached = result.source === 'local' || result.source === 'cache'
           analyticsService.trackWordLookup(word, cached).catch(() => {})
           respond({ success: true, result })
@@ -642,7 +638,6 @@ export class BackgroundBootstrap {
   static _onSetEmailCache(msg: SetEmailCacheMessage & { emailCount?: number }, respond: ResponseCallback): void {
     (async () => {
       try {
-        // store summary with emailCount for staleness detection
         await cacheService.updateEmailSession(msg.emailId, { 
           summary: msg.summary,
           ...(msg.emailCount !== undefined && { emailCount: msg.emailCount } as any)
@@ -673,17 +668,15 @@ export class BackgroundBootstrap {
         const sourceUrl = msg.metadata?.sourceUrl || msg.metadata?.sourceId || 'unknown'
         const sourceId = msg.metadata?.sourceId || sourceUrl
         
-        // broadcast progress to side panel
         const broadcastProgress = (percent: number) => {
           console.log('[BackgroundBootstrap] Broadcasting progress:', percent, 'for', sourceId.slice(0, 40))
           chrome.runtime.sendMessage({
             type: 'INDEXING_PROGRESS',
             sourceId,
             percent
-          }).catch(() => {}) // ignore if side panel closed
+          }).catch(() => {})
         }
         
-        // wrap in concurrency manager to prevent duplicate indexing on rapid tab switches
         await concurrencyManager.execute('indexing', sourceUrl, async (signal) => {
           if (signal.aborted) throw new Error('Indexing aborted')
           await ragService.indexChunks(msg.text, msg.metadata, broadcastProgress)
@@ -741,17 +734,15 @@ export class BackgroundBootstrap {
         const sourceUrl = msg.metadata?.sourceUrl || msg.metadata?.sourceId || 'unknown'
         const sourceId = msg.metadata?.sourceId || sourceUrl
         
-        // broadcast progress to side panel
         const broadcastProgress = (percent: number) => {
           console.log('[BackgroundBootstrap] Broadcasting progress:', percent, 'for', sourceId.slice(0, 40))
           chrome.runtime.sendMessage({
             type: 'INDEXING_PROGRESS',
             sourceId,
             percent
-          }).catch(() => {}) // ignore if side panel closed
+          }).catch(() => {})
         }
         
-        // wrap in concurrency manager to prevent duplicate indexing
         const result = await concurrencyManager.execute('indexing', sourceUrl, async (signal) => {
           if (signal.aborted) throw new Error('Indexing aborted')
           return await ragService.ensureIndexed(msg.text, msg.metadata, broadcastProgress)
@@ -781,13 +772,11 @@ export class BackgroundBootstrap {
   }
 
   static _preloadEmbeddingModel(): void {
-    // preload embedding model via LocalModelProvider (creates sandbox iframe automatically)
     aiGateway.initializeLocalModels(['embed'])
       .then(() => log.log('Embedding model preloaded'))
       .catch(err => log.warn('Model preload failed', err.message))
   }
 
-  // pdf toolbar handlers
   static _onPdfSummarize(msg: { type: string; url: string }, respond: ResponseCallback): void {
     (async () => {
       try {
@@ -799,7 +788,6 @@ export class BackgroundBootstrap {
 
         log.log('pdf summarize request:', url.slice(0, 80))
 
-        // use same queue as email/page summarization
         const result = await this._enqueueSummary(() => pdfService.summarize(url))
         
         if (typeof result === 'object' && 'success' in result && !result.success) {
@@ -809,14 +797,12 @@ export class BackgroundBootstrap {
         
         const summary = result as string
         
-        // parse bullets from summary text
         const bullets = summary
           .split('\n')
           .filter(line => line.trim().startsWith('•') || line.trim().startsWith('-') || line.trim().startsWith('*'))
           .map(line => line.replace(/^[•\-*]\s*/, '').trim())
           .filter(Boolean)
 
-        // if no bullets found, split by sentences
         const finalBullets = bullets.length > 0 
           ? bullets 
           : summary.split(/[.!?]+/).filter(s => s.trim().length > 20).slice(0, 5)
@@ -860,7 +846,6 @@ export class BackgroundBootstrap {
     const windowId = sender?.tab?.windowId
     
     if (!windowId) {
-      // fallback: try to get current window
       chrome.windows.getCurrent((win) => {
         if (win?.id) {
           chrome.sidePanel.open({ windowId: win.id })
@@ -879,7 +864,6 @@ export class BackgroundBootstrap {
       return
     }
     
-    // preferred path: use sender's windowId directly (preserves user gesture)
     chrome.sidePanel.open({ windowId })
       .then(() => {
         log.log('side panel opened', msg.focus ? `focus: ${msg.focus}` : '')
@@ -891,7 +875,6 @@ export class BackgroundBootstrap {
       })
   }
 
-  // toggle side panel - if panel is open, broadcast close message; otherwise open it
   static _onToggleSidePanel(
     msg: { type: string; focus?: string },
     sender: chrome.runtime.MessageSender,
@@ -902,14 +885,12 @@ export class BackgroundBootstrap {
     if (!windowId) {
       chrome.windows.getCurrent((win) => {
         if (win?.id) {
-          // try to open - if it fails, panel might already be open
           chrome.sidePanel.open({ windowId: win.id })
             .then(() => {
               log.log('side panel opened (toggle)', msg.focus ? `focus: ${msg.focus}` : '')
               respond({ success: true, action: 'opened' })
             })
             .catch(() => {
-              // panel likely already open, broadcast close message
               chrome.runtime.sendMessage({ type: 'TOGGLE_SIDE_PANEL' }).catch(() => {})
               respond({ success: true, action: 'closed' })
             })
@@ -920,12 +901,8 @@ export class BackgroundBootstrap {
       return
     }
     
-    // try to open panel - if already open, this succeeds silently
-    // the panel listens for TOGGLE_SIDE_PANEL and closes itself
     chrome.sidePanel.open({ windowId })
       .then(() => {
-        // panel opened or was already open
-        // broadcast toggle message - panel will close itself if open
         chrome.runtime.sendMessage({ type: 'TOGGLE_SIDE_PANEL' }).catch(() => {})
         log.log('side panel toggle', msg.focus ? `focus: ${msg.focus}` : '')
         respond({ success: true })
@@ -936,8 +913,6 @@ export class BackgroundBootstrap {
       })
   }
 
-  // process PDF from ArrayBuffer (content script file picker)
-  // returns summary immediately, continues indexing in background
   static _onPdfProcessArrayBuffer(
     msg: { type: string; data: number[]; filename: string; action: 'summarize' | 'copy'; sourceUrl?: string },
     respond: ResponseCallback
@@ -953,7 +928,6 @@ export class BackgroundBootstrap {
         if (action === 'summarize') {
           const result = await pdfService.summarizeFromArrayBuffer(arrayBuffer, filename)
           
-          // parse bullets from summary
           const bullets = result.summary
             .split('\n')
             .filter(line => line.trim().startsWith('•') || line.trim().startsWith('-') || line.trim().startsWith('*'))
@@ -968,7 +942,6 @@ export class BackgroundBootstrap {
           
           ;(async () => {
             try {
-              // cache summary to IDB
               const wordCount = result.fullText.split(/\s+/).length
               const readTimeMin = Math.max(1, Math.round(wordCount / 200))
               const summaryData = {
@@ -984,16 +957,14 @@ export class BackgroundBootstrap {
               await cacheService.setPageSummary(pdfUrl, summaryData, 3600)
               log.log(`cached PDF summary: ${filename}`)
               
-              // broadcast progress for side panel reactivity
               const broadcastProgress = (percent: number) => {
                 chrome.runtime.sendMessage({
                   type: 'INDEXING_PROGRESS',
                   sourceId: pdfUrl,
                   percent
-                }).catch(() => {}) // ignore if side panel closed
+                }).catch(() => {})
               }
               
-              // index to RAG for chat functionality
               await concurrencyManager.execute('indexing', pdfUrl, async (signal) => {
                 if (signal.aborted) throw new Error('Indexing aborted')
                 await ragService.indexChunks(result.fullText, {
@@ -1011,7 +982,6 @@ export class BackgroundBootstrap {
           })()
           
         } else {
-          // extract text only
           const text = await pdfService.extractFromArrayBuffer(arrayBuffer)
           const wordCount = text.split(/\s+/).filter(Boolean).length
           respond({ success: true, text, wordCount })
@@ -1023,7 +993,6 @@ export class BackgroundBootstrap {
     })()
   }
 
-  // get cached page summary
   static _onGetPageCache(msg: { type: string; url: string }, respond: ResponseCallback): void {
     (async () => {
       try {
