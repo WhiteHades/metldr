@@ -1,0 +1,7 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <style>@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@700');.txt{font-family:'IBM Plex Sans',sans-serif;font-weight:700}</style>
+  <rect width="512" height="512" rx="80" fill="#1e1e2e"/>
+  <text x="48" y="240" class="txt" font-size="200" fill="#b4befe">me</text>
+  <text x="48" y="400" class="txt" font-size="200" fill="#b4befe">tldr</text>
+  <circle cx="420" cy="376" r="24" fill="#b4befe"/>
+</svg>
