@@ -230,7 +230,7 @@ export class PageService {
       }
     }
     
-    const systemPrompt = `You are MeTLDR, a helpful assistant with access to the user's saved emails, articles, and documents.
+    const systemPrompt = `You are metldr, a helpful assistant with access to the user's saved emails, articles, and documents.
 
 SOURCES:
 ${context}
