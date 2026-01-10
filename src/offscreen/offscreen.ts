@@ -43,9 +43,16 @@ async function handleChromeAI(msg: any): Promise<any> {
         if (typeof LanguageModel === 'undefined') {
           return { ok: false, error: 'LanguageModel not available' }
         }
-        // create session per chrome_ai.md docs - use expectedInputs/expectedOutputs format
+        const initialPrompts: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+          { role: 'system', content: payload.systemPrompt || 'You are a helpful assistant.' }
+        ]
+        
+        if (payload.messages?.length) {
+          initialPrompts.push(...payload.messages.slice(-6))
+        }
+        
         const session = await LanguageModel.create({
-          initialPrompts: [{ role: 'system', content: payload.systemPrompt || 'You are a helpful assistant.' }],
+          initialPrompts,
           expectedInputs: [{ type: 'text', languages: ['en', 'es', 'ja'] }],
           expectedOutputs: [{ type: 'text', languages: ['en'] }]
         })

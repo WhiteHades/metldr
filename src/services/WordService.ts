@@ -102,7 +102,7 @@ export class WordService {
     }
 
     try {
-      const model = await OllamaService.selectBest('word_lookup')
+      const model = await OllamaService.getUserSelected() || await OllamaService.selectBest('word_lookup')
       if (!model) throw new Error('no models available')
 
       const result = await this._generateFromLLM(word_lc, context, model)
