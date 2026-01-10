@@ -363,6 +363,12 @@ onUnmounted(() => {
         class="flex-1 overflow-hidden"
         :class="navOpen ? 'content-down' : 'content-up'"
       >
+      <!-- global search uses v-show to stay mounted during in-flight AI requests -->
+      <GlobalSearch 
+        v-show="aiReady && activeTab === 'search'" 
+        class="h-full" 
+      />
+
       <Transition name="fade" mode="out-in">
         <div v-if="aiChecking" class="flex flex-col items-center justify-center h-full p-6">
           <Loader2 class="w-8 h-8 mb-3 animate-spin text-primary" :stroke-width="2" />
@@ -410,8 +416,6 @@ onUnmounted(() => {
             @clear="clearChat"
           />
         </div>
-
-        <GlobalSearch v-else-if="aiReady && activeTab === 'search'" class="h-full" />
 
         <ScrollArea v-else-if="aiReady && activeTab === 'stats'" class="h-full">
           <div class="p-3">
