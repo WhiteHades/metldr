@@ -57,7 +57,11 @@ async function handleChromeAI(msg: any): Promise<any> {
           expectedOutputs: [{ type: 'text', languages: ['en'] }]
         })
         try {
-          const response = await session.prompt(payload.userPrompt)
+          const promptOptions: { responseConstraint?: object } = {}
+          if (payload.responseConstraint) {
+            promptOptions.responseConstraint = payload.responseConstraint
+          }
+          const response = await session.prompt(payload.userPrompt, promptOptions)
           return { ok: true, content: response, provider: 'chrome-ai', model: 'gemini-nano' }
         } finally {
           session.destroy()

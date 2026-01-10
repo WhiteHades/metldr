@@ -159,7 +159,8 @@ export class ChromeAIProvider extends AIProvider {
         systemPrompt: request.systemPrompt,
         userPrompt: request.userPrompt,
         messages: request.messages,
-        temperature: request.temperature
+        temperature: request.temperature,
+        responseConstraint: request.responseConstraint
       })
       return { ...result, timing: Math.round(performance.now() - start) }
     }
@@ -195,7 +196,12 @@ export class ChromeAIProvider extends AIProvider {
       })
 
       try {
-        const response = await session.prompt(request.userPrompt)
+        const promptOptions: { responseConstraint?: object } = {}
+        if (request.responseConstraint) {
+          promptOptions.responseConstraint = request.responseConstraint
+        }
+        
+        const response = await session.prompt(request.userPrompt, promptOptions)
         return {
           ok: true,
           content: response,
