@@ -363,123 +363,129 @@ onUnmounted(() => {
         class="flex-1 overflow-hidden"
         :class="navOpen ? 'content-down' : 'content-up'"
       >
-      <!-- global search uses v-show to stay mounted during in-flight AI requests -->
-      <GlobalSearch 
-        v-show="aiReady && activeTab === 'search'" 
-        class="h-full" 
-      />
-
       <Transition name="fade" mode="out-in">
-        <div v-if="aiChecking" class="flex flex-col items-center justify-center h-full p-6">
-          <Loader2 class="w-8 h-8 mb-3 animate-spin text-primary" :stroke-width="2" />
-          <p class="text-[12px] text-foreground/70">connecting to ai...</p>
-        </div>
-        <OllamaSetup 
-          v-else-if="preferredProvider === 'ollama' && ollamaStatus === 'not-found'"
-          @retry="retryDetection"
-          @open-welcome="openWelcomePage"
-        />
-
-        <div 
-          v-else-if="aiReady && activeTab === 'summary'" 
-          :class="['flex flex-col h-full min-h-0 relative', summaryPrompt ? 'pb-16' : '']"
-        >
-          <SummaryCard 
-            v-if="!isViewingEmailThread"
-            :page-summary="pageSummary"
-            :summary-loading="summaryLoading"
-            :summary-error="summaryError"
-            :summary-prompt="summaryPrompt"
-            :summary-collapsed="summaryCollapsed"
-            :is-email-client="isEmailClient"
-            :is-viewing-email-thread="isViewingEmailThread"
-            @update:collapsed="(v) => summaryCollapsed = v"
-            @refresh="() => doFetchSummary(true, 'manual')"
-            @manual-summary="triggerManualSummary"
-            @accept-prompt="acceptSummaryPrompt"
-            @decline-prompt="declineSummaryPrompt"
-            @open-local-pdf="() => openLocalPdf(doSaveTabSession)"
-          />
-
-          <ChatPanel 
-            ref="chatPanelRef"
-            v-model:chat-input="chatInput"
-            :chat-messages="chatMessages"
-            :chat-loading="chatLoading"
-            :chat-indexing="chatIndexing"
-            :summary-loading="summaryLoading"
-            :chat-disabled="chatDisabled"
-            :disabled-reason="chatDisabledReason"
-            :is-viewing-email-thread="isViewingEmailThread"
-            :current-url="currentTabUrl"
-            @send="sendChatMessage"
-            @clear="clearChat"
-          />
-        </div>
-
-        <ScrollArea v-else-if="aiReady && activeTab === 'stats'" class="h-full">
-          <div class="p-3">
-            <HistoryManager ref="historyRef" :limit="10" />
+        <KeepAlive include="GlobalSearch">
+          <div v-if="aiChecking" key="loading" class="flex flex-col items-center justify-center h-full p-6">
+            <Loader2 class="w-8 h-8 mb-3 animate-spin text-primary" :stroke-width="2" />
+            <p class="text-[12px] text-foreground/70">connecting to ai...</p>
           </div>
-        </ScrollArea>
+          
+          <OllamaSetup 
+            v-else-if="preferredProvider === 'ollama' && ollamaStatus === 'not-found'"
+            key="setup"
+            @retry="retryDetection"
+            @open-welcome="openWelcomePage"
+          />
 
-        <SettingsPanel 
-          v-else-if="activeTab === 'settings'"
-          :chrome-a-i-status="chromeAIStatus"
-          :ollama-status="ollamaStatus"
-          :available-models="availableModels"
-          :selected-model="selectedModel"
-          :show-model-dropdown="showModelDropdown"
-          :model-dropdown-pos="modelDropdownPos"
-          :summary-mode="summaryMode"
-          :min-auto-words="minAutoWords"
-          :allowlist-input="allowlistInput"
-          :denylist-input="denylistInput"
-          :word-popup-enabled="wordPopupEnabled"
-          :preferred-provider="preferredProvider"
-          :downloaded-languages="downloadedLanguages"
-          :selected-languages="selectedLanguages"
-          :download-progress="downloadProgress"
-          @toggle-dropdown="toggleModelDropdown"
-          @select-model="handleSelectModel"
-          @update:summary-mode="(v) => summaryMode = v"
-          @update:min-auto-words="(v) => minAutoWords = v"
-          @update:allowlist-input="(v) => allowlistInput = v"
-          @update:denylist-input="(v) => denylistInput = v"
-          @toggle-word-popup="toggleWordPopup"
-          @set-provider="setProviderPreference"
-          @toggle-language="toggleLanguage"
-          @delete-language="deleteLanguageData"
-          @clear-cache="clearCache"
-          @refresh-ollama="retryDetection"
-          @open-welcome="openWelcomePage"
-          :font-size="fontSize"
-          @update:font-size="setFontSize"
-        />
+          <GlobalSearch 
+            v-else-if="aiReady && activeTab === 'search'" 
+            key="search"
+            class="h-full" 
+          />
 
-        <div v-else-if="ollamaStatus === 'error'" class="flex flex-col items-center justify-center h-full p-6">
-          <X :size="32" class="mb-3 text-destructive/50" />
-          <p class="text-[12px] text-foreground/70 mb-3">connection error</p>
-          <button @click="retryDetection" class="px-3 py-1.5 rounded-md text-[11px] bg-primary text-primary-foreground hover:bg-primary/90 transition-colors flex items-center gap-1.5">
-            <RefreshCw :size="12" />
-            retry
-          </button>
-        </div>
+          <div 
+            v-else-if="aiReady && activeTab === 'summary'" 
+            key="summary"
+            :class="['flex flex-col h-full min-h-0 relative', summaryPrompt ? 'pb-16' : '']"
+          >
+            <SummaryCard 
+              v-if="!isViewingEmailThread"
+              :page-summary="pageSummary"
+              :summary-loading="summaryLoading"
+              :summary-error="summaryError"
+              :summary-prompt="summaryPrompt"
+              :summary-collapsed="summaryCollapsed"
+              :is-email-client="isEmailClient"
+              :is-viewing-email-thread="isViewingEmailThread"
+              @update:collapsed="(v) => summaryCollapsed = v"
+              @refresh="() => doFetchSummary(true, 'manual')"
+              @manual-summary="triggerManualSummary"
+              @accept-prompt="acceptSummaryPrompt"
+              @decline-prompt="declineSummaryPrompt"
+              @open-local-pdf="() => openLocalPdf(doSaveTabSession)"
+            />
 
-        <div v-else-if="preferredProvider === 'chrome-ai' && chromeAIStatus === 'unavailable'" class="flex flex-col items-center justify-center h-full p-6">
-          <X :size="32" class="mb-3 text-foreground/30" />
-          <p class="text-[13px] font-medium text-foreground/80 mb-2">chrome ai unavailable</p>
-          <p class="text-[11px] text-foreground/50 text-center mb-4 max-w-[200px]">gemini nano is not available on this device. try switching to ollama in settings.</p>
-          <button @click="switchTab('settings')" class="px-3 py-1.5 rounded-md text-[11px] bg-primary text-primary-foreground hover:bg-primary/90 transition-colors flex items-center gap-1.5">
-            <Settings :size="12" />
-            open settings
-          </button>
-        </div>
+            <ChatPanel 
+              ref="chatPanelRef"
+              v-model:chat-input="chatInput"
+              :chat-messages="chatMessages"
+              :chat-loading="chatLoading"
+              :chat-indexing="chatIndexing"
+              :summary-loading="summaryLoading"
+              :chat-disabled="chatDisabled"
+              :disabled-reason="chatDisabledReason"
+              :is-viewing-email-thread="isViewingEmailThread"
+              :current-url="currentTabUrl"
+              @send="sendChatMessage"
+              @clear="clearChat"
+            />
+          </div>
 
-        <div v-else class="flex flex-col items-center justify-center h-full p-6">
-          <Loader2 class="w-6 h-6 mb-3 text-foreground/30" :stroke-width="2" />
-          <p class="text-[11px] text-foreground/50">waiting for ai...</p>
-        </div>
+          <ScrollArea v-else-if="aiReady && activeTab === 'stats'" key="stats" class="h-full">
+            <div class="p-3">
+              <HistoryManager ref="historyRef" :limit="10" />
+            </div>
+          </ScrollArea>
+
+          <SettingsPanel 
+            v-else-if="activeTab === 'settings'"
+            key="settings"
+            :chrome-a-i-status="chromeAIStatus"
+            :ollama-status="ollamaStatus"
+            :available-models="availableModels"
+            :selected-model="selectedModel"
+            :show-model-dropdown="showModelDropdown"
+            :model-dropdown-pos="modelDropdownPos"
+            :summary-mode="summaryMode"
+            :min-auto-words="minAutoWords"
+            :allowlist-input="allowlistInput"
+            :denylist-input="denylistInput"
+            :word-popup-enabled="wordPopupEnabled"
+            :preferred-provider="preferredProvider"
+            :downloaded-languages="downloadedLanguages"
+            :selected-languages="selectedLanguages"
+            :download-progress="downloadProgress"
+            @toggle-dropdown="toggleModelDropdown"
+            @select-model="handleSelectModel"
+            @update:summary-mode="(v) => summaryMode = v"
+            @update:min-auto-words="(v) => minAutoWords = v"
+            @update:allowlist-input="(v) => allowlistInput = v"
+            @update:denylist-input="(v) => denylistInput = v"
+            @toggle-word-popup="toggleWordPopup"
+            @set-provider="setProviderPreference"
+            @toggle-language="toggleLanguage"
+            @delete-language="deleteLanguageData"
+            @clear-cache="clearCache"
+            @refresh-ollama="retryDetection"
+            @open-welcome="openWelcomePage"
+            :font-size="fontSize"
+            @update:font-size="setFontSize"
+          />
+
+          <div v-else-if="ollamaStatus === 'error'" key="error" class="flex flex-col items-center justify-center h-full p-6">
+            <X :size="32" class="mb-3 text-destructive/50" />
+            <p class="text-[12px] text-foreground/70 mb-3">connection error</p>
+            <button @click="retryDetection" class="px-3 py-1.5 rounded-md text-[11px] bg-primary text-primary-foreground hover:bg-primary/90 transition-colors flex items-center gap-1.5">
+              <RefreshCw :size="12" />
+              retry
+            </button>
+          </div>
+
+          <div v-else-if="preferredProvider === 'chrome-ai' && chromeAIStatus === 'unavailable'" key="unavailable" class="flex flex-col items-center justify-center h-full p-6">
+            <X :size="32" class="mb-3 text-foreground/30" />
+            <p class="text-[13px] font-medium text-foreground/80 mb-2">chrome ai unavailable</p>
+            <p class="text-[11px] text-foreground/50 text-center mb-4 max-w-[200px]">gemini nano is not available on this device. try switching to ollama in settings.</p>
+            <button @click="switchTab('settings')" class="px-3 py-1.5 rounded-md text-[11px] bg-primary text-primary-foreground hover:bg-primary/90 transition-colors flex items-center gap-1.5">
+              <Settings :size="12" />
+              open settings
+            </button>
+          </div>
+
+          <div v-else key="waiting" class="flex flex-col items-center justify-center h-full p-6">
+            <Loader2 class="w-6 h-6 mb-3 text-foreground/30" :stroke-width="2" />
+            <p class="text-[11px] text-foreground/50">waiting for ai...</p>
+          </div>
+        </KeepAlive>
       </Transition>
     </main>
     </PdfDropZone>
