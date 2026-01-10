@@ -70,63 +70,6 @@ const themeStore = useThemeStore()
         @open-welcome="emit('open-welcome')"
       />
 
-      <!-- summary preferences -->
-      <div class="rounded-xl bg-card p-4 border border-border space-y-3">
-        <div class="flex items-center justify-between">
-          <div class="flex items-center gap-2.5">
-            <div class="flex items-center justify-center w-6 h-6 rounded-md bg-primary/25">
-              <FileText :size="12" class="text-primary" />
-            </div>
-            <span class="text-(length:--font-text-secondary) font-medium text-foreground tracking-wide">auto-summarise</span>
-          </div>
-          <Toggle 
-            :model-value="summaryMode === 'auto'"
-            @update:model-value="(v: boolean) => emit('update:summaryMode', v ? 'auto' : 'manual')"
-          />
-        </div>
-        <p class="text-(length:--font-text-secondary) text-foreground/60">when enabled, pages matching the allowlist will be summarised automatically.</p>
-
-        <div v-if="summaryMode === 'auto'" class="space-y-3 pt-2 border-t border-border">
-          <label class="text-(length:--font-text-secondary) text-foreground/80 flex items-center gap-2">
-            <span class="shrink-0 text-(length:--font-text-secondary) w-20">min words</span>
-            <Input 
-              type="number" 
-              min="0" 
-              class="w-full h-7 text-(length:--font-text-secondary)" 
-              :model-value="minAutoWords"
-              @update:model-value="(v) => emit('update:minAutoWords', Number(v))"
-            />
-          </label>
-
-          <div class="grid grid-cols-2 gap-3">
-            <div>
-              <div class="flex items-center justify-between mb-1">
-                <span class="text-(length:--font-text-secondary) text-foreground/80">allowlist</span>
-                <span class="text-(length:--font-text-secondary) text-foreground/50">one per line</span>
-              </div>
-              <Textarea 
-                class="w-full h-28 text-(length:--font-text-secondary) resize-none"
-                :model-value="allowlistInput"
-                @update:model-value="(v) => emit('update:allowlistInput', String(v))"
-                placeholder="example.com"
-              />
-            </div>
-            <div>
-              <div class="flex items-center justify-between mb-1">
-                <span class="text-(length:--font-text-secondary) text-foreground/80">denylist</span>
-                <span class="text-(length:--font-text-secondary) text-foreground/50">one per line</span>
-              </div>
-              <Textarea 
-                class="w-full h-28 text-(length:--font-text-secondary) resize-none"
-                :model-value="denylistInput"
-                @update:model-value="(v) => emit('update:denylistInput', String(v))"
-                placeholder="dashboard"
-              />
-            </div>
-          </div>
-        </div>
-      </div>
-
       <!-- word lookup toggle -->
       <div class="rounded-xl bg-card p-4 border border-border">
         <div class="flex items-center justify-between">
@@ -299,6 +242,37 @@ const themeStore = useThemeStore()
           </button>
         </div>
       </div>
+
+      <!-- auto-summarise (WIP) -->
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger as-child>
+            <div class="rounded-xl bg-card/50 p-4 border border-border/50 opacity-50 cursor-not-allowed select-none">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2.5">
+                  <div class="flex items-center justify-center w-6 h-6 rounded-md bg-primary/15">
+                    <FileText :size="12" class="text-foreground/40" />
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <span class="text-(length:--font-text-secondary) font-medium text-foreground/50 tracking-wide">auto-summarise</span>
+                    <span class="text-[9px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-500/80 font-medium uppercase tracking-wider">wip</span>
+                  </div>
+                </div>
+                <Toggle 
+                  :model-value="false"
+                  disabled
+                  class="pointer-events-none opacity-40"
+                />
+              </div>
+              <p class="text-(length:--font-text-secondary) text-foreground/40 mt-2">automatically summarise pages matching your allowlist when visited. configure domains and minimum word count thresholds.</p>
+            </div>
+          </TooltipTrigger>
+          <TooltipContent class="max-w-[240px]">
+            <p class="font-medium mb-1">coming soon</p>
+            <p class="text-muted-foreground">this feature will auto-summarise articles, emails, and PDFs when you visit pages matching your custom allowlist patterns.</p>
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
 
       <!-- support -->
       <DonationCard />
