@@ -458,6 +458,8 @@ export interface WordLookupMessage {
   word: string
   context?: {
     fullSentence?: string
+    contextBefore?: string
+    contextAfter?: string
     languages?: string[]
   }
 }
