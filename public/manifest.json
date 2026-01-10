@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "version": "0.7.5",
   "name": "metldr",
-  "description": "Local and private AI assistant powered by Ollama with offline dictionary",
+  "description": "private and local AI suite: summarise and chat with gmails, pages, articles and PDFs, and instant dictionary. 100% local via Gemini Nano or Ollama.",
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' http://localhost:11434 http://127.0.0.1:11434 https://media.githubusercontent.com https://raw.githubusercontent.com https://api.dictionaryapi.dev; style-src 'self' 'unsafe-inline'; font-src 'self';",
     "sandbox": "sandbox allow-scripts allow-forms allow-popups allow-modals; script-src 'self' 'unsafe-inline' 'unsafe-eval'; object-src 'self'; connect-src 'self';"
