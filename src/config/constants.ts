@@ -1,6 +1,6 @@
 // public constants - safe to commit
 export const APP_CONFIG = {
-  name: 'MeTLDR',
+  name: 'metldr',
   version: '0.6.0',
   author: 'WhiteHades',
 
