@@ -448,7 +448,7 @@ defineExpose({ refresh: loadData, stats, analytics })
           <span>Top Sites</span>
         </div>
         <div class="sites-list">
-          <div v-for="(site, i) in analytics.topDomains.slice(0, 3)" :key="site.domain" class="site-row">
+          <div v-for="(site, i) in analytics.topDomains.filter(d => !d.domain.includes('extension') && !d.domain.includes('extensions') && !d.domain.includes('system') && !d.domain.startsWith('chrome') && !d.domain.startsWith('about:') && !d.domain.startsWith('edge://') && !d.domain.startsWith('file://') && d.domain.includes('.')).slice(0, 3)" :key="site.domain" class="site-row">
             <span class="site-rank">{{ i + 1 }}</span>
             <span class="site-domain">{{ site.domain }}</span>
             <span class="site-count">{{ site.count }}</span>
