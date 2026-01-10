@@ -3,7 +3,7 @@ import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { 
   FileText, Clock, Loader2, 
   MessageSquare, Globe, Mail, Flame, BookOpen,
-  Cpu, TrendingUp, BarChart3, Zap, Timer, Sparkles, DollarSign, Heart, Coffee
+  TrendingUp, Zap, Timer, Heart, Coffee
 } from 'lucide-vue-next'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui'
 import { statsService, type UsageStats } from '@/services/StatsService'
@@ -288,7 +288,6 @@ defineExpose({ refresh: loadData, stats, analytics })
 
       <div class="section-card">
         <div class="section-header">
-          <BookOpen :size="11" class="text-amber-400" />
           <span>Content</span>
         </div>
         
@@ -320,7 +319,6 @@ defineExpose({ refresh: loadData, stats, analytics })
 
       <div class="section-card">
         <div class="section-header">
-          <Cpu :size="11" class="text-primary" />
           <span>AI</span>
           <TooltipProvider>
             <Tooltip>
@@ -383,7 +381,6 @@ defineExpose({ refresh: loadData, stats, analytics })
       <!-- usage with mini chart -->
       <div class="section-card">
         <div class="section-header">
-          <BarChart3 :size="11" class="text-emerald-400" />
           <span>Usage</span>
         </div>
 
@@ -448,7 +445,6 @@ defineExpose({ refresh: loadData, stats, analytics })
       <!-- top sites -->
       <div v-if="analytics.topDomains?.length" class="section-card">
         <div class="section-header">
-          <Globe :size="11" class="text-cyan-400" />
           <span>Top Sites</span>
         </div>
         <div class="sites-list">
@@ -463,7 +459,6 @@ defineExpose({ refresh: loadData, stats, analytics })
       <!-- cost savings -->
       <div v-if="costSavings.length" class="section-card savings-card">
         <div class="section-header">
-          <DollarSign :size="11" class="text-emerald-400" />
           <span>Money Saved</span>
           <TooltipProvider>
             <Tooltip>
