@@ -424,7 +424,7 @@ defineExpose({ refresh: loadData, stats, analytics })
                     :style="{ height: Math.max((val / maxHourly * 100), 4) + '%' }"
                   />
                 </TooltipTrigger>
-                <TooltipContent>{{ fmtHour(i) }}: {{ Math.round(val) }}min</TooltipContent>
+                <TooltipContent>{{ fmtHour(i) }}: {{ Math.round(val / 60) }}min active</TooltipContent>
               </Tooltip>
             </TooltipProvider>
           </div>
