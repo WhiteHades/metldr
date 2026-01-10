@@ -173,15 +173,6 @@ export class BackgroundBootstrap {
         return true
       }
 
-      if (msg.type === 'RAG_HAS_INDEXED_CONTENT') {
-        const { sourceUrl } = msg as { type: string; sourceUrl: string }
-        ragService.hasIndexedContent(sourceUrl)
-          .then(hasContent => respond({ success: true, hasContent }))
-          .catch(err => respond({ success: false, error: (err as Error).message }))
-        return true
-      }
-
-      // pdf toolbar handlers
       if (msg.type === 'PDF_SUMMARIZE') {
         this._onPdfSummarize(msg as { type: string; url: string }, respond)
         return true
@@ -405,15 +396,17 @@ export class BackgroundBootstrap {
         
         console.log('[BackgroundBootstrap._onWordLookup] looking up:', word, 'langs:', languages)
 
-        const isEnglish = /^[a-zA-Z]+$/.test(word)
-        let detectedLang = 'en'
 
-        if (!isEnglish) {
-          try {
-            detectedLang = await WordService.detectLanguage(word, context?.fullSentence || '')
-          } catch {
-            detectedLang = 'en'
-          }
+        let detectedLang = 'en'
+        try {
+          const contextText = context?.fullSentence || 
+            `${context?.contextBefore || ''} ${word} ${context?.contextAfter || ''}`.trim()
+          
+          detectedLang = await WordService.detectLanguage(word, contextText)
+          console.log('[BackgroundBootstrap._onWordLookup] detected language:', detectedLang)
+        } catch (err) {
+          console.log('[BackgroundBootstrap._onWordLookup] detection failed:', (err as Error).message)
+          detectedLang = 'en'
         }
 
         const priorityLangs = [detectedLang]
