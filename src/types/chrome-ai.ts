@@ -111,6 +111,7 @@ export interface CreateOptions {
 export interface AICompleteRequest {
   systemPrompt: string
   userPrompt: string
+  messages?: Array<{ role: 'user' | 'assistant'; content: string }>
   temperature?: number
   maxTokens?: number
 }

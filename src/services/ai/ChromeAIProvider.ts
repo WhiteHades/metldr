@@ -158,6 +158,7 @@ export class ChromeAIProvider extends AIProvider {
       const result = await this.relayToOffscreen('complete', {
         systemPrompt: request.systemPrompt,
         userPrompt: request.userPrompt,
+        messages: request.messages,
         temperature: request.temperature
       })
       return { ...result, timing: Math.round(performance.now() - start) }
@@ -177,8 +178,16 @@ export class ChromeAIProvider extends AIProvider {
 
       const detectedLang = await languageService.detect(request.userPrompt.substring(0, 500))
 
+      const initialPrompts: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+        { role: 'system', content: request.systemPrompt }
+      ]
+      
+      if (request.messages?.length) {
+        initialPrompts.push(...request.messages.slice(-6))
+      }
+
       const session = await LanguageModel.create({
-        initialPrompts: [{ role: 'system', content: request.systemPrompt }],
+        initialPrompts,
         temperature: request.temperature ?? 0.7,
         topK: 3,
         expectedInputLanguages: supportedLanguages,

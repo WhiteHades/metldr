@@ -66,22 +66,30 @@ export class OllamaProvider extends AIProvider {
     }
   }
 
-  /**
-   * general completion using ollama
-   */
+
   async complete(request: AICompleteRequest): Promise<AICompleteResponse> {
     const start = performance.now()
 
     try {
-      const model = await OllamaService.selectBest('email_summary')
+      const model = await OllamaService.getUserSelected() || await OllamaService.selectBest('email_summary')
       if (!model) {
         return { ok: false, error: 'no ollama model available' }
       }
 
-      const result = await OllamaService.complete(model, [
-        { role: 'system', content: request.systemPrompt },
-        { role: 'user', content: request.userPrompt }
-      ], {
+      // build messages array with optional chat history
+      const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+        { role: 'system', content: request.systemPrompt }
+      ]
+      
+      // include chat history if provided (for multi-turn conversations)
+      if (request.messages?.length) {
+        messages.push(...request.messages.slice(-6)) // last 6 messages for context
+      }
+      
+      // always add current user prompt as final message
+      messages.push({ role: 'user', content: request.userPrompt })
+
+      const result = await OllamaService.complete(model, messages, {
         temperature: request.temperature ?? 0.5
       })
 
@@ -102,14 +110,11 @@ export class OllamaProvider extends AIProvider {
     }
   }
 
-  /**
-   * summarize using ollama with prompted approach
-   */
   async summarize(request: AISummarizeRequest): Promise<AISummarizeResponse> {
     const start = performance.now()
 
     try {
-      const model = await OllamaService.selectBest('page_summary')
+      const model = await OllamaService.getUserSelected() || await OllamaService.selectBest('page_summary')
       if (!model) {
         return { ok: false, error: 'no ollama model available' }
       }
@@ -163,14 +168,11 @@ Rules:
     }
   }
 
-  /**
-   * translate using ollama prompting
-   */
   async translate(request: AITranslateRequest): Promise<AITranslateResponse> {
     const start = performance.now()
 
     try {
-      const model = await OllamaService.selectBest('word_lookup')
+      const model = await OllamaService.getUserSelected() || await OllamaService.selectBest('word_lookup')
       if (!model) {
         return { ok: false, error: 'no ollama model available' }
       }
@@ -199,14 +201,11 @@ Only output the translation, nothing else.`
     }
   }
 
-  /**
-   * detect language using ollama
-   */
   async detectLanguage(request: AIDetectLanguageRequest): Promise<AIDetectLanguageResponse> {
     const start = performance.now()
 
     try {
-      const model = await OllamaService.selectBest('word_lookup')
+      const model = await OllamaService.getUserSelected() || await OllamaService.selectBest('word_lookup')
       if (!model) {
         return { ok: false, error: 'no ollama model available' }
       }
@@ -239,14 +238,11 @@ Do not explain or add anything else.`
     }
   }
 
-  /**
-   * write content using ollama
-   */
   async write(request: AIWriteRequest): Promise<AIWriteResponse> {
     const start = performance.now()
 
     try {
-      const model = await OllamaService.selectBest('email_summary')
+      const model = await OllamaService.getUserSelected() || await OllamaService.selectBest('email_summary')
       if (!model) {
         return { ok: false, error: 'no ollama model available' }
       }
@@ -290,14 +286,11 @@ Write clear, well-structured content.`
     }
   }
 
-  /**
-   * rewrite content using ollama
-   */
   async rewrite(request: AIRewriteRequest): Promise<AIRewriteResponse> {
     const start = performance.now()
 
     try {
-      const model = await OllamaService.selectBest('email_summary')
+      const model = await OllamaService.getUserSelected() || await OllamaService.selectBest('email_summary')
       if (!model) {
         return { ok: false, error: 'no ollama model available' }
       }
