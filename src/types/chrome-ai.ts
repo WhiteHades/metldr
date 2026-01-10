@@ -114,6 +114,7 @@ export interface AICompleteRequest {
   messages?: Array<{ role: 'user' | 'assistant'; content: string }>
   temperature?: number
   maxTokens?: number
+  responseConstraint?: object
 }
 
 export interface AICompleteResponse {

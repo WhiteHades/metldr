@@ -338,6 +338,7 @@ export interface ContextData {
   contextBefore?: string
   contextAfter?: string
   fullSentence?: string
+  pageLang?: string
 }
 
 export interface LookupResponse {
@@ -460,6 +461,7 @@ export interface WordLookupMessage {
     fullSentence?: string
     contextBefore?: string
     contextAfter?: string
+    pageLang?: string
     languages?: string[]
   }
 }
