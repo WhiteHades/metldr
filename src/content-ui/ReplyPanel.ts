@@ -1,6 +1,7 @@
 import { gsap } from 'gsap'
 import { UIService } from './UIService'
 import { emailExtractor } from './EmailExtractor'
+import { ContentScriptBootstrap } from './ContentScriptBootstrap'
 import { languageService } from '../services/LanguageService'
 import type { 
   InboxSDK, 
@@ -61,12 +62,32 @@ export class ReplyPanel {
   handleUrlChange(): void {
     const newThreadId = this.getThreadIdFromUrl()
     if (this.currentThreadId && newThreadId !== this.currentThreadId) {
-      console.log('metldr: thread navigation detected, clearing suggestions')
+      console.log('metldr: thread navigation detected, clearing suggestions for new thread')
+      // immediately clear stale state
       this.suggestions = []
+      this.isLoading = true
       this.stopPolling()
-      this.currentThreadId = null
-      if (this.isVisible) {
-        this.hidePanel()
+      
+      // update panel if visible to show loading state
+      if (this.isVisible && this.panel) {
+        const content = this.panel.querySelector('.metldr-reply-content')
+        if (content) {
+          content.innerHTML = this.buildSuggestionsHTML(UIService.currentTheme as Theme)
+        }
+      }
+      
+      // update current thread and regenerate
+      const oldThread = this.currentThreadId
+      this.currentThreadId = newThreadId
+      
+      if (newThreadId) {
+        console.log('metldr: regenerating suggestions for new thread:', newThreadId.slice(0, 20))
+        this.generateRepliesAsync(newThreadId)
+      } else {
+        this.currentThreadId = null
+        if (this.isVisible) {
+          this.hidePanel()
+        }
       }
     }
   }
@@ -127,18 +148,47 @@ export class ReplyPanel {
   }
 
   private async generateRepliesAsync(threadId: string): Promise<void> {
+    // reset state for new generation
+    this.suggestions = []
+    this.isLoading = true
+    
+    // verify thread hasn't changed before starting
+    const currentThread = this.getThreadIdFromUrl()
+    if (currentThread && currentThread !== threadId) {
+      console.log('metldr: thread changed before generation started, aborting')
+      return
+    }
+    
+    // try cached first
     const cachedResponse = await this.fetchSuggestions(threadId)
-    if (cachedResponse?.success && cachedResponse.suggestions?.length) {
-      this.suggestions = cachedResponse.suggestions
-      console.log('metldr: cached suggestions loaded instantly:', this.suggestions.length)
+    const validCached = (cachedResponse?.suggestions || []).filter(s => s.body && s.body.trim().length > 10)
+    
+    // verify thread still matches after cache fetch
+    if (this.getThreadIdFromUrl() !== threadId) {
+      console.log('metldr: thread changed during cache fetch, aborting')
+      return
+    }
+    
+    if (cachedResponse?.success && validCached.length > 0) {
+      this.suggestions = validCached
+      console.log('metldr: cached suggestions loaded:', this.suggestions.length)
       this.onSuggestionsReady()
       return
     }
 
+    // try Chrome AI Writer directly (doesn't need summary)
     const chromeReplies = await this.tryChromeReplies()
-    if (chromeReplies?.length) {
-      this.suggestions = chromeReplies
-      console.log('metldr: chrome ai generated', chromeReplies.length, 'replies')
+    
+    // verify thread still matches after Chrome AI
+    if (this.getThreadIdFromUrl() !== threadId) {
+      console.log('metldr: thread changed during Chrome AI generation, aborting')
+      return
+    }
+    
+    const validReplies = (chromeReplies || []).filter(r => r.body && r.body.trim().length > 10)
+    if (validReplies.length > 0) {
+      this.suggestions = validReplies
+      console.log('metldr: chrome ai generated', validReplies.length, 'valid replies')
       this.onSuggestionsReady()
     } else {
       console.log('metldr: no cached/chrome suggestions, polling for background generation')
@@ -155,29 +205,50 @@ export class ReplyPanel {
 
   async tryChromeReplies(): Promise<ReplySuggestion[] | null> {
     try {
-      if (typeof Writer === 'undefined') {
-        console.log('metldr: Writer API not available')
+      // check if Writer API exists in window context
+      if (typeof window.Writer === 'undefined' && typeof Writer === 'undefined') {
+        console.log('metldr: Writer API not available on this platform')
         return null
       }
 
-      const avail = await Writer.availability()
+      const WriterAPI = (window as any).Writer || Writer
+      const avail = await WriterAPI.availability()
+      console.log('metldr: Writer.availability():', avail)
+      
+      // handle all availability states per chrome_ai docs
       if (avail === 'unavailable') {
-        console.log('metldr: Writer not available')
+        console.log('metldr: Writer unavailable on this device')
         return null
       }
-
-      console.log('metldr: using Chrome AI Writer for replies')
-
-      const emailContext = this.getEmailContext()
       
-      const detectedLang = await languageService.detect(emailContext?.body || emailContext?.subject || '')
-      console.log('metldr: using language for replies:', detectedLang)
+      // "downloadable" or "downloading" means model needs to download first
+      // we can still try to create() which will trigger download if user activation exists
+      if (avail === 'downloadable' || avail === 'downloading') {
+        console.log('metldr: Writer model downloading/downloadable, attempting create...')
+      }
+
+      // get email context - try multiple sources
+      let emailContext = this.getEmailContext()
       
-      // build context with full email body for better replies
+      // if no context from extractor, try to get from page directly
+      if (!emailContext?.body) {
+        emailContext = this.extractEmailFromPage()
+      }
+      
+      console.log('metldr: email context for replies:', emailContext ? `body=${(emailContext.body?.length || 0)} chars` : 'null')
+      
       const emailBody = emailContext?.body || ''
-      const sharedContext = emailContext 
-        ? `You are writing a REPLY to an email (not a new email). From: ${emailContext.from || 'unknown'}. Subject: ${emailContext.subject || 'unknown'}. NEVER include "Subject:" lines - this is a reply.`
-        : 'You are writing an email REPLY. NEVER include Subject lines.'
+      const emailSubject = emailContext?.subject || ''
+      const emailFrom = emailContext?.from || ''
+      
+      // detect language from whatever we have
+      const textForLang = emailBody || emailSubject || 'Hello'
+      const detectedLang = await languageService.detect(textForLang)
+      console.log('metldr: detected language for replies:', detectedLang)
+      
+      const sharedContext = emailFrom || emailSubject
+        ? `You are the RECIPIENT replying to an email you received. The email was FROM: ${emailFrom || 'someone'} (address them in your reply). Subject: ${emailSubject || 'unknown'}. Write as the recipient responding to the sender. No Subject lines.`
+        : 'You are replying to an email you received. Write as the recipient responding to the sender. No Subject lines.'
 
       const replies: ReplySuggestion[] = []
       const tones: Array<{ tone: 'formal' | 'neutral' | 'casual', label: string }> = [
@@ -190,7 +261,7 @@ export class ReplyPanel {
 
       for (const { tone, label } of tones) {
         try {
-          const writer = await Writer.create({
+          const writer = await WriterAPI.create({
             tone,
             length: 'short',
             format: 'plain-text',
@@ -202,18 +273,25 @@ export class ReplyPanel {
 
           try {
             const prompt = emailBody 
-              ? `Write a ${label} reply to this email. Do NOT include subject lines.`
-              : `Write a ${label} email reply`
-            const body = await writer.write(prompt, { context: emailBody })
+              ? `Write a ${label} reply from the recipient's perspective to this email they received:\n\n${emailBody.slice(0, 2000)}`
+              : emailSubject
+                ? `Write a ${label} reply from the recipient to an email about: ${emailSubject}`
+                : `Write a ${label} brief reply acknowledging you received their message`
             
-            if (body && body.length > 10) {
+            const body = await writer.write(prompt, { context: emailBody.slice(0, 3000) })
+            
+            console.log(`metldr: chrome writer ${tone} result:`, body ? `${body.length} chars` : 'empty')
+            
+            if (body && body.trim().length > 10) {
               replies.push({
-                id: `chrome_${label}`,
+                id: `chrome_${label}_${Date.now()}`,
                 tone: label,
                 length: 'short',
                 body: body.trim(),
                 label
               })
+            } else {
+              console.log(`metldr: chrome writer ${tone} returned empty/short body`)
             }
           } finally {
             writer.destroy()
@@ -230,19 +308,33 @@ export class ReplyPanel {
     }
   }
 
-  // get email context from emailExtractor's last extracted content (same data used for summaries)
+  // use existing extraction from ContentScriptBootstrap
+  private extractEmailFromPage(): { subject?: string; from?: string; body?: string } | null {
+    const result = ContentScriptBootstrap.extractEmailFromDOM()
+    if (result) {
+      return {
+        subject: result.metadata?.subject,
+        from: result.metadata?.from,
+        body: result.content
+      }
+    }
+    return null
+  }
+
   private getEmailContext(): { subject?: string; from?: string; body?: string } | null {
     try {
-      // emailExtractor stores the last extracted email content used for summaries
       const data = emailExtractor.getLastExtracted()
+      console.log('metldr: getEmailContext data:', data ? `body=${(data.content?.length || 0)} chars` : 'null')
       if (data) {
         return {
-          subject: data.metadata?.subject,
-          from: data.metadata?.from,
+          subject: data.metadata?.subject ?? undefined,
+          from: data.metadata?.from ?? undefined,
           body: data.content ?? undefined
         }
       }
-    } catch { /* ignore */ }
+    } catch (err) {
+      console.log('metldr: getEmailContext failed:', (err as Error).message)
+    }
     return null
   }
 
@@ -271,7 +363,9 @@ export class ReplyPanel {
         return
       }
       
-      if (response?.success && response.suggestions?.length) {
+      // filter out suggestions with empty body
+      const validSuggestions = (response?.suggestions || []).filter(s => s.body && s.body.trim().length > 10)
+      if (response?.success && validSuggestions.length > 0) {
         // double-check thread hasn't changed while we were waiting
         const nowThreadId = this.getThreadIdFromUrl()
         if (nowThreadId !== threadId) {
@@ -279,7 +373,7 @@ export class ReplyPanel {
           return
         }
         
-        this.suggestions = response.suggestions
+        this.suggestions = validSuggestions
         console.log('metldr: suggestions ready after polling:', this.suggestions.length)
         this.stopPolling()
         
@@ -329,6 +423,13 @@ export class ReplyPanel {
       if (retryBtn) {
         retryBtn.addEventListener('click', () => {
           if (this.currentThreadId) {
+            // show loading state before retrying
+            this.isLoading = true
+            this.suggestions = []
+            if (this.panel) {
+              const c = this.panel.querySelector('.metldr-reply-content')
+              if (c) c.innerHTML = this.buildSuggestionsHTML(UIService.currentTheme as Theme)
+            }
             this.forceRegenerateSuggestions(this.currentThreadId)
           }
         })
@@ -371,11 +472,13 @@ export class ReplyPanel {
         })
       })
 
-      if (response?.success && response.suggestions?.length) {
+      // filter out suggestions with empty body
+      const validSuggestions = (response?.suggestions || []).filter(s => s.body && s.body.trim().length > 10)
+      if (response?.success && validSuggestions.length > 0) {
         // verify thread hasn't changed
         const currentThreadId = this.getThreadIdFromUrl()
         if (currentThreadId === threadId) {
-          this.suggestions = response.suggestions
+          this.suggestions = validSuggestions
           this.isLoading = false
           console.log('metldr: force regenerated suggestions:', this.suggestions.length)
           if (this.isVisible && this.panel) {
