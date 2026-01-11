@@ -327,12 +327,21 @@ export function useChat() {
             log.log('RAG empty, using truncated content')
           }
         } else {
-          // small docs: fire-and-forget indexing, use full content directly
-          sendToBackground({
-            type: 'RAG_ENSURE_INDEXED',
-            text: contextText,
-            metadata: { sourceId, sourceUrl, sourceType, title: '' }
-          }).catch(err => log.warn('async indexing failed', (err as Error).message))
+          // small docs: await indexing silently (typing indicator already shown via loading state)
+          log.log(`ensuring small doc indexed for chat... ${contextText.length} chars, sourceId: ${sourceId.slice(0, 40)}`)
+          try {
+            const ensureRes = await sendToBackground({
+              type: 'RAG_ENSURE_INDEXED',
+              text: contextText,
+              metadata: { sourceId, sourceUrl, sourceType, title: '' }
+            }) as { success: boolean; result?: string }
+            log.log(`ensureIndexed result: ${ensureRes?.result}`)
+          } catch (indexErr) {
+            const msg = (indexErr as Error).message
+            if (msg !== 'Indexing aborted' && msg !== 'Operation cancelled') {
+              log.warn('indexing failed', msg)
+            }
+          }
           
           relevantContext = contextText
           log.log(`using full context (${contextText.length} chars < ${CONTEXT_THRESHOLD} threshold)`)
