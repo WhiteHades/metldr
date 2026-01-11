@@ -519,7 +519,6 @@ defineExpose({ refresh: loadData, stats, analytics })
   gap: 8px;
 }
 
-/* theme colors */
 .violet { color: var(--color-primary); }
 .blue { color: #60a5fa; }
 .emerald { color: #34d399; }
@@ -528,10 +527,9 @@ defineExpose({ refresh: loadData, stats, analytics })
 .amber { color: #fbbf24; }
 .pink { color: #f472b6; }
 
-/* hero grid 3x2 */
 .hero-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px;
 }
 
