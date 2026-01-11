@@ -1,7 +1,3 @@
-// vector store - manages vector embeddings with voy-search
-// uses LocalModelProvider for all sandbox operations
-// critical: handles sandbox lifecycle (reload voy index when sandbox restarts)
-
 import { databaseService, DB_CONFIGS } from '../DatabaseService'
 import { localModels } from '../ai/LocalModelProvider'
 import type { VectorEntry, SearchResult } from '../../types'
@@ -52,6 +48,16 @@ class InvertedIndex {
 
   getDocCount(): number {
     return this.docs.size
+  }
+
+  // check if any document has this sourceUrl in metadata (fast O(n) scan, but docs are small)
+  hasSource(sourceUrl: string): boolean {
+    for (const entry of this.docs.values()) {
+      if (entry.metadata?.sourceUrl === sourceUrl || entry.metadata?.sourceId === sourceUrl) {
+        return true
+      }
+    }
+    return false
   }
 
   private tokenize(text: string): string[] {
@@ -201,13 +207,11 @@ export class VectorStore {
     await this.ensureIndexLoaded()
   }
 
-  // check if we have a specific document indexed
   async hasDocument(sourceId: string): Promise<boolean> {
     await this.ensureIndexLoaded()
     
-    // check inverted index first (fast)
-    const keywordResults = this.invertedIndex.search(sourceId, 1)
-    if (keywordResults.some(r => r.entry.metadata?.sourceId === sourceId || r.entry.metadata?.sourceUrl === sourceId)) {
+    // direct metadata check in inverted index (O(n) but reliable)
+    if (this.invertedIndex.hasSource(sourceId)) {
       return true
     }
     
@@ -304,14 +308,13 @@ export class VectorStore {
     }
   }
 
-  // gzip compression
   private async compress(data: Uint8Array): Promise<Uint8Array> {
-    const stream = new Blob([data]).stream().pipeThrough(new CompressionStream('gzip'))
+    const stream = new Blob([data as BlobPart]).stream().pipeThrough(new CompressionStream('gzip'))
     return new Uint8Array(await new Response(stream).arrayBuffer())
   }
 
   private async decompress(data: Uint8Array): Promise<Uint8Array> {
-    const stream = new Blob([data]).stream().pipeThrough(new DecompressionStream('gzip'))
+    const stream = new Blob([data as BlobPart]).stream().pipeThrough(new DecompressionStream('gzip'))
     return new Uint8Array(await new Response(stream).arrayBuffer())
   }
 

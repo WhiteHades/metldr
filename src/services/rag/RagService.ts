@@ -27,15 +27,14 @@ interface IndexingStats {
   embeddingMs: number
   storageMs: number
   skipped: boolean
-  skipReason?: 'unchanged' | 'duplicate' | 'no_chunks'
+  skipReason?: 'unchanged' | 'duplicate' | 'no_chunks' | 'backfilled'
 }
 
 const EMBEDDING_CONCURRENCY = 8
 const STORE_RAG_METADATA = 'rag_metadata'
 const QUERY_CACHE_MAX = 100
-const QUERY_CACHE_TTL = 5 * 60 * 1000 // 5 min
+const QUERY_CACHE_TTL = 5 * 60 * 1000
 
-// simhash: locality-sensitive hashing for near-duplicate detection
 function simHash(text: string): bigint {
   const tokens = text.toLowerCase().split(/\s+/).filter(t => t.length > 2)
   const v = new Int32Array(64).fill(0)
@@ -193,6 +192,24 @@ export class RagService {
         } else {
           console.log(`[RagService] Metadata says indexed but VOY empty, re-indexing...`)
         }
+      } else if (!existingHash) {
+        // no metadata entry - check if VOY/IDB has this doc (backfill case)
+        const voyHasData = await this.verifyVoyIndex(metadata.sourceId)
+        if (voyHasData) {
+          // backfill metadata and skip re-indexing
+          this.contentHashes.set(metadata.sourceId, contentHash)
+          await this.persistMetadata(metadata.sourceId, contentHash, 0) // chunk count unknown
+          stats.skipped = true
+          stats.skipReason = 'backfilled'
+          stats.wallClockMs = Date.now() - wallClockStart
+          this.lastStats = stats
+          report(100)
+          console.log(`[RagService] SKIPPED: ${metadata.sourceId.slice(0, 50)} (VOY has data, backfilled metadata) [${stats.wallClockMs}ms]`)
+          return
+        }
+      } else {
+        // content hash changed - will re-index
+        console.log(`[RagService] Content changed for ${metadata.sourceId.slice(0, 50)}, re-indexing...`)
       }
 
       report(10) // chunking
@@ -555,13 +572,8 @@ Example: "what was the pdf i read about islam and ummah" → "islam, ummah, musl
       console.log(`[RagService] hasIndexedContent: metadata exists but VOY empty for ${sourceUrl.slice(0, 50)}`)
     }
 
-    // fallback: check inverted index
-    try {
-      const results = await vectorStore.searchKeyword(sourceUrl, 1)
-      return results.some(r => r.entry.metadata?.sourceUrl === sourceUrl)
-    } catch {
-      return false
-    }
+    // fallback: direct document check (more reliable than keyword search)
+    return await vectorStore.hasDocument(sourceUrl)
   }
 
   // query preprocessing: strips personal/memory phrases, focuses on topic keywords
