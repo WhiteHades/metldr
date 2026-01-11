@@ -8,7 +8,7 @@
  */
 
 const ENABLED = true;
-const PREFIX = '🤖 [Chrome AI]';
+const PREFIX = '[Chrome AI]';
 
 // color-coded log levels
 const COLORS = {
@@ -64,12 +64,12 @@ export const chromeAILogger = {
     
     log('info', 'User Agent:', ua);
     log('info', 'Chrome Version:', chromeVersion || 'Not Chrome');
-    log('info', 'Chrome 138+ Required:', chromeVersion && chromeVersion >= 138 ? '✅ YES' : '❌ NO');
+    log('info', 'Chrome 138+ Required:', chromeVersion && chromeVersion >= 138 ? 'YES' : 'NO');
     
     // execution context
-    log('info', 'Window object:', typeof window !== 'undefined' ? '✅ Available' : '❌ Missing');
-    log('info', 'Is extension context:', typeof chrome !== 'undefined' && chrome.runtime ? '⚠️ YES (may limit APIs)' : 'NO');
-    log('info', 'Is service worker:', typeof self !== 'undefined' && 'ServiceWorkerGlobalScope' in self ? '⚠️ YES (APIs unavailable)' : 'NO');
+    log('info', 'Window object:', typeof window !== 'undefined' ? 'Available' : 'Missing');
+    log('info', 'Is extension context:', typeof chrome !== 'undefined' && chrome.runtime ? 'YES (may limit APIs)' : 'NO');
+    log('info', 'Is service worker:', typeof self !== 'undefined' && 'ServiceWorkerGlobalScope' in self ? 'YES (APIs unavailable)' : 'NO');
     
     groupEnd();
     return { chromeVersion, isChrome: !!chromeMatch };
@@ -90,9 +90,9 @@ export const chromeAILogger = {
     
     Object.entries(apis).forEach(([name, available]) => {
       if (available) {
-        log('success', `${name}:`, '✅ Available');
+        log('success', `${name}:`, 'Available');
       } else {
-        log('error', `${name}:`, '❌ Not defined');
+        log('error', `${name}:`, 'Not defined');
       }
     });
     
@@ -355,9 +355,9 @@ export const chromeAILogger = {
     }
     
     if (issues.length === 0) {
-      log('success', '✅ ALL CHECKS PASSED - Chrome AI is working!');
+      log('success', 'ALL CHECKS PASSED - Chrome AI is working!');
     } else {
-      log('error', '❌ ISSUES FOUND:');
+      log('error', 'ISSUES FOUND:');
       issues.forEach((issue, i) => {
         log('warn', `  ${i + 1}. ${issue}`);
       });
