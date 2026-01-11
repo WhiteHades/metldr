@@ -432,12 +432,7 @@ export class ReplyPanel {
   }
 
   getIconDataUrl(): string {
-    return 'data:image/svg+xml,' + encodeURIComponent(`
-      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5f6368" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M12 3l1.5 5.5L19 10l-5.5 1.5L12 17l-1.5-5.5L5 10l5.5-1.5L12 3z"/>
-        <path d="M19 15l.88 3.12L23 19l-3.12.88L19 23l-.88-3.12L15 19l3.12-.88L19 15z" opacity="0.5"/>
-      </svg>
-    `)
+    return chrome.runtime.getURL('assets/logo/metldr-dark-lavender-256x256.png')
   }
 
   showSuggestionsPanel(composeView: ComposeView): void {
