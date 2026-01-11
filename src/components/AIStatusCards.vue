@@ -52,12 +52,13 @@ const ollamaSelected = computed(() => props.preferredProvider === 'ollama')
         class="text-(length:--font-text-secondary) px-1.5 py-0.5 rounded-full font-medium"
         :class="{
           'bg-emerald-500/20 text-emerald-400': chromeAIStatus === 'available',
+          'bg-blue-500/20 text-blue-400': chromeAIStatus === 'downloadable',
           'bg-amber-500/20 text-amber-400': chromeAIStatus === 'downloading',
           'bg-red-500/20 text-red-400': chromeAIStatus === 'unavailable',
           'bg-muted text-muted-foreground': chromeAIStatus === 'checking'
         }"
       >
-        {{ chromeAIStatus === 'available' ? 'ready' : chromeAIStatus }}
+        {{ chromeAIStatus === 'available' ? 'ready' : chromeAIStatus === 'downloadable' ? 'download' : chromeAIStatus }}
       </span>
     </button>
 
@@ -140,7 +141,17 @@ const ollamaSelected = computed(() => props.preferredProvider === 'ollama')
 
     <!-- hint text -->
     <p class="text-(length:--font-text-secondary) text-foreground/50 pt-1">
-      <template v-if="chromeSelected">built-in chrome ai. fast & private.</template>
+      <template v-if="chromeSelected && chromeAIStatus === 'available'">built-in chrome ai. fast & private.</template>
+      <template v-else-if="chromeSelected && chromeAIStatus === 'downloadable'">
+        model ready to download. 
+        <button @click="emit('open-welcome')" class="text-primary hover:underline">open setup</button>
+      </template>
+      <template v-else-if="chromeSelected && chromeAIStatus === 'downloading'">downloading gemini nano model...</template>
+      <template v-else-if="chromeSelected && chromeAIStatus === 'unavailable'">
+        not available. 
+        <button @click="emit('open-welcome')" class="text-primary hover:underline">troubleshooting</button>
+      </template>
+      <template v-else-if="chromeSelected">checking availability...</template>
       <template v-else>
         local ollama models. 
         <button @click="emit('open-welcome')" class="text-primary hover:underline">setup guide</button>
