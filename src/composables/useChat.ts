@@ -286,8 +286,16 @@ export function useChat() {
       let relevantContext = ''
       
       if (contextText && currentUrl) {
+        const checkRes = await sendToBackground({
+          type: 'RAG_HAS_INDEXED_CONTENT',
+          sourceUrl
+        }) as { success: boolean; hasContent?: boolean }
+        const alreadyIndexed = checkRes?.success && checkRes?.hasContent
+        
         if (contextText.length > CONTEXT_THRESHOLD) {
-          updateUrlState(targetUrl, s => { s.indexing = true })
+          if (!alreadyIndexed) {
+            updateUrlState(targetUrl, s => { s.indexing = true })
+          }
           log.log(`ensuring large doc indexed for chat... ${contextText.length} chars, sourceId: ${sourceId.slice(0, 40)}`)
           try {
             const ensureRes = await sendToBackground({
@@ -302,7 +310,9 @@ export function useChat() {
               log.warn('indexing failed', msg)
             }
           } finally {
-            updateUrlState(targetUrl, s => { s.indexing = false })
+            if (!alreadyIndexed) {
+              updateUrlState(targetUrl, s => { s.indexing = false })
+            }
           }
           
           // indexing done, now show typing indicator
@@ -326,7 +336,10 @@ export function useChat() {
             log.log('RAG empty, using truncated content')
           }
         } else {
-          updateUrlState(targetUrl, s => { s.indexing = true })
+          // only show indexing indicator if not already indexed
+          if (!alreadyIndexed) {
+            updateUrlState(targetUrl, s => { s.indexing = true })
+          }
           log.log(`ensuring small doc indexed for chat... ${contextText.length} chars, sourceId: ${sourceId.slice(0, 40)}`)
           try {
             const ensureRes = await sendToBackground({
@@ -341,7 +354,9 @@ export function useChat() {
               log.warn('indexing failed', msg)
             }
           } finally {
-            updateUrlState(targetUrl, s => { s.indexing = false })
+            if (!alreadyIndexed) {
+              updateUrlState(targetUrl, s => { s.indexing = false })
+            }
           }
           
           updateUrlState(targetUrl, s => { s.loading = true })
