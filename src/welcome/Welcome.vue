@@ -29,9 +29,12 @@ const copiedStates = ref({});
 // chrome ai state
 const chromeAIStatus = ref('checking'); // 'checking' | 'unavailable' | 'no-browser' | 'available' | 'downloadable' | 'downloading' | 'ready'
 const chromeAIProgress = ref(0);
+const displayProgress = ref(0); // smoothed display value
 const chromeAIMessage = ref('checking chrome ai availability...');
 const chromeVersion = ref('');
 let statusPollingInterval = null;
+let progressAnimationFrame = null;
+let lastProgressUpdate = 0;
 
 // check chrome ai availability
 async function checkChromeAI() {
@@ -83,6 +86,43 @@ async function checkChromeAI() {
   }
 }
 
+// smoothly animate progress bar to target value
+function animateProgress(targetProgress) {
+  const now = Date.now();
+  const timeSinceLastUpdate = now - lastProgressUpdate;
+  lastProgressUpdate = now;
+  
+  // if we jumped significantly, animate smoothly
+  const diff = targetProgress - displayProgress.value;
+  
+  if (Math.abs(diff) < 0.5) {
+    displayProgress.value = targetProgress;
+    return;
+  }
+  
+  // use easing for smooth animation
+  const step = () => {
+    const current = displayProgress.value;
+    const remaining = targetProgress - current;
+    
+    if (Math.abs(remaining) < 0.5) {
+      displayProgress.value = targetProgress;
+      return;
+    }
+    
+    // ease toward target (faster when further away)
+    const speed = Math.max(0.1, Math.min(0.3, Math.abs(remaining) / 100));
+    displayProgress.value = current + remaining * speed;
+    
+    progressAnimationFrame = requestAnimationFrame(step);
+  };
+  
+  if (progressAnimationFrame) {
+    cancelAnimationFrame(progressAnimationFrame);
+  }
+  progressAnimationFrame = requestAnimationFrame(step);
+}
+
 // trigger model download by creating a summarizer instance
 async function triggerChromeAIDownload() {
   if (chromeAIStatus.value !== 'downloadable') return;
@@ -90,6 +130,11 @@ async function triggerChromeAIDownload() {
   chromeAIStatus.value = 'downloading';
   chromeAIMessage.value = 'starting gemini nano download...';
   chromeAIProgress.value = 0;
+  displayProgress.value = 0;
+  lastProgressUpdate = Date.now();
+  
+  // start polling immediately as backup
+  startProgressPolling();
   
   try {
     // creating a summarizer instance triggers the download
@@ -102,9 +147,12 @@ async function triggerChromeAIDownload() {
       outputLanguage: 'en',
       monitor: (m) => {
         m.addEventListener('downloadprogress', (e) => {
-          if (e.loaded) {
-            chromeAIProgress.value = Math.min(e.loaded, 100);
-            chromeAIMessage.value = `downloading gemini nano... ${Math.round(e.loaded)}%`;
+          // e.loaded is progress 0-100
+          if (typeof e.loaded === 'number' && e.loaded >= 0) {
+            const progress = Math.min(e.loaded, 100);
+            chromeAIProgress.value = progress;
+            animateProgress(progress);
+            chromeAIMessage.value = `downloading gemini nano... ${Math.round(progress)}%`;
           }
         });
       }
@@ -113,41 +161,90 @@ async function triggerChromeAIDownload() {
     chromeAIStatus.value = 'ready';
     chromeAIMessage.value = 'gemini nano is ready to use!';
     chromeAIProgress.value = 100;
+    displayProgress.value = 100;
     stopProgressPolling();
+    
+    // notify other tabs/panels that download completed
+    notifyDownloadComplete();
   } catch (err) {
     console.error('[Welcome] Chrome AI download failed:', err);
     chromeAIStatus.value = 'downloadable';
     chromeAIMessage.value = 'download failed. click to retry.';
+    stopProgressPolling();
   }
 }
 
-// poll for download progress (fallback when we can't track directly)
+// notify side panel and other contexts that download completed
+function notifyDownloadComplete() {
+  try {
+    chrome.storage.local.set({ 
+      chromeAIDownloadComplete: Date.now(),
+      chromeAIStatus: 'available'
+    });
+  } catch (e) {
+    // ignore storage errors
+  }
+}
+
+// poll for download progress (more reliable than event-only)
 function startProgressPolling() {
   stopProgressPolling();
+  
+  let consecutiveDownloading = 0;
+  let lastKnownProgress = 0;
+  
   statusPollingInterval = setInterval(async () => {
     try {
       const availability = await Summarizer.availability();
+      
       if (availability === 'available') {
         chromeAIStatus.value = 'ready';
         chromeAIMessage.value = 'gemini nano is ready to use!';
         chromeAIProgress.value = 100;
+        animateProgress(100);
         stopProgressPolling();
-      } else if (availability === 'downloading') {
-        // simulate progress during download
-        if (chromeAIProgress.value < 95) {
-          chromeAIProgress.value += Math.random() * 3;
+        notifyDownloadComplete();
+        return;
+      }
+      
+      if (availability === 'downloading') {
+        consecutiveDownloading++;
+        
+        // if we haven't received progress events, estimate based on time
+        // ~1.5GB download, assume ~1-5 min depending on connection
+        if (chromeAIProgress.value === lastKnownProgress && chromeAIProgress.value < 95) {
+          // increment slowly based on elapsed time
+          const elapsed = consecutiveDownloading * 1.5; // 1.5s per poll
+          const estimatedProgress = Math.min(5 + elapsed * 0.5, 90); // max 90% estimated
+          
+          if (estimatedProgress > chromeAIProgress.value) {
+            chromeAIProgress.value = estimatedProgress;
+            animateProgress(estimatedProgress);
+            chromeAIMessage.value = `downloading gemini nano... ${Math.round(estimatedProgress)}%`;
+          }
         }
+        
+        lastKnownProgress = chromeAIProgress.value;
+      } else if (availability === 'downloadable') {
+        // download was cancelled or failed
+        chromeAIStatus.value = 'downloadable';
+        chromeAIMessage.value = 'download interrupted. click to retry.';
+        stopProgressPolling();
       }
     } catch (err) {
       // ignore polling errors
     }
-  }, 2000);
+  }, 1500); // poll every 1.5s
 }
 
 function stopProgressPolling() {
   if (statusPollingInterval) {
     clearInterval(statusPollingInterval);
     statusPollingInterval = null;
+  }
+  if (progressAnimationFrame) {
+    cancelAnimationFrame(progressAnimationFrame);
+    progressAnimationFrame = null;
   }
 }
 
@@ -695,6 +792,9 @@ onMounted(async () => {
 
 onUnmounted(() => {
   stopProgressPolling();
+  if (progressAnimationFrame) {
+    cancelAnimationFrame(progressAnimationFrame);
+  }
   if (sectionObserver) sectionObserver.disconnect();
 });
 </script>
@@ -824,9 +924,9 @@ onUnmounted(() => {
           </div>
           <div v-if="chromeAIStatus === 'downloading'" class="gemini-progress">
             <div class="gemini-progress-bar">
-              <div class="gemini-progress-fill" :style="{ width: chromeAIProgress + '%' }"></div>
+              <div class="gemini-progress-fill" :style="{ width: displayProgress + '%' }"></div>
             </div>
-            <span>{{ Math.round(chromeAIProgress) }}%</span>
+            <span>{{ Math.round(displayProgress) }}%</span>
           </div>
           <Button 
             v-if="chromeAIStatus === 'downloadable'"
@@ -2003,7 +2103,8 @@ onUnmounted(() => {
   height: 100%;
   background: linear-gradient(90deg, #3b82f6, #8b5cf6);
   border-radius: 2px;
-  transition: width 0.3s ease;
+  transition: width 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: width;
 }
 
 .gemini-progress span {
