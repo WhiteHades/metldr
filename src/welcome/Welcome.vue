@@ -162,7 +162,7 @@ const features = [
   {
     icon: FileText,
     title: 'page summaries',
-    desc: 'get instant bullet-point summaries of any article or webpage',
+    desc: 'get bullet point summaries of any article, webpage or pdf',
     color: 'violet'
   },
   {
@@ -174,25 +174,25 @@ const features = [
   {
     icon: Mail,
     title: 'email summaries',
-    desc: 'auto-summarize gmail threads with action items and key dates',
+    desc: 'summarise gmail threads with action items and key dates',
     color: 'rose'
   },
   {
     icon: Reply,
     title: 'smart replies',
-    desc: 'ai-generated reply suggestions that match your tone',
+    desc: 'reply suggestions based on the context of your email',
     color: 'amber'
   },
   {
     icon: BookOpen,
     title: 'word lookup',
-    desc: 'select any word to see definitions, synonyms, and translations',
+    desc: 'double click any word to see definitions and synonyms',
     color: 'emerald'
   },
   {
     icon: Languages,
     title: 'multi-language',
-    desc: 'offline dictionaries for english, spanish, french, german & more',
+    desc: 'double click any non English word to see definitions and synonyms',
     color: 'blue'
   }
 ];
@@ -801,7 +801,7 @@ onUnmounted(() => {
             <span>recommended</span>
           </div>
           <h2 class="section-title">option 1: gemini nano</h2>
-          <p class="setup-desc">zero setup — runs directly in chrome with no downloads or configuration</p>
+          <p class="setup-desc">zero setup. runs directly in chrome after you download the gemini nano model</p>
         </div>
         
         <!-- live status -->
@@ -846,29 +846,15 @@ onUnmounted(() => {
           </Button>
         </div>
         
-        <!-- setup steps (only if not ready) -->
-        <div v-if="chromeAIStatus !== 'ready'" ref="stepsRef" class="steps">
+        <div ref="steps1Ref" class="steps">
           <div class="step">
             <div class="step-number">1</div>
             <div class="step-body">
               <div class="step-header">
-                <Globe :size="20" />
                 <h3>use chrome 138+</h3>
                 <span v-if="chromeVersion" class="os-badge">you have {{ chromeVersion }}</span>
               </div>
-              <p>gemini nano requires chrome canary or dev channel (138+).</p>
-              <div class="command-box">
-                <code>chrome://version</code>
-                <Button 
-                  @click="copyToClipboard('chrome://version', 'chrome-version')"
-                  class="copy-btn p-0 h-7 w-7"
-                  variant="ghost"
-                  :class="{ copied: copiedStates['chrome-version'] }"
-                >
-                  <Check v-if="copiedStates['chrome-version']" :size="16" />
-                  <Copy v-else :size="16" />
-                </Button>
-              </div>
+              <p>gemini nano requires the latest version of chrome</p>
             </div>
           </div>
           
@@ -876,7 +862,6 @@ onUnmounted(() => {
             <div class="step-number">2</div>
             <div class="step-body">
               <div class="step-header">
-                <Zap :size="20" />
                 <h3>enable ai flags</h3>
               </div>
               <p>paste this url and enable the flags below, then restart chrome.</p>
@@ -893,10 +878,10 @@ onUnmounted(() => {
                 </Button>
               </div>
               <ul class="flag-list">
-                <li><code>#optimization-guide-on-device-model</code> → <strong>Enabled BypassPerfRequirement</strong></li>
-                <li><code>#prompt-api-for-gemini-nano</code> → <strong>Enabled</strong></li>
-                <li><code>#summarization-api-for-gemini-nano</code> → <strong>Enabled</strong></li>
-                <li><code>#writer-api-for-gemini-nano</code> → <strong>Enabled</strong></li>
+                <li><a href="#" class="inline-code-link" @click.prevent="openChromeUrl('chrome://flags/#optimization-guide-on-device-model')">#optimization-guide-on-device-model</a> → <strong>Enabled BypassPerfRequirement</strong></li>
+                <li><a href="#" class="inline-code-link" @click.prevent="openChromeUrl('chrome://flags/#prompt-api-for-gemini-nano')">#prompt-api-for-gemini-nano</a> → <strong>Enabled</strong></li>
+                <li><a href="#" class="inline-code-link" @click.prevent="openChromeUrl('chrome://flags/#summarization-api-for-gemini-nano')">#summarization-api-for-gemini-nano</a> → <strong>Enabled</strong></li>
+                <li><a href="#" class="inline-code-link" @click.prevent="openChromeUrl('chrome://flags/#writer-api-for-gemini-nano')">#writer-api-for-gemini-nano</a> → <strong>Enabled</strong></li>
               </ul>
             </div>
           </div>
@@ -905,15 +890,10 @@ onUnmounted(() => {
             <div class="step-number">3</div>
             <div class="step-body">
               <div class="step-header">
-                <RefreshCw :size="20" />
                 <h3>restart & verify</h3>
               </div>
-              <p>after enabling flags, fully restart chrome and return here.</p>
-              <Button @click="checkChromeAI" variant="outline" class="recheck-btn-inline">
-                <Loader2 v-if="chromeAIStatus === 'checking'" :size="14" class="spinning" />
-                <Zap v-else :size="14" />
-                recheck status
-              </Button>
+              <p>after enabling flags, fully restart chrome.</p>
+
             </div>
           </div>
 
@@ -947,13 +927,12 @@ onUnmounted(() => {
           <p class="setup-desc">for older browsers or if you prefer running your own models</p>
         </div>
         
-        <div ref="stepsRef" class="steps">
+        <div ref="steps2Ref" class="steps">
           <!-- step 1 -->
           <div class="step">
             <div class="step-number">1</div>
             <div class="step-body">
               <div class="step-header">
-                <Download :size="20" />
                 <h3>install ollama</h3>
                 <span class="os-badge">{{ platformSetup.os.toLowerCase() }}</span>
               </div>
@@ -984,7 +963,6 @@ onUnmounted(() => {
             <div class="step-number">2</div>
             <div class="step-body">
               <div class="step-header">
-                <component :is="osIcon" :size="20" />
                 <h3>enable extension access</h3>
                 <span class="os-badge">{{ platformSetup.os.toLowerCase() }}</span>
                 <span class="os-badge" style="background: rgba(34, 197, 94, 0.15); color: #4ade80;">one-time setup</span>
@@ -1079,7 +1057,6 @@ onUnmounted(() => {
             <div class="step-number">3</div>
             <div class="step-body">
               <div class="step-header">
-                <Cpu :size="20" />
                 <h3>pull a model</h3>
               </div>
               <p>open a new terminal and run one of the commands below. "pulling" downloads the ai model to your computer. smaller models (1b-2b) are faster; larger models (3b-4b) are smarter but slower. copy any command below, paste it in your terminal, and hit enter. start with a small model - you can always add more later!</p>
@@ -3357,5 +3334,23 @@ onUnmounted(() => {
   border-radius: 8px;
   font-size: 12px;
   color: #a78bfa;
+}
+
+.inline-code-link {
+  font-family: ui-monospace, 'SF Mono', Menlo, Monaco, monospace;
+  font-size: 0.9em;
+  background: rgba(139, 92, 246, 0.15);
+  color: #c4b5fd;
+  padding: 0.15em 0.35em;
+  border-radius: 4px;
+  text-decoration: none;
+  transition: all 0.2s ease;
+  border: 1px solid rgba(139, 92, 246, 0.2);
+}
+
+.inline-code-link:hover {
+  background: rgba(139, 92, 246, 0.25);
+  border-color: rgba(139, 92, 246, 0.4);
+  text-decoration: underline;
 }
 </style>
