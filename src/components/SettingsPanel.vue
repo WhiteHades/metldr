@@ -1,8 +1,9 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import { useThemeStore } from '@/stores/theme'
 import { SUPPORTED_LANGUAGES } from '@/utils/storage'
 import { 
-  FileText, BookOpen, Database, Trash2, HelpCircle, X, Cpu, Zap, Palette, Loader2
+  FileText, BookOpen, Database, Trash2, HelpCircle, X, Cpu, Zap, Palette, Loader2, TestTube2
 } from 'lucide-vue-next'
 import { Toggle, ScrollArea, Checkbox, Textarea, Input, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui'
 import AIStatusCards from './AIStatusCards.vue'
@@ -49,6 +50,40 @@ const emit = defineEmits<{
 }>()
 
 const themeStore = useThemeStore()
+
+const seeding = ref(false)
+const seedResult = ref<string | null>(null)
+const isDev = import.meta.env.DEV
+
+async function seedTestData() {
+  seeding.value = true
+  seedResult.value = null
+  try {
+    const response = await chrome.runtime.sendMessage({ type: 'DEV_SEED_DATA', days: 60 })
+    if (response.success) {
+      seedResult.value = `seeded: ${response.emailSessions} emails, ${response.tabSessions} pages, ${response.dailyStats} days`
+    } else {
+      seedResult.value = `error: ${response.error}`
+    }
+  } catch (err) {
+    seedResult.value = `error: ${(err as Error).message}`
+  } finally {
+    seeding.value = false
+  }
+}
+
+async function clearTestData() {
+  seeding.value = true
+  seedResult.value = null
+  try {
+    await chrome.runtime.sendMessage({ type: 'DEV_CLEAR_DATA' })
+    seedResult.value = 'all data cleared'
+  } catch (err) {
+    seedResult.value = `error: ${(err as Error).message}`
+  } finally {
+    seeding.value = false
+  }
+}
 </script>
 
 <template>
@@ -276,6 +311,36 @@ const themeStore = useThemeStore()
 
       <!-- support -->
       <DonationCard />
+
+      <!-- dev tools (for testing stats visualization) -->
+      <div v-if="isDev" class="rounded-xl bg-card p-4 border border-dashed border-border/50">
+        <div class="flex items-center gap-2.5 mb-3">
+          <div class="flex items-center justify-center w-6 h-6 rounded-md bg-amber-500/20">
+            <TestTube2 :size="12" class="text-amber-500" />
+          </div>
+          <span class="text-(length:--font-text-secondary) font-medium text-foreground/70 tracking-wide">dev tools</span>
+          <span class="text-[9px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-500/80 font-medium uppercase tracking-wider">test</span>
+        </div>
+        <p class="text-(length:--font-text-secondary) text-foreground/50 mb-3">populate database with realistic test data to preview long-term usage stats.</p>
+        <div class="flex gap-2">
+          <button 
+            @click="seedTestData" 
+            :disabled="seeding"
+            class="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-(length:--font-text-secondary) font-medium bg-amber-500/15 text-amber-500 hover:bg-amber-500/25 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Loader2 v-if="seeding" :size="12" class="animate-spin" />
+            <span>seed 60 days</span>
+          </button>
+          <button 
+            @click="clearTestData"
+            :disabled="seeding"
+            class="px-3 py-2 rounded-lg text-(length:--font-text-secondary) font-medium bg-destructive/15 text-destructive hover:bg-destructive/25 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            clear all
+          </button>
+        </div>
+        <p v-if="seedResult" class="text-(length:--font-text-secondary) text-foreground/60 mt-2 italic">{{ seedResult }}</p>
+      </div>
     </div>
   </ScrollArea>
 </template>

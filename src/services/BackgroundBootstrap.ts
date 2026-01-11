@@ -11,6 +11,8 @@ import { logger } from './LoggerService'
 import { ragService } from './rag/RagService'
 import { concurrencyManager } from './ConcurrencyManager'
 import { analyticsService } from './AnalyticsService'
+
+
 import type {
   EmailSummaryMessage,
   GetReplySuggestionsMessage,
@@ -205,6 +207,40 @@ export class BackgroundBootstrap {
         return true
       }
 
+
+      // dev: seed test data for stats visualization
+      if (import.meta.env.DEV) {
+        if (msg.type === 'DEV_SEED_DATA') {
+          import('./DevSeedService').then(({ devSeedService }) => {
+            const { days } = msg as { type: 'DEV_SEED_DATA'; days?: number }
+            devSeedService.seedAllData(days || 60)
+              .then(result => respond({ success: true, ...result }))
+              .catch(err => respond({ success: false, error: (err as Error).message }))
+          }).catch(err => respond({ success: false, error: (err as Error).message }))
+          return true
+        }
+
+        // dev: clear all seeded data
+        if (msg.type === 'DEV_CLEAR_DATA') {
+          import('./DevSeedService').then(({ devSeedService }) => {
+            devSeedService.clearAllSeededData()
+              .then(() => respond({ success: true }))
+              .catch(err => respond({ success: false, error: (err as Error).message }))
+          }).catch(err => respond({ success: false, error: (err as Error).message }))
+          return true
+        }
+
+        // dev: get data counts
+        if (msg.type === 'DEV_GET_COUNTS') {
+          import('./DevSeedService').then(({ devSeedService }) => {
+            devSeedService.getDataCounts()
+              .then(counts => respond({ success: true, ...counts }))
+              .catch(err => respond({ success: false, error: (err as Error).message }))
+          }).catch(err => respond({ success: false, error: (err as Error).message }))
+          return true
+        }
+      }
+
       return false
     })
 
@@ -283,17 +319,12 @@ export class BackgroundBootstrap {
 
         if (!forceRegenerate) {
           const cached = await EmailService.getCachedReplies(emailId)
-          if (cached && cached.length > 0) {
-            respond({ success: true, suggestions: cached })
+          // filter out empty suggestions before returning
+          const validCached = (cached || []).filter(s => s.body && s.body.trim().length > 10)
+          if (validCached.length > 0) {
+            respond({ success: true, suggestions: validCached })
             return
           }
-        }
-
-        const cachedSummary = await cacheService.getEmailSummary(emailId)
-        if (!cachedSummary) {
-          log.log('no cached summary for thread, cannot generate suggestions')
-          respond({ success: false, error: 'no email summary available' })
-          return
         }
 
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
@@ -302,40 +333,42 @@ export class BackgroundBootstrap {
           return
         }
 
+        // get email content from content script
         let emailContent = ''
-        let metadata = null
+        let metadata: Record<string, unknown> | null = null
         try {
-          const extractResponse = await chrome.tabs.sendMessage(tab.id, { 
-            type: 'GET_EMAIL_CONTENT',
-            emailId 
-          }) as { success: boolean; content?: string; metadata?: Record<string, unknown> }
-          
-          if (extractResponse?.success && extractResponse.content) {
-            emailContent = extractResponse.content
-            metadata = extractResponse.metadata || null
+          const resp = await chrome.tabs.sendMessage(tab.id, { type: 'GET_EMAIL_CONTENT', emailId }) as { 
+            success: boolean; content?: string; metadata?: Record<string, unknown> 
+          }
+          if (resp?.success && resp.content) {
+            emailContent = resp.content
+            metadata = resp.metadata || null
           }
         } catch (err) {
-          log.log('could not extract email content', (err as Error).message)
+          log.log('could not extract email', (err as Error).message)
         }
 
-        if (!emailContent) {
-          log.log('no email content, generating with summary context only')
-          const summary = cachedSummary as { summary?: string; action_items?: string[] }
-          emailContent = `Summary: ${summary.summary || ''}\nAction items: ${(summary.action_items || []).join(', ')}`
+        // get cached summary if available (optional)
+        const cachedSummary = await cacheService.getEmailSummary(emailId) as import('../types').EmailSummary | null
+
+        // fallback: use summary as context if no direct content
+        if (!emailContent && cachedSummary?.summary) {
+          emailContent = cachedSummary.summary
         }
 
+        // generate suggestions
         const suggestions = await EmailService.generateReplySuggestions(
           emailId, 
-          emailContent, 
-          cachedSummary as Parameters<typeof EmailService.generateReplySuggestions>[2],
+          emailContent || '',
+          cachedSummary,
           metadata
         )
 
-        if (suggestions && suggestions.length > 0) {
-          respond({ success: true, suggestions })
-        } else {
-          respond({ success: false, error: 'failed to generate suggestions' })
-        }
+        const valid = (suggestions || []).filter(s => s.body?.trim().length > 10)
+        respond(valid.length > 0 
+          ? { success: true, suggestions: valid }
+          : { success: false, error: 'no valid suggestions generated' }
+        )
       } catch (err) {
         log.error('onGenerateReplySuggestions', (err as Error).message)
         respond({ success: false, error: (err as Error).message })
