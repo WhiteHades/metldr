@@ -175,10 +175,8 @@ export function useChat() {
     const messageStartTime = performance.now()  // track total time from message send
     chatInput.value = ''
     
-    // update target URL's state directly
     updateUrlState(targetUrl, state => {
       state.messages.push({ role: 'user', content: userMessage })
-      state.loading = true
       state.input = ''
     })
     
@@ -270,7 +268,6 @@ export function useChat() {
       
       const currentUrl = targetUrl
       
-      // detect content type and extract appropriate sourceId
       const isEmail = contextText.includes('EMAIL CONTENT:')
       const docType = isEmail ? 'email thread' : 'article'
       
@@ -290,7 +287,6 @@ export function useChat() {
       
       if (contextText && currentUrl) {
         if (contextText.length > CONTEXT_THRESHOLD) {
-          // show indexing progress UI while waiting
           updateUrlState(targetUrl, s => { s.indexing = true })
           log.log(`ensuring large doc indexed for chat... ${contextText.length} chars, sourceId: ${sourceId.slice(0, 40)}`)
           try {
@@ -308,6 +304,9 @@ export function useChat() {
           } finally {
             updateUrlState(targetUrl, s => { s.indexing = false })
           }
+          
+          // indexing done, now show typing indicator
+          updateUrlState(targetUrl, s => { s.loading = true })
           
           // search RAG for relevant chunks
           const ragStart = performance.now()
@@ -327,7 +326,7 @@ export function useChat() {
             log.log('RAG empty, using truncated content')
           }
         } else {
-          // small docs: await indexing silently (typing indicator already shown via loading state)
+          updateUrlState(targetUrl, s => { s.indexing = true })
           log.log(`ensuring small doc indexed for chat... ${contextText.length} chars, sourceId: ${sourceId.slice(0, 40)}`)
           try {
             const ensureRes = await sendToBackground({
@@ -341,14 +340,21 @@ export function useChat() {
             if (msg !== 'Indexing aborted' && msg !== 'Operation cancelled') {
               log.warn('indexing failed', msg)
             }
+          } finally {
+            updateUrlState(targetUrl, s => { s.indexing = false })
           }
+          
+          updateUrlState(targetUrl, s => { s.loading = true })
           
           relevantContext = contextText
           log.log(`using full context (${contextText.length} chars < ${CONTEXT_THRESHOLD} threshold)`)
         }
       } else if (contextText) {
+        updateUrlState(targetUrl, s => { s.loading = true })
         relevantContext = contextText
         log.log(`no URL, using full context (${contextText.length} chars)`)
+      } else {
+        updateUrlState(targetUrl, s => { s.loading = true })
       }
       
       const systemPrompt = relevantContext  
@@ -397,7 +403,6 @@ RULES:
                   { role: 'system', content: systemPrompt }
                 ]
                 
-                // add chat history (exclude the current message we just added)
                 for (const msg of recentMessages) {
                   if (msg.content !== userMessage) {
                     initialPrompts.push(msg)
@@ -427,7 +432,6 @@ RULES:
                       }
                     })
                     
-                    // debounced auto save to IDB during streaming
                     debouncedSaveChat(targetUrl, getUrlState(targetUrl).messages)
                     
                     await nextTick()
@@ -455,7 +459,6 @@ RULES:
                     }
                   })
                   
-                  // save to IDB immediately - prevents lost response if user switched tabs during streaming
                   const completedState = getUrlState(targetUrl)
                   const normalizedUrl = targetUrl.split('?')[0].replace(/\/+$/, '')
                   cacheService.setTabSession(normalizedUrl, completedState.messages, null, false)
@@ -502,7 +505,6 @@ RULES:
       }
 
       if (chromeResult?.ok && chromeResult.content) {
-        // already handled above
       } else {
         const model = selectedModel.value || availableModels.value[0]
         if (!model) {
@@ -539,7 +541,6 @@ RULES:
               }
             })
             
-            // debounced auto-save to IDB during streaming
             debouncedSaveChat(targetUrl, getUrlState(targetUrl).messages)
             
             await nextTick()
@@ -548,7 +549,7 @@ RULES:
             }
           }
           
-          flushSaveChat() // cancel pending debounce since we'll do full save at end
+          flushSaveChat()
           
           const timing = Math.round(performance.now() - start)
           log.log('ollama streaming complete', { len: fullResponse.length, timing })
@@ -641,8 +642,7 @@ RULES:
     chatIndexing.value = false
     emailContext.value = null
   }
-
-  // sync indexing status from background (call on sidepanel open/reopen)
+  
   async function syncIndexingStatus(): Promise<void> {
     const url = await getActiveUrl()
     if (!url) return
@@ -659,20 +659,17 @@ RULES:
   }
 
   return {
-    // State
     chatMessages,
     chatInput,
     chatLoading,
     chatIndexing,
     emailContext,
     
-    // Methods
     sendChatMessage,
     clearChat,
     resetChatState,
     syncIndexingStatus,
     
-    // URL-scoped state management
     switchToUrl,
     getActiveUrl,
     saveCurrentToUrlState,
