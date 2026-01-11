@@ -33,17 +33,20 @@ const composerRef = ref<InstanceType<typeof ChatComposer> | null>(null)
 const isRunning = computed(() => props.chatLoading)
 const isThreadEmpty = computed(() => props.chatMessages.length === 0 && !props.chatLoading)
 
-const isIndexingOrProcessing = computed(() => props.chatIndexing || props.summaryLoading)
+const { isIndexing, indexingProgress, indexingMessage, setupListener, cleanupListener } = 
+  useIndexingProgress(() => props.currentUrl || '')
+const isIndexingOrProcessing = computed(() => props.chatIndexing || props.summaryLoading || isIndexing.value)
 const inputDisabled = computed(() => props.chatDisabled || isIndexingOrProcessing.value)
 const inputPlaceholder = computed(() => {
   if (props.summaryLoading) return 'analyzing page, please wait...'
   if (props.chatIndexing) return 'indexing document...'
+  if (isIndexing.value) {
+    return indexingProgress.value > 0 
+      ? `indexing for search... ${indexingProgress.value}%` 
+      : 'indexing for search...'
+  }
   return 'ask anything about this page...'
 })
-
-// url-scoped indexing progress
-const { isIndexing, indexingProgress, indexingMessage, setupListener, cleanupListener } = 
-  useIndexingProgress(() => props.currentUrl || '')
 
 onMounted(() => {
   setupListener()
@@ -85,7 +88,7 @@ function renderMarkdown(text: string): string {
 }
 
 function handleSend() {
-  if (!isRunning.value && !isIndexingOrProcessing.value) {
+  if (!isRunning.value && !isIndexingOrProcessing.value && !props.chatDisabled) {
     emit('send')
   }
 }
@@ -106,15 +109,24 @@ defineExpose({
     <div v-if="isThreadEmpty && !chatDisabled" class="flex h-full flex-col px-3 pb-4">
       <div class="flex-1 flex items-center justify-center">
         <div class="empty-state text-center flex flex-col items-center justify-center">
-          <MessageSquare :size="48" class="text-muted-foreground/40 mb-2" stroke-width="1.5" />
+          <template v-if="isIndexing">
+            <Loader2 :size="32" class="animate-spin text-primary mb-3" />
+            <span class="text-sm text-muted-foreground">
+              {{ indexingMessage || 'indexing for search...' }}
+              <span v-if="indexingProgress > 0" class="text-primary font-medium ml-1">{{ indexingProgress }}%</span>
+            </span>
+          </template>
+          <template v-else>
+            <MessageSquare :size="48" class="text-muted-foreground/40 mb-2" stroke-width="1.5" />
+          </template>
         </div>
       </div>
       <div class="composer w-full">
         <ChatComposer
           ref="composerRef"
           v-model="chatInput"
-          placeholder="ask anything about this page..."
-          :disabled="chatDisabled"
+          :placeholder="inputPlaceholder"
+          :disabled="inputDisabled"
           :loading="isRunning"
           :show-clear="chatMessages.length > 0"
           @send="handleSend"
@@ -135,8 +147,10 @@ defineExpose({
               <p class="text-xs text-muted-foreground">chat unavailable on system pages</p>
             </template>
             <template v-else-if="disabledReason === 'local-pdf'">
-              <p class="text-xs text-muted-foreground">use the file picker to open the PDF first</p>
-              <p class="text-xs text-muted-foreground/60 mt-1">chrome doesn't allow direct access to local files</p>
+              <div class="bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60 rounded-xl border border-border/50 p-4 shadow-sm max-w-[280px] mx-auto">
+                <p class="text-sm font-bold text-foreground leading-snug">open PDF via file picker</p>
+                <p class="text-xs font-medium text-muted-foreground mt-1.5">chrome blocks local file access</p>
+              </div>
             </template>
             <template v-else>
               <p class="text-xs text-muted-foreground">open an email to chat</p>
