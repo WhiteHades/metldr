@@ -41,7 +41,7 @@ const {
   selectModel 
 } = useOllama()
 
-const { chromeAIStatus, checkChromeAI } = useChromeAI()
+const { chromeAIStatus, checkChromeAI, refreshChromeAI, cleanup: cleanupChromeAI } = useChromeAI()
 
 const {
   pageSummary,
@@ -309,6 +309,11 @@ onMounted(async () => {
       console.log('[App] Ollama disconnected, falling back to Chrome AI')
       setProviderPreference('chrome-ai')
     }
+    
+    // also periodically check chrome ai if not yet available (picks up downloads from welcome page)
+    if (chromeAIStatus.value !== 'available') {
+      await refreshChromeAI()
+    }
   }, 5000)
   
   const context = isEmailClient.value ? 'gmail' : 'article'
@@ -330,6 +335,7 @@ onUnmounted(() => {
   if (cleanupTabListener) cleanupTabListener()
   if (cleanupDropdownHandler) cleanupDropdownHandler()
   if (sidePanelMessageListener) chrome.runtime.onMessage.removeListener(sidePanelMessageListener)
+  cleanupChromeAI()
   window.removeEventListener('keydown', handleKeydown)
   analyticsService.endSession().catch(() => {})
 })
