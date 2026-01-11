@@ -205,14 +205,40 @@ export class EmailService {
 
       if (!result.ok) return null
 
-      const jsonMatch = result.content?.match(/\{[\s\S]*\}/)
-      if (!jsonMatch) return null
+      // extract json - try multiple patterns
+      let jsonStr = result.content || ''
+      
+      // remove markdown code blocks
+      jsonStr = jsonStr.replace(/```json\s*/g, '').replace(/```\s*/g, '')
+      
+      // find json object
+      const jsonMatch = jsonStr.match(/\{[\s\S]*\}/)
+      if (!jsonMatch) {
+        console.log('[EmailService._tryChromeSummary] no json found in response')
+        return null
+      }
 
-      const parsed = JSON.parse(jsonMatch[0])
+      let parsed: any
+      try {
+        parsed = JSON.parse(jsonMatch[0])
+      } catch (parseErr) {
+        // try to fix common json issues
+        let fixed = jsonMatch[0]
+          .replace(/([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:/g, '$1"$2":') // quote unquoted keys
+          .replace(/:\s*'([^']*)'/g, ': "$1"') // replace single quotes with double
+          .replace(/,\s*([}\]])/g, '$1') // remove trailing commas
+        
+        try {
+          parsed = JSON.parse(fixed)
+        } catch {
+          console.log('[EmailService._tryChromeSummary] json parse failed:', (parseErr as Error).message)
+          return null
+        }
+      }
 
       return {
         summary: parsed.summary || 'no summary',
-        action_items: parsed.action_items || [],
+        action_items: Array.isArray(parsed.action_items) ? parsed.action_items : [],
         dates: parsed.key_details?.date ? [parsed.key_details.date] : [],
         key_facts: {
           booking_reference: null,
@@ -232,7 +258,7 @@ export class EmailService {
   // try chrome ai for reply generation using Writer API with summary context
   static async _tryChromReplies(
     snippet: string,
-    summary: EmailSummary,
+    summary: EmailSummary | null,
     metadata: EmailMetadata | null
   ): Promise<ReplySuggestion[] | null> {
     try {
@@ -249,15 +275,26 @@ export class EmailService {
 
         if (!result.ok) return null
 
-        // parse JSON from response - try to extract clean JSON object
-        const content = result.content || ''
-        let parsed: ParsedReplies | null = null
+        // parse json - remove markdown, fix common issues
+        let content = result.content || ''
+        content = content.replace(/```json\s*/g, '').replace(/```\s*/g, '')
         
+        let parsed: ParsedReplies | null = null
         const jsonMatch = content.match(/\{[\s\S]*"replies"[\s\S]*\}/)
+        
         if (jsonMatch) {
           try {
             parsed = JSON.parse(jsonMatch[0]) as ParsedReplies
-          } catch {
+          } catch (parseErr) {
+            // try to fix common json issues
+            let fixed = jsonMatch[0]
+              .replace(/([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:/g, '$1"$2":') // quote keys
+              .replace(/:\s*'([^']*)'/g, ': "$1"') // fix quotes
+              .replace(/,\s*([}\]])/g, '$1') // remove trailing commas
+            
+            try {
+              parsed = JSON.parse(fixed) as ParsedReplies
+            } catch {
             const repliesMatch = content.match(/"replies"\s*:\s*\[([\s\S]*?)\]/)
             if (repliesMatch) {
               try {
@@ -281,6 +318,7 @@ export class EmailService {
         if (replies.length > 0) {
           console.log('[EmailService._tryChromReplies] generated', replies.length, 'replies via Chrome AI')
           return replies
+        }
         }
       }
 
@@ -328,13 +366,13 @@ export class EmailService {
   }
 
   // build context string for Writer API
-  static _buildReplyContext(snippet: string, summary: EmailSummary, metadata: EmailMetadata | null): string {
+  static _buildReplyContext(snippet: string, summary: EmailSummary | null, metadata: EmailMetadata | null): string {
     let context = ''
     if (metadata?.from) context += `From: ${metadata.from}\n`
     if (metadata?.subject) context += `Subject: ${metadata.subject}\n`
-    if (summary.summary) context += `Summary: ${summary.summary}\n`
-    if (summary.intent) context += `Intent: ${summary.intent}\n`
-    if (summary.action_items?.length) context += `Action Items: ${summary.action_items.join(', ')}\n`
+    if (summary?.summary) context += `Summary: ${summary.summary}\n`
+    if (summary?.intent) context += `Intent: ${summary.intent}\n`
+    if (summary?.action_items?.length) context += `Action Items: ${summary.action_items.join(', ')}\n`
     return context
   }
 
@@ -374,7 +412,7 @@ export class EmailService {
   static async generateReplySuggestions(
     emailId: string, 
     emailContent: string, 
-    summary: EmailSummary, 
+    summary: EmailSummary | null = null, 
     metadata: EmailMetadata | null = null
   ): Promise<ReplySuggestion[]> {
     try {
@@ -385,16 +423,21 @@ export class EmailService {
       const snippet = emailContent
 
       const preferChrome = aiGateway.getPreference() === 'chrome-ai'
+      
+      // helper to filter out suggestions with empty body
+      const filterValidSuggestions = (suggestions: ReplySuggestion[]): ReplySuggestion[] => 
+        suggestions.filter(s => s.body && s.body.trim().length > 10)
 
       // try preferred provider first
       if (preferChrome) {
         const chromeReplies = await this._tryChromReplies(snippet, summary, metadata)
-        if (chromeReplies && chromeReplies.length > 0) {
+        const validReplies = filterValidSuggestions(chromeReplies || [])
+        if (validReplies.length > 0) {
           if (emailId) {
-            await cacheService.setReplySuggestions(emailId, chromeReplies)
+            await cacheService.setReplySuggestions(emailId, validReplies)
           }
-          analyticsService.trackReplyGenerated(chromeReplies.length).catch(() => {})
-          return chromeReplies
+          analyticsService.trackReplyGenerated(validReplies.length).catch(() => {})
+          return validReplies
         }
       }
 
@@ -405,26 +448,28 @@ export class EmailService {
         const model = await OllamaService.getUserSelected() || await OllamaService.selectBest('email_summary')
         if (model) {
           const suggestions = await this._generateReplies(snippet, summary, metadata, model)
+          const validSuggestions = filterValidSuggestions(suggestions || [])
           
-          if (suggestions?.length > 0 && emailId) {
-            await cacheService.setReplySuggestions(emailId, suggestions)
+          if (validSuggestions.length > 0 && emailId) {
+            await cacheService.setReplySuggestions(emailId, validSuggestions)
           }
-          if (suggestions?.length > 0) {
-            analyticsService.trackReplyGenerated(suggestions.length).catch(() => {})
+          if (validSuggestions.length > 0) {
+            analyticsService.trackReplyGenerated(validSuggestions.length).catch(() => {})
           }
-          return suggestions
+          return validSuggestions
         }
       }
 
       // if ollama was preferred but failed, try chrome as fallback
       if (!preferChrome) {
         const chromeReplies = await this._tryChromReplies(snippet, summary, metadata)
-        if (chromeReplies && chromeReplies.length > 0) {
+        const validReplies = filterValidSuggestions(chromeReplies || [])
+        if (validReplies.length > 0) {
           if (emailId) {
-            await cacheService.setReplySuggestions(emailId, chromeReplies)
+            await cacheService.setReplySuggestions(emailId, validReplies)
           }
-          analyticsService.trackReplyGenerated(chromeReplies.length).catch(() => {})
-          return chromeReplies
+          analyticsService.trackReplyGenerated(validReplies.length).catch(() => {})
+          return validReplies
         }
       }
 
