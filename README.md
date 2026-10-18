@@ -68,7 +68,9 @@ Use the mise managed Portless CLI for local previews. `npm run dev` builds Rust 
 
 To check the extension, build it and load the `dist` directory with Load unpacked at `chrome://extensions`. The toolbar icon opens the side panel. Open welcome from the panel, or copy the extension ID from Chrome's extensions page and open `chrome-extension://YOUR_EXTENSION_ID/welcome.html`. After another build, reload the extension from Chrome's extensions page before checking changes.
 
-The development server and the main and content builds prepare the Rust bindings and welcome generator automatically. After editing Rust during a development session, run `npm run build:rust` again and reload the extension or development page. The welcome HTML template is rendered by the Rust generator in both Vite development and production builds. Generated bindings and Cargo build output are local build products.
+The development server and the main and content builds prepare the Rust bindings and welcome generator automatically. After editing Rust during a development session, run `make rust` again. The open welcome web preview reloads when its styles or compiled Rust assets change. An unpacked extension still needs a reload from Chrome's extensions page after rebuilding.
+
+The welcome HTML template is rendered by the Rust generator in both Vite development and production builds. Generated bindings and Cargo build output are local build products. Private working folders are excluded from development page reloads and file serving. Tailwind scans the application source directory.
 
 ```sh
 make rust

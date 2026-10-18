@@ -15,7 +15,7 @@
   src: url("/fonts/jetbrains-mono.woff2") format("woff2");
 }
 
-@import "tailwindcss";
+@import "tailwindcss" source(".");
 
 @theme {
   --color-background: oklch(0.1 0.01 265);
