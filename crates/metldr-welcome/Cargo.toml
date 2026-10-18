@@ -17,7 +17,7 @@ js-sys = "=0.3.105"
 web-sys = { version = "=0.3.105", features = [
   "AbortController", "AbortSignal", "Document", "Element", "Event",
   "EventTarget", "HtmlSelectElement", "HtmlInputElement", "HtmlElement", "Node", "NodeList",
-  "Request", "RequestInit", "Response", "ReadableStream",
+  "Request", "RequestInit", "Response", "ReadableStream", "IntersectionObserver", "IntersectionObserverEntry",
   "ReadableStreamDefaultReader", "Location", "Window",
 ] }
 

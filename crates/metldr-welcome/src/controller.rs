@@ -5,7 +5,7 @@ use wasm_bindgen_futures::spawn_local;
 use web_sys::{AbortController, Document, Element, Event, HtmlSelectElement};
 
 use crate::{
-    browser, dom, download, guide_view, setup_view,
+    browser, dom, download, guide_view, scene, setup_view,
     state::{Choice, Setup, Status},
 };
 
@@ -48,6 +48,7 @@ pub fn mount() -> Result<(), JsValue> {
         .ok_or_else(|| JsValue::from_str("Document unavailable"))?;
     guide_view::mount(&document)?;
     setup_view::mount(&document)?;
+    scene::mount(&document)?;
     let app = Rc::new(RefCell::new(App {
         document: document.clone(),
         setup: Setup::default(),

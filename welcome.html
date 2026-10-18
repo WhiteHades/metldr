@@ -5,11 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="light dark">
   <title>Welcome to MetLDR</title>
+  <link rel="preload" href="/fonts/IBMPlexSans-Variable.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="stylesheet" href="/fonts/fonts.css">
   <link rel="stylesheet" href="/welcome/style.css">
   <script type="module" src="/welcome/loader.js"></script>
 </head>
 <body>
-<p id="boot-status" class="boot-status" role="status">Loading setup. Help is available while it loads.</p>
 <noscript>Enable JavaScript to use MetLDR setup.</noscript>
 <a class="skip" href="#setup">Skip to setup</a>
 <header class="site-header">
@@ -19,16 +20,17 @@
 <main id="top">
   <section class="hero" aria-labelledby="welcome-title">
     <div class="hero-copy">
-      <h1 id="welcome-title">Welcome <br>to MetLDR.</h1>
+      <h1 id="welcome-title">Welcome to MetLDR.</h1>
       <p>Read, understand, and work with the pages already in your browser.</p>
       <a class="button hero-action" href="#setup"><span>Set up MetLDR</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a>
       <p class="hero-note">Choose where your AI runs.</p>
     </div>
     <figure class="hero-figure">
-      <svg id="scene" viewBox="0 0 560 430" aria-hidden="true" data-state="idle">
+      <svg id="scene" viewBox="0 0 560 430" aria-hidden="true" data-active="false">
         <defs><linearGradient id="result-light" x1="0" y1="0" x2="1" y2="1"><stop offset="0"/><stop offset="1"/></linearGradient></defs>
         <ellipse class="ground-shadow" cx="295" cy="340" rx="180" ry="28"/>
         <path class="ground" d="M70 290 280 170 490 290 280 410Z"/>
+        <g class="scene-grid"><path d="m112 266 210 120m-168-144 210 120m-168-144 210 120m-168-144 210 120M112 314l210-120M154 338l210-120M196 362l210-120M238 386l210-120"/></g>
         <g class="source-plane">
           <path class="side-face" d="M83 229 205 158 307 218 185 289 83 229v13l102 60 122-71v-13M185 289v13"/>
           <path class="page-face" d="M83 229 205 158 307 218 185 289Z"/>
@@ -41,6 +43,7 @@
           <path class="crease" d="m196 221 101 59 111-64m-111 64v26"/>
           <path class="chip" d="m255 219 51-29 47 27-51 30Z"/>
           <path class="chip-line" d="m277 216 25 14 29-17m-19-11-24 14"/>
+          <path class="chip-glow" d="m255 219 51-29 47 27-51 30Z"/>
         </g>
         <g class="result-plane">
           <path class="side-face" d="m267 149 113-65 98 57v15l-113 65-98-57Z"/>
@@ -50,13 +53,16 @@
           <path class="crease" d="m267 149 98 57 113-65m-113 65v15"/>
         </g>
         <path class="connector" d="m180 303 0 26 85 49m151-150 32 18v33"/>
+        <circle class="signal signal-in" cx="180" cy="303" r="4"/>
+        <circle class="signal signal-out" cx="416" cy="228" r="4"/>
         <circle class="connector-dot" cx="265" cy="378" r="4"/>
       </svg>
-      <figcaption>A page, a useful answer, and a way back to the source.<span>Illustrated example</span></figcaption>
+      <figcaption>A page, an answer, and a way back to the source.<span>Illustrated example</span></figcaption>
+      <label class="scene-control"><input id="scene-motion" type="checkbox" checked>Animate diagram</label>
     </figure>
   </section>
   <section id="setup" class="setup content-grid" aria-labelledby="setup-title">
-    <div class="setup-heading"><h2 id="setup-title">Choose your AI.</h2><p>Connect to Chrome AI or Ollama on this computer. Provider and installed agent setup are not available in this version.</p></div>
+    <div class="setup-heading"><h2 id="setup-title">Choose your AI.</h2><p>Start with Chrome AI or Ollama. You can change the connection later.</p></div>
     <div class="connection-layout">
       <div class="choices" role="group" aria-label="AI connection">
         <button disabled class="choice" id="choose-local" aria-pressed="false" type="button"><span class="choice-title"><span>Local AI</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v12H4zm4 16h8m-4-4v4"/></svg></span><span>Connect to Chrome AI or Ollama on this computer.</span><span class="choice-meta">Choose Chrome AI or Ollama.</span></button>
@@ -64,6 +70,7 @@
         <button disabled class="choice" id="choose-agent" aria-pressed="false" type="button"><span class="choice-title"><span>Installed agent</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 7 5 5-5 5m8 0h6M3 3h18v18H3z"/></svg></span><span>Agent setup is unavailable here.</span><span class="choice-meta">Agent support is not available in this version.</span><span id="agent-note" hidden>Installed agent setup is not available in this version.</span></button>
       </div>
       <div class="connection-panel">
+        <p id="boot-status" class="boot-status" role="status">Loading setup. Help is available while it loads.</p>
         <div class="status-heading"><span id="status-indicator" data-status="idle" aria-hidden="true"></span><h3 id="status-text">Setup is loading</h3></div>
         <div id="connection-status" role="status" aria-live="polite"><p id="connection-detail">Choose a local option after setup loads. The check sends no prompt and does not download models.</p></div>
         <div id="local-options" class="local-options" role="group" aria-label="Local AI options"><button disabled id="choose-chrome" class="text-button" type="button" aria-pressed="false">Chrome AI</button><button disabled id="choose-ollama" class="text-button" type="button" aria-pressed="false">Ollama at 127.0.0.1</button></div>

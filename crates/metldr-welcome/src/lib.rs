@@ -13,6 +13,8 @@ mod download;
 #[cfg(target_arch = "wasm32")]
 mod guide_view;
 #[cfg(target_arch = "wasm32")]
+mod scene;
+#[cfg(target_arch = "wasm32")]
 mod setup_view;
 
 #[cfg(target_arch = "wasm32")]
