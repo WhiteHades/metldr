@@ -1,3 +1,5 @@
+import initStream, { OllamaStream } from '../../crates/metldr-stream/pkg/metldr_stream'
+import streamWasmUrl from '../../crates/metldr-stream/pkg/metldr_stream_bg.wasm?url'
 import { stripThinking } from '../utils/text'
 import type {
   OllamaModel,
@@ -12,6 +14,17 @@ interface CompleteOptions {
   top_p?: number
   format?: unknown
   longContext?: boolean
+}
+
+let streamReady: Promise<unknown> | undefined
+
+function loadStream(): Promise<unknown> {
+  return streamReady ??= initStream({
+    module_or_path: chrome.runtime.getURL(streamWasmUrl.replace(/^\//, ''))
+  }).catch(error => {
+    streamReady = undefined
+    throw error
+  })
 }
 
 export class OllamaService {
@@ -88,12 +101,13 @@ export class OllamaService {
     }
   }
 
-  // streaming version - yields content chunks via async generator
   static async *completeStream(
     model: string,
     messages: ChatMessage[],
     options: CompleteOptions = {}
   ): AsyncGenerator<string, void, unknown> {
+    await loadStream()
+
     const body: Record<string, unknown> = {
       model,
       messages,
@@ -119,30 +133,32 @@ export class OllamaService {
       throw new Error(`ollama returned ${res.status}`)
     }
 
-    // parse NDJSON stream
     const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() || ''
-
-      for (const line of lines) {
-        if (!line.trim()) continue
-        try {
-          const chunk = JSON.parse(line)
-          if (chunk.message?.content) {
-            yield stripThinking(chunk.message.content)
-          }
-          if (chunk.done) return
-        } catch {
-          // skip malformed json
+    const decoder = new OllamaStream()
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) {
+          const tail = decoder.finish()
+          if (tail) yield tail
+          return
         }
+        const content = decoder.push(value)
+        if (content) yield content
+        if (decoder.is_done()) {
+          const tail = decoder.finish()
+          if (tail) yield tail
+          return
+        }
+      }
+    } finally {
+      decoder.free()
+      try {
+        await reader.cancel()
+      } catch {
+        // Preserve the original read or decoding error if cancellation also fails.
+      } finally {
+        reader.releaseLock()
       }
     }
   }
