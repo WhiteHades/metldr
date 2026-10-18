@@ -1,0 +1,28 @@
+[package]
+name = "metldr-welcome"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[lib]
+name = "welcome_runtime"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "=0.2.128"
+wasm-bindgen-futures = "=0.4.78"
+js-sys = "=0.3.105"
+web-sys = { version = "=0.3.105", features = [
+  "AbortController", "AbortSignal", "Document", "Element", "Event",
+  "EventTarget", "HtmlSelectElement", "HtmlInputElement", "HtmlElement", "Node", "NodeList",
+  "Request", "RequestInit", "Response", "ReadableStream",
+  "ReadableStreamDefaultReader", "Location", "Window",
+] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"

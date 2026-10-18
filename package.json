@@ -4,7 +4,8 @@
   "version": "0.7.6",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "portless",
+    "dev:server": "vite",
     "predev": "npm run build:rust",
     "build": "npm run build:main && npm run build:content && npm run build:sandbox && npm run build:offscreen && npm run build:models",
     "build:rust": "node scripts/build-rust.mjs",
@@ -52,6 +53,7 @@
     "@types/chrome": "^0.1.32",
     "@vitejs/plugin-vue": "^6.0.1",
     "cross-env": "^10.1.0",
+    "esbuild": "0.25.12",
     "shadcn-vue": "^2.4.3",
     "typescript": "^5.9.3",
     "vite": "npm:rolldown-vite@7.1.14",

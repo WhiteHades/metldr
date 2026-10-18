@@ -1,13 +1,12 @@
 import { spawnSync } from 'node:child_process';
-import { join, relative, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
-const crateDir = join(repoRoot, 'crates', 'metldr-core');
-const manifestPath = join(crateDir, 'Cargo.toml');
-const targetDir = join(crateDir, 'target');
-const wasmPath = join(targetDir, 'wasm32-unknown-unknown', 'release', 'metldr_core.wasm');
-const pkgDir = join(crateDir, 'pkg');
+const crates = [
+  { name: 'metldr-core', module: 'metldr_core', pkg: 'crates/metldr-core/pkg' },
+  { name: 'metldr-welcome', module: 'welcome_runtime', pkg: 'public/welcome/pkg' },
+];
 const isCheck = process.argv.includes('--check');
 const isWindows = process.platform === 'win32';
 
@@ -32,13 +31,7 @@ function run(command, args, label) {
   }
 }
 
-const cargoArgs = ['--locked', '--manifest-path', relative(repoRoot, manifestPath), '--target', 'wasm32-unknown-unknown'];
-
-if (isCheck) {
-  run('cargo', ['check', ...cargoArgs], 'Cargo');
-} else {
-  run('cargo', ['build', '--release', ...cargoArgs, '--target-dir', relative(repoRoot, targetDir)], 'Cargo');
-
+if (!isCheck) {
   const versionResult = spawnSync(isWindows ? 'wasm-bindgen.exe' : 'wasm-bindgen', ['--version'], {
     cwd: repoRoot,
     encoding: 'utf8',
@@ -54,11 +47,24 @@ if (isCheck) {
     process.exit(1);
   }
 
-  run('wasm-bindgen', [
-    relative(repoRoot, wasmPath),
-    '--target', 'web',
-    '--typescript',
-    '--out-dir', relative(repoRoot, pkgDir),
-    '--out-name', 'metldr_core',
-  ], 'wasm-bindgen');
 }
+
+for (const crate of crates) {
+  const crateDir = join('crates', crate.name);
+  const targetDir = join(crateDir, 'target');
+  const cargoArgs = ['--locked', '--manifest-path', join(crateDir, 'Cargo.toml'), '--lib', '--target', 'wasm32-unknown-unknown'];
+  if (isCheck) {
+    run('cargo', ['check', ...cargoArgs], 'Cargo');
+  } else {
+    run('cargo', ['build', '--release', ...cargoArgs, '--target-dir', targetDir], 'Cargo');
+    run('wasm-bindgen', [
+      join(targetDir, 'wasm32-unknown-unknown', 'release', `${crate.module}.wasm`),
+      '--target', 'web', '--typescript', '--out-dir', crate.pkg, '--out-name', crate.module,
+    ], 'wasm-bindgen');
+  }
+}
+
+run('cargo', [
+  isCheck ? 'check' : 'build', '--locked', '--release',
+  '--manifest-path', 'crates/metldr-welcome/Cargo.toml', '--bin', 'welcome-guide',
+], 'welcome generator');

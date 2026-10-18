@@ -1,10 +1,25 @@
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import tailwindcss from '@tailwindcss/vite'
 import { copyFileSync, existsSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { execFileSync } from 'node:child_process'
 
 const isContentBuild = process.env.BUILD_TARGET === 'content'
+
+const rustWelcome = (): Plugin => ({
+  name: 'rust-welcome',
+  transformIndexHtml: {
+    order: 'pre',
+    handler(html, context) {
+      if (resolve(context.filename) !== resolve('welcome.html')) return html
+      const executable = process.platform === 'win32' ? 'welcome-guide.exe' : 'welcome-guide'
+      return execFileSync(resolve('crates/metldr-welcome/target/release', executable), [
+        resolve('welcome.html'), '-',
+      ], { encoding: 'utf8', timeout: 5_000, maxBuffer: 1_048_576, windowsHide: true })
+    },
+  },
+})
 
 
 const copyWasmAssets = () => ({
@@ -63,7 +78,7 @@ console.warn = (...args: unknown[]) => {
 }
 
 export default defineConfig({
-  plugins: isContentBuild ? [] : [vue(), tailwindcss(), copyInboxSDKPlugin(), copyWasmAssets()],
+  plugins: isContentBuild ? [] : [rustWelcome(), vue(), tailwindcss(), copyInboxSDKPlugin(), copyWasmAssets()],
   resolve: {
     alias: {
       '@': resolve(__dirname, './src')

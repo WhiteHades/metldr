@@ -54,6 +54,8 @@ The Rust core runs through WebAssembly. It decodes Ollama chat streams while pre
 
 Retrieval text chunking also runs in the Rust core. It keeps the existing email, article and PDF window sizes and overlap. Offsets count UTF16 units in normalized text, and chunks keep Unicode characters intact at their boundaries.
 
+The welcome page runs in Rust through WebAssembly, with static Help available while it loads. It checks Chrome AI or Ollama only when requested, saves setup before closing, and shows the extension's exact origin in Ollama setup commands. Its former Vue entry is removed. The side panel still uses Vue while its Rust replacement is developed.
+
 Install Rust and the matching binding generator before building the extension. The repository pins Rust 1.98.1.
 
 ```sh
@@ -62,12 +64,17 @@ cargo install wasm-bindgen-cli --version 0.2.128 --locked
 npm ci
 ```
 
-The development server and the main and content builds prepare the Rust bindings automatically. After editing Rust during a development session, run `npm run build:rust` again and reload the extension or development page. Generated bindings and Cargo build output are local build products.
+Use the mise managed Portless CLI for local previews. `npm run dev` builds Rust and starts Portless with the project name `metldr`. Open the URL it prints, then add `/welcome.html` for welcome or `/index.html` for the panel layout. Chrome extension APIs require the loaded extension, so a web preview does not establish working AI or browser controls.
+
+To check the extension, build it and load the `dist` directory with Load unpacked at `chrome://extensions`. The toolbar icon opens the side panel. Open welcome from the panel, or copy the extension ID from Chrome's extensions page and open `chrome-extension://YOUR_EXTENSION_ID/welcome.html`. After another build, reload the extension from Chrome's extensions page before checking changes.
+
+The development server and the main and content builds prepare the Rust bindings and welcome generator automatically. After editing Rust during a development session, run `npm run build:rust` again and reload the extension or development page. The welcome HTML template is rendered by the Rust generator in both Vite development and production builds. Generated bindings and Cargo build output are local build products.
 
 ```sh
 make rust
 make check-rust
 cargo test --locked --manifest-path crates/metldr-core/Cargo.toml
+cargo test --locked --manifest-path crates/metldr-welcome/Cargo.toml
 ```
 
 ### commands

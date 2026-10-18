@@ -1,45 +1,108 @@
 <!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>welcome to metldr</title>
-    <meta
-      name="description"
-      content="get started with metldr - your private ai assistant powered by ollama"
-    />
-    <link rel="stylesheet" href="/fonts/fonts.css" />
-    <style>
-      * {
-        margin: 0;
-        padding: 0;
-        box-sizing: border-box;
-      }
-
-      html {
-        scroll-behavior: smooth;
-      }
-
-      html,
-      body {
-        height: 100%;
-        background: #08080c;
-        overflow-x: hidden;
-      }
-
-      #welcome-app {
-        opacity: 0;
-        transition: opacity 0.3s ease;
-      }
-
-      #welcome-app.ready {
-        opacity: 1;
-      }
-    </style>
-  </head>
-
-  <body>
-    <div id="welcome-app"></div>
-    <script type="module" src="/src/welcome/main.ts"></script>
-  </body>
+<html lang="en" data-theme="catppuccin">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>Welcome to MetLDR</title>
+  <link rel="stylesheet" href="/welcome/style.css">
+  <script type="module" src="/welcome/loader.js"></script>
+</head>
+<body>
+<p id="boot-status" class="boot-status" role="status">Loading setup. Help is available while it loads.</p>
+<noscript>Enable JavaScript to use MetLDR setup.</noscript>
+<a class="skip" href="#setup">Skip to setup</a>
+<header class="site-header">
+  <a class="brand" href="#top" aria-label="MetLDR welcome"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M4 24V8l12 9L28 8v16M4 8l12 9 12-9"/></svg>MetLDR</a>
+  <nav aria-label="Welcome"><label for="theme-choice">Theme</label><select id="theme-choice" disabled><option value="catppuccin">Catppuccin</option><option value="gruvbox">Gruvbox</option><option value="cyberpunk">Cyberpunk</option><option value="light">Light</option></select><a href="#help">Help</a></nav>
+</header>
+<main id="top">
+  <section class="hero" aria-labelledby="welcome-title">
+    <div class="hero-copy">
+      <h1 id="welcome-title">Welcome <br>to MetLDR.</h1>
+      <p>Read, understand, and work with the pages already in your browser.</p>
+      <a class="button hero-action" href="#setup"><span>Set up MetLDR</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a>
+      <p class="hero-note">Choose where your AI runs.</p>
+    </div>
+    <figure class="hero-figure">
+      <svg id="scene" viewBox="0 0 560 430" aria-hidden="true" data-state="idle">
+        <defs><linearGradient id="result-light" x1="0" y1="0" x2="1" y2="1"><stop offset="0"/><stop offset="1"/></linearGradient></defs>
+        <ellipse class="ground-shadow" cx="295" cy="340" rx="180" ry="28"/>
+        <path class="ground" d="M70 290 280 170 490 290 280 410Z"/>
+        <g class="source-plane">
+          <path class="side-face" d="M83 229 205 158 307 218 185 289 83 229v13l102 60 122-71v-13M185 289v13"/>
+          <path class="page-face" d="M83 229 205 158 307 218 185 289Z"/>
+          <path class="page-line" d="m115 229 81-47m-61 59 81-47m-61 59 50-29"/>
+          <path class="page-mark" d="m211 229 37-21 26 15-37 22Z"/>
+        </g>
+        <g class="process-plane">
+          <path class="side-face" d="m196 221 111-64 101 59v26l-111 64-101-59Z"/>
+          <path class="process-face" d="m196 221 111-64 101 59-111 64Z"/>
+          <path class="crease" d="m196 221 101 59 111-64m-111 64v26"/>
+          <path class="chip" d="m255 219 51-29 47 27-51 30Z"/>
+          <path class="chip-line" d="m277 216 25 14 29-17m-19-11-24 14"/>
+        </g>
+        <g class="result-plane">
+          <path class="side-face" d="m267 149 113-65 98 57v15l-113 65-98-57Z"/>
+          <path class="result-face" d="m267 149 113-65 98 57-113 65Z"/>
+          <path class="result-line" d="m298 147 75-43m-55 55 75-43m-55 55 43-25"/>
+          <path class="citation" d="m394 159 32-18 15 9-32 18Z"/>
+          <path class="crease" d="m267 149 98 57 113-65m-113 65v15"/>
+        </g>
+        <path class="connector" d="m180 303 0 26 85 49m151-150 32 18v33"/>
+        <circle class="connector-dot" cx="265" cy="378" r="4"/>
+      </svg>
+      <figcaption>A page, a useful answer, and a way back to the source.<span>Illustrated example</span></figcaption>
+    </figure>
+  </section>
+  <section id="setup" class="setup content-grid" aria-labelledby="setup-title">
+    <div class="setup-heading"><h2 id="setup-title">Choose your AI.</h2><p>Connect to Chrome AI or Ollama on this computer. Provider and installed agent setup are not available in this version.</p></div>
+    <div class="connection-layout">
+      <div class="choices" role="group" aria-label="AI connection">
+        <button disabled class="choice" id="choose-local" aria-pressed="false" type="button"><span class="choice-title"><span>Local AI</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v12H4zm4 16h8m-4-4v4"/></svg></span><span>Connect to Chrome AI or Ollama on this computer.</span><span class="choice-meta">Choose Chrome AI or Ollama.</span></button>
+        <button disabled class="choice" id="choose-provider" aria-pressed="false" type="button"><span class="choice-title"><span>Your provider</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 16H6a4 4 0 0 1 0-8 6 6 0 0 1 11-1 4.5 4.5 0 1 1 1 9h-1m-5-4v9m-3-3 3 3 3-3"/></svg></span><span>Provider setup is unavailable here.</span><span class="choice-meta">No provider connection is made.</span><span id="provider-note" hidden>Provider setup is not available in this version.</span></button>
+        <button disabled class="choice" id="choose-agent" aria-pressed="false" type="button"><span class="choice-title"><span>Installed agent</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 7 5 5-5 5m8 0h6M3 3h18v18H3z"/></svg></span><span>Agent setup is unavailable here.</span><span class="choice-meta">Agent support is not available in this version.</span><span id="agent-note" hidden>Installed agent setup is not available in this version.</span></button>
+      </div>
+      <div class="connection-panel">
+        <div class="status-heading"><span id="status-indicator" data-status="idle" aria-hidden="true"></span><h3 id="status-text">Setup is loading</h3></div>
+        <div id="connection-status" role="status" aria-live="polite"><p id="connection-detail">Choose a local option after setup loads. The check sends no prompt and does not download models.</p></div>
+        <div id="local-options" class="local-options" role="group" aria-label="Local AI options"><button disabled id="choose-chrome" class="text-button" type="button" aria-pressed="false">Chrome AI</button><button disabled id="choose-ollama" class="text-button" type="button" aria-pressed="false">Ollama at 127.0.0.1</button></div>
+        <button disabled id="check-button" class="button primary" type="button">Check</button>
+        <section id="chrome-controls" class="backend-controls" aria-label="Chrome AI controls" hidden><p>Use Check to read Chrome AI availability. Choose Download model to start a download.</p><button disabled id="download-button" class="button" type="button">Download model</button><button disabled id="cancel-button" class="text-button" type="button">Cancel</button><progress id="download-progress" hidden max="100" aria-label="Model download progress"></progress></section>
+        <section id="ollama-controls" class="backend-controls" aria-label="Ollama controls" hidden><label id="model-choice-label" for="model-choice" hidden>Ollama model</label><select id="model-choice" hidden disabled></select><p>Check whether Ollama is available at 127.0.0.1:11434. Start Ollama separately. <a href="#ollama-setup">Read the Ollama setup guide in Help.</a></p></section>
+        <div class="completion-actions"><button disabled id="continue-button" class="button primary" type="button">Save and close</button><button disabled id="explore-button" class="text-button" type="button">Continue without connecting</button></div>
+      </div>
+    </div>
+  </section>
+  <section id="help" class="help content-grid" aria-labelledby="help-title">
+    <div><h2 id="help-title">You control the connection.</h2><p>Choose a model before sharing page content. Local and provider connections have different data destinations. MetLDR should make that choice clear before a task starts.</p></div>
+<!--WELCOME_SETUP-->
+    <section class="feature-overview" aria-labelledby="feature-title">
+      <h3 id="feature-title">Features in the current extension</h3>
+      <p>Open MetLDR from the Chrome toolbar to use these features.</p>
+      <ul>
+        <li><h4>Page and PDF summaries</h4><p>Summarize articles, webpages, and PDF documents.</p></li>
+        <li><h4>Contextual page chat</h4><p>Ask questions about the page you are reading.</p></li>
+        <li><h4>Gmail summaries</h4><p>Review email threads with key points and action items.</p></li>
+        <li><h4>Reply suggestions</h4><p>Draft replies using the context of an email thread.</p></li>
+        <li><h4>Word lookup</h4><p>Look up definitions and synonyms from a webpage.</p></li>
+        <li><h4>Multilingual lookup</h4><p>Look up words from other languages while browsing.</p></li>
+      </ul>
+    </section>
+    <section class="faq-guide" aria-label="Help topics">
+      <p class="faq-note">Full answers remain readable without setup. Search becomes available when setup loads.</p>
+      <div id="faq-filters" class="faq-filters" hidden>
+        <label class="faq-field" for="faq-search">Search answers<input id="faq-search" type="search" maxlength="256" disabled></label>
+        <label class="faq-field" for="faq-category">Filter by category<select id="faq-category" disabled></select></label>
+        <button id="faq-clear" type="button" disabled>Clear filters</button>
+      </div>
+      <div id="faq-results">
+<!--WELCOME_FAQS-->
+      </div>
+      <p id="faq-empty" hidden>No answers match these filters. Clear the filters or try another search.</p>
+    </section>
+  </section>
+</main>
+<footer class="footer"><span>MetLDR</span><a href="#setup">Return to setup</a></footer>
+</body>
 </html>
