@@ -3,10 +3,10 @@ import { join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
-const crateDir = join(repoRoot, 'crates', 'metldr-stream');
+const crateDir = join(repoRoot, 'crates', 'metldr-core');
 const manifestPath = join(crateDir, 'Cargo.toml');
 const targetDir = join(crateDir, 'target');
-const wasmPath = join(targetDir, 'wasm32-unknown-unknown', 'release', 'metldr_stream.wasm');
+const wasmPath = join(targetDir, 'wasm32-unknown-unknown', 'release', 'metldr_core.wasm');
 const pkgDir = join(crateDir, 'pkg');
 const isCheck = process.argv.includes('--check');
 const isWindows = process.platform === 'win32';
@@ -59,6 +59,6 @@ if (isCheck) {
     '--target', 'web',
     '--typescript',
     '--out-dir', relative(repoRoot, pkgDir),
-    '--out-name', 'metldr_stream',
+    '--out-name', 'metldr_core',
   ], 'wasm-bindgen');
 }

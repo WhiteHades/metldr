@@ -1,5 +1,5 @@
-import initStream, { OllamaStream } from '../../crates/metldr-stream/pkg/metldr_stream'
-import streamWasmUrl from '../../crates/metldr-stream/pkg/metldr_stream_bg.wasm?url'
+import { OllamaStream } from '../../crates/metldr-core/pkg/metldr_core'
+import { loadRustCore } from './RustCore'
 import { stripThinking } from '../utils/text'
 import type {
   OllamaModel,
@@ -14,17 +14,6 @@ interface CompleteOptions {
   top_p?: number
   format?: unknown
   longContext?: boolean
-}
-
-let streamReady: Promise<unknown> | undefined
-
-function loadStream(): Promise<unknown> {
-  return streamReady ??= initStream({
-    module_or_path: chrome.runtime.getURL(streamWasmUrl.replace(/^\//, ''))
-  }).catch(error => {
-    streamReady = undefined
-    throw error
-  })
 }
 
 export class OllamaService {
@@ -106,7 +95,7 @@ export class OllamaService {
     messages: ChatMessage[],
     options: CompleteOptions = {}
   ): AsyncGenerator<string, void, unknown> {
-    await loadStream()
+    await loadRustCore()
 
     const body: Record<string, unknown> = {
       model,

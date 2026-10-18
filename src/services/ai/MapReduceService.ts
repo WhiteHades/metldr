@@ -2,7 +2,6 @@
 // chunks content, summarizes each chunk, then merges summaries
 
 import { aiGateway } from './AIGateway'
-import { chunkingService } from '../rag/ChunkingService'
 import { logger } from '../LoggerService'
 
 const log = logger.createScoped('MapReduce')

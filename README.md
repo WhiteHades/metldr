@@ -48,11 +48,13 @@ run larger models (llama 3, qwen, etc.) locally on your machine.
 
 ## development
 
-### Rust stream decoder
+### Rust core
 
-Ollama chat streams are decoded in Rust through WebAssembly. The decoder preserves text spacing and handles thinking tags across fragments. Invalid records and responses that end before a completion record report an error. Each stream record is limited to 256 KiB.
+The Rust core runs through WebAssembly. It decodes Ollama chat streams while preserving text spacing and handling thinking tags across fragments. Invalid records and responses that end before a completion record report an error. Each stream record is limited to 256 KiB.
 
-Install Rust and the matching binding generator before building the extension. The decoder has been checked with Rust 1.98.1.
+Retrieval text chunking also runs in the Rust core. It keeps the existing email, article and PDF window sizes and overlap. Offsets count UTF16 units in normalized text, and chunks keep Unicode characters intact at their boundaries.
+
+Install Rust and the matching binding generator before building the extension. The repository pins Rust 1.98.1.
 
 ```sh
 rustup target add wasm32-unknown-unknown
@@ -60,12 +62,12 @@ cargo install wasm-bindgen-cli --version 0.2.128 --locked
 npm ci
 ```
 
-The development server and the main and content builds prepare the Rust bindings automatically. After editing Rust during a development session, run `npm run build:rust` again. Generated bindings and Cargo build output are local build products.
+The development server and the main and content builds prepare the Rust bindings automatically. After editing Rust during a development session, run `npm run build:rust` again and reload the extension or development page. Generated bindings and Cargo build output are local build products.
 
 ```sh
 make rust
 make check-rust
-cargo test --locked --manifest-path crates/metldr-stream/Cargo.toml
+cargo test --locked --manifest-path crates/metldr-core/Cargo.toml
 ```
 
 ### commands

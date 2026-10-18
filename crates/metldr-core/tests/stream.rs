@@ -1,4 +1,4 @@
-use metldr_stream::Decoder;
+use metldr_core::Decoder;
 
 #[test]
 fn decodes_bytewise_utf8_and_split_thinking_tags() {
