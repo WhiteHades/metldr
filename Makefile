@@ -1,4 +1,4 @@
-.PHONY: rust check-rust check-codex check-pi check-opencode check-browser-tools check-responses
+.PHONY: rust check-rust check-codex check-pi check-opencode check-browser-tools check-responses check-google
 
 rust:
 	npm run build:rust
@@ -20,3 +20,6 @@ check-browser-tools:
 
 check-responses:
 	cargo test --locked --manifest-path crates/metldr-responses/Cargo.toml
+
+check-google:
+	cargo test --locked --manifest-path crates/metldr-google-interactions/Cargo.toml

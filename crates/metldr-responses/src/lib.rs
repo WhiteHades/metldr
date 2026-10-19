@@ -7,6 +7,7 @@ mod sse;
 mod stream;
 
 pub use client::Client;
+pub use metldr_browser_tools::Invocation;
 use serde_json::{Value, json};
 use std::sync::atomic::AtomicBool;
 
@@ -18,12 +19,6 @@ pub struct Prompt<'a> {
     pub title: &'a str,
     pub url: &'a str,
     pub text: &'a str,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct Invocation {
-    pub id: String,
-    pub call: metldr_browser_tools::Call,
 }
 
 pub struct Conversation {

@@ -22,6 +22,12 @@ pub enum Call {
     Change { handle: String, value: String },
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct Invocation {
+    pub id: String,
+    pub call: Call,
+}
+
 pub fn definitions() -> [Definition; 3] {
     [
         Definition {
