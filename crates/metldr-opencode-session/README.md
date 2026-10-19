@@ -4,6 +4,8 @@ The Rust crate runs an installed OpenCode executable with `acp` over stdio. It i
 
 The adapter supports new sessions, saved session resume, streamed updates, native permission requests and cancellation. It uses ACP protocol 1, verified with OpenCode 2.0.32 on Linux through a controlled model provider. Native Windows, macOS and live provider behavior still need verification.
 
+HTTP MCP attachment is verified across process restart with an owned Rust server, including authenticated requests, native tool execution and permission replies. Stdio declarations have source and boundary checks; installed stdio server execution remains unverified.
+
 ```no_run
 use metldr_opencode_session::{Event, OpenCodeSession, Session};
 use std::path::Path;
@@ -15,6 +17,7 @@ async fn main() -> metldr_opencode_session::Result<()> {
         Path::new("/absolute/path/to/opencode"),
         &workspace,
         Session::New,
+        &[],
     ).await?;
 
     session.prompt("Describe this workspace.").await?;
@@ -37,7 +40,7 @@ async fn main() -> metldr_opencode_session::Result<()> {
 }
 ```
 
-Save the identity from `id()` before sending a prompt. Resume it with `Session::Resume` and `SessionId::saved` in the same workspace. Resume attaches the stored session without replaying its earlier messages or sending a prompt. The adapter declares no additional MCP servers.
+Save the identity from `id()` before sending a prompt. Resume it with `Session::Resume` and `SessionId::saved` in the same workspace. Resume attaches the stored session without replaying its earlier messages or sending a prompt. Supply trusted `McpServer` declarations as the fourth argument, including again on resume. An empty list adds no MCP servers. HTTP headers and stdio environment values can contain credentials, so keep declarations in the native owner and out of page contexts and logs. OpenCode retains responsibility for connecting these servers and applying its native tool permissions.
 
 `Event::Update` carries the native session update. The caller renders its text, tool status and configuration updates. A permission request exposes the native tool details and offered choices through `details()`. Pass an offered option ID to `reply_permission`, or `None` to cancel the request. The example cancels every request. Permission tokens belong to their connection and request, including when a native child task asks after a parent reply finishes. Invalid choices can be corrected, and answered tokens cannot be reused.
 

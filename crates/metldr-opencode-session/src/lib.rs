@@ -1,8 +1,10 @@
 #![doc = include_str!("../README.md")]
 
+mod mcp;
 mod permission;
 mod rpc;
 
+pub use mcp::McpServer;
 pub use permission::Permission;
 pub use rpc::ProcessExit;
 use rpc::Rpc;
@@ -55,7 +57,13 @@ pub struct OpenCodeSession {
 }
 
 impl OpenCodeSession {
-    pub async fn open(executable: &Path, workspace: &Path, session: Session) -> Result<Self> {
+    pub async fn open(
+        executable: &Path,
+        workspace: &Path,
+        session: Session,
+        servers: &[McpServer],
+    ) -> Result<Self> {
+        let servers = mcp::declarations(servers)?;
         let cwd = workspace
             .to_str()
             .ok_or_else(|| invalid("OpenCode workspace must be UTF8"))?;
@@ -73,7 +81,7 @@ impl OpenCodeSession {
             }
             let attached = match &session {
                 Session::New => {
-                    rpc.call("session/new", json!({"cwd":cwd,"mcpServers":[]}))
+                    rpc.call("session/new", json!({"cwd":cwd,"mcpServers":servers}))
                         .await?
                 }
                 Session::Resume(id) => {
@@ -82,7 +90,7 @@ impl OpenCodeSession {
                     }
                     rpc.call(
                         "session/resume",
-                        json!({"cwd":cwd,"sessionId":id.as_str(),"mcpServers":[]}),
+                        json!({"cwd":cwd,"sessionId":id.as_str(),"mcpServers":servers}),
                     )
                     .await?
                 }
