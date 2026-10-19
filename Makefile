@@ -1,4 +1,4 @@
-.PHONY: rust check-rust check-codex check-pi check-browser-tools
+.PHONY: rust check-rust check-codex check-pi check-opencode check-browser-tools
 
 rust:
 	npm run build:rust
@@ -11,6 +11,9 @@ check-codex:
 
 check-pi:
 	cargo test --locked --manifest-path crates/metldr-pi-session/Cargo.toml
+
+check-opencode:
+	cargo test --locked --manifest-path crates/metldr-opencode-session/Cargo.toml
 
 check-browser-tools:
 	cargo test --locked --manifest-path crates/metldr-browser-tools/Cargo.toml
