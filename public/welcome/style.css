@@ -71,7 +71,7 @@
 }
 :root[data-theme="light"] { color-scheme: light; }
 *, *::before, *::after { box-sizing: border-box; min-inline-size: 0; }
-body { margin: 0; min-block-size: 100svh; font-size: var(--step-0); }
+body { margin: 0; min-block-size: 100svh; font-family: inherit; font-size: var(--step-0); }
 button, a { touch-action: manipulation; }
 [hidden] { display: none !important; }
 button { font: inherit; cursor: pointer; color: inherit; user-select: none; }
