@@ -24,6 +24,9 @@ unlocked, persistent default collection. Missing or locked storage returns
 an error. Windows uses Credential Manager. macOS uses Keychain.
 The Windows and macOS backends still need runtime verification on those systems.
 
+From the repository root, run `make check-credentials` for the ordinary checks.
+Cargo remains available directly:
+
 ```sh
 cargo fmt --manifest-path crates/metldr-native-credentials/Cargo.toml -- --check
 cargo test --offline --locked --manifest-path crates/metldr-native-credentials/Cargo.toml
