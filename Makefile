@@ -1,4 +1,4 @@
-.PHONY: rust check-rust check-codex
+.PHONY: rust check-rust check-codex check-pi
 
 rust:
 	npm run build:rust
@@ -8,3 +8,6 @@ check-rust:
 
 check-codex:
 	cargo test --locked --manifest-path crates/metldr-codex-session/Cargo.toml
+
+check-pi:
+	cargo test --locked --manifest-path crates/metldr-pi-session/Cargo.toml
