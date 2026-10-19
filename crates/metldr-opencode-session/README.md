@@ -40,6 +40,8 @@ async fn main() -> metldr_opencode_session::Result<()> {
 }
 ```
 
+Prompts accept up to 128 KiB of UTF8 text, including the complete supplied context. Oversized prompts return an error without truncation.
+
 Save the identity from `id()` before sending a prompt. Resume it with `Session::Resume` and `SessionId::saved` in the same workspace. Resume attaches the stored session without replaying its earlier messages or sending a prompt. Supply trusted `McpServer` declarations as the fourth argument, including again on resume. An empty list adds no MCP servers. HTTP headers and stdio environment values can contain credentials, so keep declarations in the native owner and out of page contexts and logs. OpenCode retains responsibility for connecting these servers and applying its native tool permissions.
 
 `Event::Update` carries the native session update. The caller renders its text, tool status and configuration updates. A permission request exposes the native tool details and offered choices through `details()`. Pass an offered option ID to `reply_permission`, or `None` to cancel the request. The example cancels every request. Permission tokens belong to their connection and request, including when a native child task asks after a parent reply finishes. Invalid choices can be corrected, and answered tokens cannot be reused.

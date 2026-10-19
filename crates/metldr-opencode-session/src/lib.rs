@@ -146,19 +146,11 @@ impl OpenCodeSession {
     }
 
     pub async fn prompt(&mut self, text: &str) -> Result<()> {
-        if self.active.is_some() || text.trim().is_empty() || text.len() > 8192 {
-            return Err(invalid(
-                "OpenCode prompt is empty, oversized or already active",
-            ));
+        if self.active.is_some() {
+            return Err(invalid("OpenCode prompt is already active"));
         }
-        let id = self
-            .rpc
-            .begin(
-                "session/prompt",
-                json!({"sessionId":self.session.as_str(),
-            "prompt":[{"type":"text","text":text}]}),
-            )
-            .await?;
+        let params = prompt_params(self.session.as_str(), text)?;
+        let id = self.rpc.begin("session/prompt", params).await?;
         self.active = Some(id);
         Ok(())
     }
@@ -270,5 +262,28 @@ impl OpenCodeSession {
         let exit = self.rpc.close().await?;
         result?;
         Ok(exit)
+    }
+}
+
+fn prompt_params(session: &str, text: &str) -> Result<Value> {
+    if text.trim().is_empty() || text.len() > 128 * 1024 {
+        return Err(invalid("OpenCode prompt is empty or exceeds 128 KiB"));
+    }
+    Ok(json!({"sessionId":session,"prompt":[{"type":"text","text":text}]}))
+}
+
+#[cfg(test)]
+mod prompt_tests {
+    use super::*;
+
+    #[test]
+    fn complete_context_fits_the_prompt_and_rpc_frame_bounds() {
+        let text = "\0".repeat(128 * 1024);
+        let params = prompt_params("ses_owned", &text).unwrap();
+        assert_eq!(params["prompt"][0]["text"], text);
+        assert_eq!(params["sessionId"], "ses_owned");
+        assert!(serde_json::to_vec(&params).unwrap().len() < 1024 * 1024 - 256);
+        assert!(prompt_params("ses_owned", &(text + "a")).is_err());
+        assert!(prompt_params("ses_owned", " \n").is_err());
     }
 }
