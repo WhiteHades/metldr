@@ -1,0 +1,24 @@
+# Browser tool contract
+
+This Rust crate defines the shared tools for observing a page, proposing navigation and proposing a text field change. API providers and installed agents can use the same definitions and argument decoder.
+
+```rust
+use metldr_browser_tools::{Call, decode_call};
+use serde_json::json;
+
+let call = decode_call(
+    "set_field_value",
+    json!({"handle":"field_1","value":"Report ready"}),
+)?;
+assert_eq!(call, Call::Change {
+    handle: "field_1".into(),
+    value: "Report ready".into(),
+});
+# Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+```
+
+The decoder rejects unknown tools, extra arguments and handles outside the supported identifier format. Handles contain 1 to 64 ASCII letters, digits, underscores or hyphens. Field values have a limit of 1024 UTF8 bytes. Navigation URLs contain 1 to 2048 UTF8 bytes and cannot contain control characters. `definitions()` provides JSON schemas and tool descriptions. `BROWSER_POLICY` marks page text and labels as untrusted data.
+
+Decoded calls do not grant browser access or approve effects. The caller must validate destination URLs against its navigation policy, resolve handles against the latest observation, bind actions to the current document and obtain approval before dispatch. The crate does not execute browser commands.
+
+Run `make check-browser-tools` from the repository root.
