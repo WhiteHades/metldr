@@ -56,6 +56,8 @@ Retrieval text chunking also runs in the Rust core. It keeps the existing email,
 
 The welcome page runs in Rust through WebAssembly, with static Help available while it loads. It checks Chrome AI or Ollama only when requested, saves setup before closing, and shows the extension's exact origin in Ollama setup commands. Its former Vue entry is removed. The side panel still uses Vue while its Rust replacement is developed.
 
+The [Rust conversation model](crates/metldr-conversation/README.md) preserves assistant message identities and observed tool order. It validates saved content and text projections, with explicit states for streaming, final snapshots and interruption. Run `make check-conversation` to check it.
+
 Install Rust and the matching binding generator before building the extension. The repository pins Rust 1.99.1.
 
 ```sh
