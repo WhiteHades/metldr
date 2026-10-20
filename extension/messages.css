@@ -1,0 +1,70 @@
+/* ChatExperience message structure, with actual run text and retained nodes. */
+#history {
+  --message-ink: light-dark(oklch(0.247 0.006 258.361), oklch(0.964 0.002 247.839));
+  --message-ink-2: light-dark(oklch(0.506 0.01 264.477), oklch(0.731 0.008 260.731));
+  --message-ink-3: light-dark(oklch(0.695 0.009 264.505), oklch(0.541 0.01 264.484));
+  --message-surface: light-dark(oklch(1 0 none), oklch(0.26 0.006 271.191));
+  --message-field: light-dark(oklch(0.961 0.001 286.375), oklch(0.293 0.006 271.223));
+  --message-line: light-dark(oklch(0.946 0.003 264.542), oklch(0.308 0.006 258.354));
+  gap: 48px;
+  color: var(--message-ink);
+  font-family: Inter, "Inter Fallback", ui-sans-serif, system-ui, sans-serif;
+  font-feature-settings: "cv11", "ss01";
+  font-size: calc(var(--text-body) * 0.875);
+  letter-spacing: -0.01em;
+  line-height: 1.5;
+}
+#history .run { display: flex; flex-direction: column; gap: 32px; }
+#history [data-part="conversation"] { display: flex; flex-direction: column; gap: 32px; }
+#history .run > [data-part="question"] {
+  align-self: end;
+  inline-size: fit-content;
+  max-inline-size: calc(100% - 40px);
+  padding-block: 8px;
+  padding-inline: 14px;
+  border-radius: 12px;
+  background: var(--message-field);
+  color: var(--message-ink);
+  box-shadow: 0 0 0 1px var(--message-line);
+  font-size: calc(13em / 14);
+  line-height: 1.625;
+  white-space: pre-wrap;
+}
+#history .assistant-message { display: flex; align-items: start; gap: 12px; }
+#history .message-spark {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  inline-size: 2em;
+  block-size: 2em;
+  margin-block-start: 2px;
+  border-radius: 9px;
+  background: var(--message-ink);
+  color: var(--message-surface);
+  box-shadow: 0 0 0 1px var(--message-line);
+}
+#history .message-spark svg { display: block; flex: none; inline-size: calc(13em / 14); block-size: calc(13em / 14); }
+#history .message-body { display: flex; flex: 1; flex-direction: column; min-inline-size: 0; gap: 8px; }
+#history :is([data-part="heading"], [data-part="message-label"]) {
+  color: var(--message-ink-3);
+  font-size: calc(11em / 14);
+  font-weight: 500;
+  letter-spacing: 0.09em;
+  line-height: 1.5;
+  text-transform: uppercase;
+  text-wrap: wrap;
+}
+#history [data-part="route"] { text-transform: none; }
+#history [data-part="output"] { max-inline-size: 620px; color: var(--message-ink); font-size: inherit; line-height: 1.65; white-space: pre-wrap; }
+#history [data-part="error"] { color: var(--accent); white-space: pre-wrap; }
+#history [data-activity] { color: var(--message-ink-2); font-size: calc(12em / 14); }
+#history .result-actions { color: var(--message-ink-2); }
+#history [data-part="copy-status"] { color: inherit; }
+@media (prefers-reduced-motion: no-preference) {
+  #history .assistant-message { animation: message-enter 450ms var(--ease-out) both; }
+}
+@keyframes message-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}

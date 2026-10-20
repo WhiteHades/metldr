@@ -1,0 +1,286 @@
+/* PromptBar tall mode. All overrides stay inside the composer field. */
+#composer {
+  --composer-surface: oklch(0.26 0.006 271.191);
+  --composer-hover: oklch(0.289 0.006 271.22);
+  --composer-ink: oklch(0.964 0.002 247.839);
+  --composer-ink-2: oklch(0.731 0.008 260.731);
+  --composer-ink-3: oklch(0.541 0.01 264.484);
+  --composer-line: oklch(0.308 0.006 258.354);
+  --composer-line-strong: oklch(0.356 0.007 264.474);
+  --composer-accent: oklch(0.68 0.173 253.301);
+  --composer-shadow-card: 0 0 0 1px oklch(1 0 0 / 0.11), 0 1px 2px oklch(0 0 0 / 0.2), 0 2px 6px oklch(0 0 0 / 0.2);
+  --composer-shadow-raised: 0 0 0 1px oklch(1 0 0 / 0.13), 0 2px 10px oklch(0 0 0 / 0.22);
+  color: var(--composer-ink);
+  font-family: Inter, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+html[data-theme="light"] #composer {
+  --composer-surface: oklch(1 0 0);
+  --composer-hover: oklch(0.97 0.002 247.839);
+  --composer-ink: oklch(0.247 0.006 258.361);
+  --composer-ink-2: oklch(0.506 0.01 264.477);
+  --composer-ink-3: oklch(0.695 0.009 264.505);
+  --composer-line: oklch(0.946 0.003 264.542);
+  --composer-line-strong: oklch(0.912 0.005 258.326);
+  --composer-accent: oklch(0.626 0.205 254.947);
+  --composer-shadow-card: 0 0 0 1px var(--composer-line), 0 18px 47px 0 oklch(0 0 none / 3.137255%), 0 7.5px 19px 0 oklch(0 0 none / 1.960784%), 0 4px 10.5px 0 oklch(0 0 none / 1.960784%), 0 2.3px 5.8px 0 oklch(0 0 none / 1.176471%), 0 1.2px 3.1px 0 oklch(0 0 none / 1.176471%), 0 0.5px 1.3px 0 oklch(0 0 none / 1.176471%);
+  --composer-shadow-raised: 0 0 0 1px var(--composer-line), 0 17.54px 23.39px 0 oklch(0 0 none / 3.921569%), 0 9.4px 12.5px 0 oklch(0 0 none / 3.137255%), 0 5.25px 7px 0 oklch(0 0 none / 1.960784%), 0 2.79px 3.72px -2px oklch(0 0 none / 1.176471%), 0 1.16px 1.5px 0 oklch(0 0 none / 1.176471%);
+}
+
+#composer [hidden],
+#composer #composer-controls > button[hidden] { display: none; }
+#composer .composer-anchor { position: relative; inline-size: 100%; }
+#composer #composer-frame {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: clip;
+  padding: 14px;
+  border: 1px solid var(--composer-line);
+  border-radius: 22px;
+  background: var(--composer-surface);
+  box-shadow: var(--composer-shadow-card);
+  transition: border-color 150ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+#composer #composer-frame:focus-within { border-color: var(--composer-line-strong); }
+#composer #composer-controls {
+  display: grid;
+  grid-template-columns: 28px auto minmax(0, 1fr) 28px 28px;
+  align-items: end;
+  column-gap: 4px;
+  row-gap: 6px;
+}
+
+/* Override the shell's generic 44px button and textarea rules for this surface. */
+#composer #composer-controls > button {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  justify-self: start;
+  min-inline-size: 0;
+  min-block-size: 0;
+  inline-size: 28px;
+  block-size: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--composer-ink-3);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: color 150ms cubic-bezier(0.23, 1, 0.32, 1), background-color 150ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+#composer #composer-controls > button:focus-visible { outline: 2px solid var(--composer-accent); outline-offset: 2px; }
+/* Match the reference input; its frame supplies focus styling. */
+#composer #question:focus-visible { outline: 2px solid transparent; outline-offset: 2px; }
+@media (forced-colors: active) {
+  #composer #composer-frame:has(#question:focus-visible) { outline: 2px solid CanvasText; outline-offset: 2px; }
+}
+#composer #composer-controls > button:disabled { cursor: default; }
+#composer #composer-controls > button svg {
+  display: block;
+  flex: none;
+  inline-size: 16px;
+  block-size: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+#composer #question {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  inline-size: 100%;
+  min-inline-size: 0;
+  min-block-size: 68px;
+  max-block-size: 100px;
+  padding: 8px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--composer-ink);
+  font: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  field-sizing: content;
+  overflow-wrap: anywhere;
+  resize: none;
+  text-wrap: stable;
+}
+#composer #question::placeholder { color: var(--composer-ink-3); opacity: 1; }
+#composer #composer-add { grid-column: 1; grid-row: 2; }
+#composer #composer-add[aria-expanded="true"] { background: var(--composer-hover); color: var(--composer-ink); }
+#composer #composer-controls > button#composer-model {
+  grid-column: 2;
+  grid-row: 2;
+  inline-size: auto;
+  max-inline-size: min(160px, 42vw);
+  min-inline-size: 0;
+  justify-content: flex-start;
+  gap: 4px;
+  padding-inline: 6px;
+  color: var(--composer-ink-2);
+}
+#composer #composer-model-label {
+  display: block;
+  min-inline-size: 0;
+  max-inline-size: min(136px, 36vw);
+  overflow: clip;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#composer #composer-model svg { inline-size: 11px; block-size: 11px; stroke-width: 2.4; }
+#composer #composer-dictate { grid-column: 4; grid-row: 2; }
+#composer #composer-dictate svg { inline-size: 15px; block-size: 15px; }
+#composer #composer-dictate:disabled { color: var(--composer-ink-3); opacity: 0.48; }
+#composer #composer-controls > button[data-action="ask"],
+#composer #composer-controls > button[data-action="stop"] {
+  grid-column: 5;
+  grid-row: 2;
+  background: var(--composer-ink);
+  color: var(--composer-surface);
+}
+#composer #composer-controls > button[data-action="ask"]:disabled {
+  background: var(--composer-line-strong);
+  color: var(--composer-ink-2);
+}
+#composer #composer-controls > button[data-action="ask"] svg,
+#composer #composer-controls > button[data-action="stop"] svg { inline-size: 16px; block-size: 16px; stroke-width: 2.4; }
+#composer [data-action="stop"] svg rect { fill: currentColor; stroke: none; }
+
+#composer .composer-menu,
+#composer .composer-model-menu {
+  position: absolute;
+  z-index: 10;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--composer-surface);
+  box-shadow: var(--composer-shadow-raised);
+}
+#composer .composer-menu { inset-inline: 0; inset-block-end: calc(100% + 8px); }
+#composer .composer-menu { transform-origin: bottom center; }
+#composer .composer-model-menu {
+  inset-inline-start: var(--menu-inline, 0px);
+  inset-block-end: var(--menu-block, calc(100% + 8px));
+  inline-size: 176px;
+  max-block-size: min(384px, var(--menu-max-block, calc(100dvh - 2rem)));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  transform-origin: bottom left;
+}
+#composer .composer-menu-highlight,
+#composer .composer-model-highlight {
+  position: absolute;
+  inset-inline: 4px;
+  inset-block-start: var(--row-block, 0px);
+  block-size: var(--row-size, 0px);
+  border-radius: 6px;
+  background: var(--composer-hover);
+  opacity: var(--row-opacity, 0);
+  pointer-events: none;
+  transition: opacity 150ms ease;
+}
+#composer #composer-menu-rows > button,
+#composer #composer-model-rows > button {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  inline-size: 100%;
+  min-inline-size: 0;
+  min-block-size: 36px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--composer-ink);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: start;
+  cursor: pointer;
+}
+#composer #composer-model-rows > button { min-block-size: 30px; gap: 8px; }
+#composer .composer-row-name {
+  flex: none;
+  max-inline-size: 55%;
+  overflow: clip;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--composer-ink);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+#composer .composer-row-description {
+  flex: 1;
+  min-inline-size: 0;
+  overflow: clip;
+  color: var(--composer-ink-3);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#composer .composer-model-name {
+  flex: 1;
+  min-inline-size: 0;
+  overflow: clip;
+  color: var(--composer-ink);
+  font-size: 12.5px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#composer .composer-model-tag { flex: none; color: var(--composer-ink-3); font-size: 11px; }
+#composer .composer-model-check { display: flex; flex: none; align-items: center; justify-content: center; color: var(--composer-ink); }
+#composer .composer-model-check svg { inline-size: 13px; block-size: 13px; stroke: currentColor; stroke-width: 2.5; }
+#composer #composer-menu-footer {
+  margin-block-start: 4px;
+  padding: 6px 8px 4px;
+  border-block-start: 1px solid var(--composer-line);
+  color: var(--composer-ink-3);
+  font-size: 11px;
+}
+#composer .composer-visually-hidden {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: clip;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+#composer .composer-native-field { display: none; }
+
+@media (hover: hover) and (pointer: fine) {
+  #composer #composer-controls > button:not(:disabled):hover,
+  #composer #composer-menu-rows > button:hover,
+  #composer #composer-model-rows > button:hover {
+    background: var(--composer-hover);
+    color: var(--composer-ink);
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  #composer #composer-controls > button {
+    transition: color 150ms cubic-bezier(0.23, 1, 0.32, 1), background-color 150ms cubic-bezier(0.23, 1, 0.32, 1), transform 150ms cubic-bezier(0.23, 1, 0.32, 1);
+  }
+  #composer #composer-controls > button:active:not(:disabled) { transform: scale(0.94); }
+  #composer .composer-menu,
+  #composer .composer-model-menu { animation: composer-pop-in 180ms cubic-bezier(0.23, 1, 0.32, 1) both; }
+  #composer .composer-menu-highlight,
+  #composer .composer-model-highlight { transition: inset-block-start 220ms cubic-bezier(0.23, 1, 0.32, 1), block-size 220ms cubic-bezier(0.23, 1, 0.32, 1), opacity 150ms ease; }
+  @keyframes composer-pop-in {
+    from { opacity: 0; transform: scale(0.95); }
+    to { opacity: 1; transform: scale(1); }
+  }
+}

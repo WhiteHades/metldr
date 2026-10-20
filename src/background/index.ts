@@ -1,4 +1,5 @@
 import '@inboxsdk/core/background';
+import '../../extension/background.js';
 import { BackgroundBootstrap } from '../services/BackgroundBootstrap';
 
 chrome.runtime.onInstalled.addListener((details) => {

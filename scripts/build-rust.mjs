@@ -6,6 +6,7 @@ const repoRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const crates = [
   { name: 'metldr-core', module: 'metldr_core', pkg: 'crates/metldr-core/pkg' },
   { name: 'metldr-welcome', module: 'welcome_runtime', pkg: 'public/welcome/pkg' },
+  { name: 'metldr-panel', module: 'metldr_panel', pkg: 'crates/metldr-panel/pkg' },
 ];
 const isCheck = process.argv.includes('--check');
 const isWindows = process.platform === 'win32';
@@ -67,4 +68,11 @@ for (const crate of crates) {
 run('cargo', [
   isCheck ? 'check' : 'build', '--locked', '--release',
   '--manifest-path', 'crates/metldr-welcome/Cargo.toml', '--bin', 'welcome-guide',
+  '--target-dir', 'crates/metldr-welcome/target',
 ], 'welcome generator');
+
+run('cargo', [
+  isCheck ? 'check' : 'run', '--locked', '--release',
+  '--manifest-path', 'crates/metldr-extension-assets/Cargo.toml',
+  '--target-dir', 'crates/metldr-extension-assets/target',
+], 'panel assets');

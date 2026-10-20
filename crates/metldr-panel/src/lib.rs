@@ -57,7 +57,6 @@ struct Panel {
 pub fn accept_panel(port: JsValue) {
     let result = (|| -> Result<(), JsValue> {
         if string_property(&port, "name")? != PANEL_PORT {
-            let _ = call(&port, "disconnect", &[]);
             return Ok(());
         }
         let runtime = chrome_api("runtime")?;

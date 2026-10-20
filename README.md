@@ -11,7 +11,7 @@
   </a>
 </p>
 
-> **metldr** is a privacy first, local ai powered chrome extension designed to enhance productivity by integrating summarisation, smart replies, and dictionary lookups directly into your browser.
+> **metldr** is a Chrome extension for page and email summaries, replies, PDF questions, dictionary lookups and browser tasks. Use local models, your configured provider, or supported installed agents.
 
 ## install
 
@@ -23,7 +23,7 @@
 - **page intelligence**: detects article content, provides bulleted summaries, and allows you to chat with any webpage.
 - **pdf intelligence**: full featured pdf reader with summarisation, q&a (rag), and local file support.
 - **instant definitions**: three tier dictionary lookup (local > api > llm) for instant word definitions.
-- **privacy first**: runs entirely on device using chrome built in ai (gemini nano) or local ollama models.
+- **model choice**: use Chrome AI or Ollama in the existing page tools, or configure a provider or installed agent in the Rust browser panel.
 
 ## usage
 
@@ -54,13 +54,13 @@ The Rust core runs through WebAssembly. It decodes Ollama chat streams while pre
 
 Retrieval text chunking also runs in the Rust core. It keeps the existing email, article and PDF window sizes and overlap. Offsets count UTF16 units in normalized text, and chunks keep Unicode characters intact at their boundaries.
 
-The welcome page runs in Rust through WebAssembly, with static Help available while it loads. It checks Chrome AI or Ollama only when requested, saves setup before closing, and shows the extension's exact origin in Ollama setup commands. Its former Vue entry is removed. The side panel still uses Vue while its Rust replacement is developed.
+The welcome page runs in Rust through WebAssembly, with static Help available while it loads. It checks Chrome AI or Ollama only when requested, saves setup before closing, and shows the extension's exact origin in Ollama setup commands. Its former Vue entry is removed. The existing page tools still use Vue. The Rust browser agent is also included in the same extension.
 
 The [Rust conversation model](crates/metldr-conversation/README.md) preserves assistant message identities and observed tool order. It validates saved content and text projections, with explicit states for streaming, final snapshots and interruption. Run `make check-conversation` to check it.
 
 The [Rust panel module](crates/metldr-panel/README.md) supplies the replacement panel logic and background message handling. Run `make check-panel` for its checks and `make panel-wasm` for its generated browser module.
 
-The [Rust companion](crates/metldr-companion/README.md) runs provider requests, installed agents and browser tasks through native messaging. Run `make check-companion` for its checks and `make companion` for the executable. The default extension frontend and complete extension packaging are still being migrated.
+The [Rust companion](crates/metldr-companion/README.md) runs provider requests, installed agents and browser tasks through native messaging. Run `make check-companion` for its checks and `make companion` for the executable. Register the companion separately for your loaded extension ID before using the Rust agent. Building the extension does not install a native host.
 
 Install Rust and the matching binding generator before building the extension. The repository pins Rust 1.99.1.
 
@@ -70,11 +70,13 @@ cargo install wasm-bindgen-cli --version 0.2.128 --locked
 npm ci
 ```
 
-Use the mise managed Portless CLI for local previews. `npm run dev` builds Rust and starts Portless with the project name `metldr`. Open the URL it prints, then add `/welcome.html` for welcome or `/index.html` for the panel layout. Chrome extension APIs require the loaded extension, so a web preview does not establish working AI or browser controls.
+Use the mise managed Portless CLI for local previews. `npm run dev` builds Rust and starts Portless with the project name `metldr`. Open the URL it prints, then add `/welcome.html` for welcome, `/panel.html` for the Rust agent layout or `/index.html` for the current page tools. Chrome extension APIs require the loaded extension, so a web preview does not establish working AI or browser controls.
 
-To check the extension, build it and load the `dist` directory with Load unpacked at `chrome://extensions`. The toolbar icon opens the side panel. Open welcome from the panel, or copy the extension ID from Chrome's extensions page and open `chrome-extension://YOUR_EXTENSION_ID/welcome.html`. After another build, reload the extension from Chrome's extensions page before checking changes.
+To check the extension, build it and load the `dist` directory with Load unpacked at `chrome://extensions`. The toolbar icon initially opens the current page tools. Press Alt+Shift+M for the Rust browser agent or Ctrl+Shift+Y for the page tools. Change shortcuts at `chrome://extensions/shortcuts` if Chrome reports a conflict. Open welcome from the panel, or copy the extension ID from Chrome's extensions page and open `chrome-extension://YOUR_EXTENSION_ID/welcome.html`. After another build, reload the extension from Chrome's extensions page before checking changes.
 
-The development server and the main and content builds prepare the Rust bindings and welcome generator automatically. After editing Rust during a development session, run `make rust` again. The open welcome web preview reloads when its styles or compiled Rust assets change. An unpacked extension still needs a reload from Chrome's extensions page after rebuilding.
+The local embedding model loads when a retrieval request needs embeddings. Opening the browser agent does not prewarm that model.
+
+The development server and the main and content builds prepare the Rust core, welcome and panel bindings, welcome generator and pinned panel assets automatically. After editing Rust during a development session, run `make rust` again. The open welcome web preview reloads when its styles or compiled Rust assets change. An unpacked extension still needs a reload from Chrome's extensions page after rebuilding.
 
 The welcome HTML template is rendered by the Rust generator in both Vite development and production builds. Generated bindings and Cargo build output are local build products. Private working folders are excluded from development page reloads and file serving. Tailwind scans the application source directory.
 
@@ -91,16 +93,13 @@ cargo test --locked --manifest-path crates/metldr-welcome/Cargo.toml
 | :------------------------ | :----------------------------------------- |
 | `npm run dev`             | start development server (hmr for ui)      |
 | `npm run build`           | build all targets (main, content, sandbox) |
-| `npm run type-check`      | run typescript validation                  |
 | `npm run download:models` | download required ai models to public/     |
 
 ## privacy
 
-metldr is designed with a strict privacy first architecture:
+Local models process content on your machine. Provider and installed agent requests can send selected page content and instructions to the configured provider. The Rust companion keeps provider credentials outside page scripts and retains local run state for recovery. Review the selected destination before sending content. External providers can charge for their service.
 
-- **local execution**: all ai processing happens on your device (via chrome ai or localhost ollama).
-- **no data collection**: we do not collect, store, or transmit your emails, browsing history, or personal data.
-- **offline capable**: core features work without internet access.
+The extension does not require a MetLDR subscription. Local operation depends on the installed model, hardware and task. The build downloads dependencies and pinned assets when they are not already available.
 
 ---
 

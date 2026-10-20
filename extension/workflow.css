@@ -1,0 +1,287 @@
+/* Source tool rows and decision cards, projected from actual native state. */
+:is(#browser-actions, #opencode-permissions, .run-activity, .report-history, .tool-group, .tool-calls) {
+  --workflow-ink: light-dark(oklch(0.247 0.006 258.361), oklch(0.964 0.002 247.839));
+  --workflow-muted: light-dark(oklch(0.506 0.01 264.477), oklch(0.731 0.008 260.731));
+  --workflow-surface: light-dark(oklch(1 0 none), oklch(0.26 0.006 271.191));
+  --workflow-field: light-dark(oklch(0.961 0.001 286.375), oklch(0.293 0.006 271.223));
+  --workflow-hover: light-dark(oklch(0.933 0.003 247.86), oklch(0.318 0.007 274.747));
+  --workflow-line: light-dark(oklch(0.946 0.003 264.542), oklch(0.308 0.006 258.354));
+  --workflow-canvas: light-dark(oklch(0.961 0.002 247.84), oklch(0.231 0.004 264.487));
+  --workflow-ring: light-dark(var(--workflow-line), color-mix(in oklch, oklch(1 0 none) 11%, transparent));
+  --workflow-light-shadow: light-dark(oklch(0 0 none), transparent);
+  --workflow-dark-shadow: light-dark(transparent, oklch(0 0 none));
+  color: var(--workflow-ink);
+  font-family: Inter, "Inter Fallback", ui-sans-serif, system-ui, sans-serif;
+  font-size: calc(var(--text-body) * 0.875);
+  letter-spacing: -0.01em;
+  line-height: 1.5;
+}
+:is(#browser-actions, #browser-current, #browser-receipt-rows, #opencode-permissions):not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+:is(#browser-current, #opencode-permissions):empty { display: none; }
+:is(#browser-actions, #opencode-permissions) article {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-block: 12px;
+  padding-inline: 12px;
+  border-radius: 10px;
+  background: var(--workflow-surface);
+  box-shadow: 0 0 0 1px var(--workflow-ring),
+    0 18px 47px color-mix(in oklch, var(--workflow-light-shadow) 3.137255%, transparent),
+    0 7.5px 19px color-mix(in oklch, var(--workflow-light-shadow) 1.960784%, transparent),
+    0 4px 10.5px color-mix(in oklch, var(--workflow-light-shadow) 1.960784%, transparent),
+    0 2.3px 5.8px color-mix(in oklch, var(--workflow-light-shadow) 1.176471%, transparent),
+    0 1.2px 3.1px color-mix(in oklch, var(--workflow-light-shadow) 1.176471%, transparent),
+    0 0.5px 1.3px color-mix(in oklch, var(--workflow-light-shadow) 1.176471%, transparent),
+    0 1px 2px color-mix(in oklch, var(--workflow-dark-shadow) 20%, transparent),
+    0 2px 6px color-mix(in oklch, var(--workflow-dark-shadow) 20%, transparent);
+}
+:is(#browser-actions, #opencode-permissions) h2 {
+  font-size: inherit;
+  font-weight: 500;
+  text-wrap: wrap;
+}
+:is(#browser-actions, #opencode-permissions) :is(p, pre) {
+  overflow-wrap: break-word;
+  white-space: pre-wrap;
+}
+#opencode-permissions [data-part="input"] { font-size: inherit; }
+:is(#browser-actions, #opencode-permissions) strong { font-weight: 500; }
+:is(#browser-actions, #opencode-permissions) [data-part="controls"] {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: end;
+  gap: 6px;
+  padding-block-start: 10px;
+  border-block-start: 1px solid var(--workflow-line);
+}
+:is(#browser-actions, #opencode-permissions) button {
+  min-block-size: 44px;
+  padding-block: 9px;
+  padding-inline: 12px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--workflow-field);
+  color: var(--workflow-ink);
+  font-family: inherit;
+  font-size: calc(13em / 14);
+  font-weight: 500;
+  line-height: 1.3;
+  white-space: normal;
+  text-align: center;
+}
+#browser-actions [data-action="browser-approve"] {
+  background: var(--workflow-ink);
+  color: var(--workflow-canvas);
+  box-shadow: inset 0 1px 0 color-mix(in oklch, oklch(1 0 none) 14%, transparent);
+}
+:is(#browser-actions, #opencode-permissions) button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+:is(#browser-actions, #opencode-permissions) button:not(:disabled):active {
+  background: var(--workflow-hover);
+  color: var(--workflow-ink);
+}
+:is(#browser-actions, #opencode-permissions) button:focus-visible,
+:is(#browser-receipts, .run-activity, .report-history, .tool-group, .tool-call) > summary:focus-visible {
+  outline: 2px solid var(--workflow-ink);
+  outline-offset: 3px;
+}
+:is(#browser-receipts, .run-activity, .report-history) > summary {
+  position: relative;
+  inline-size: fit-content;
+  max-inline-size: 100%;
+  min-block-size: 0;
+  gap: 6px;
+  padding-block: 4px;
+  padding-inline: 6px;
+  border-radius: 8px;
+  color: var(--workflow-muted);
+  font-size: calc(12.5em / 14);
+  font-weight: 400;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+  list-style: none;
+  user-select: none;
+  transition: background-color 100ms var(--ease-out);
+}
+:is(#browser-receipts, .run-activity, .report-history, .tool-group, .tool-call) > summary::after {
+  content: "";
+  position: absolute;
+  inset-block: min(0px, (100% - 44px) / 2);
+  inset-inline: 0;
+  margin-inline: 0;
+}
+:is(#browser-receipts, .run-activity, .report-history, .tool-group, .tool-call) > summary svg {
+  display: block;
+  flex: none;
+  inline-size: 0.96em;
+  block-size: 0.96em;
+  rotate: -90deg;
+}
+:is(#browser-receipts, .run-activity, .report-history, .tool-group, .tool-call)[open] > summary svg { rotate: 0deg; }
+:is(#browser-receipts, .run-activity, .report-history, .tool-group, .tool-call) > summary:active { background: var(--workflow-hover); }
+#browser-receipt-rows { padding-block: 6px; padding-inline: 1px; }
+#history .run-activity [data-part="activity-rows"] { display: flex; flex-direction: column; gap: 4px; }
+#history .run-activity [data-part="activity-note"] {
+  padding-block: 6px;
+  color: var(--workflow-muted);
+  font-size: calc(12.5em / 14);
+}
+#history .run-activity [data-activity] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  min-block-size: 28px;
+  color: var(--workflow-ink);
+  font-size: calc(12.5em / 14);
+  line-height: 1.5;
+}
+#history [data-part="activity-tool"] { max-inline-size: 100%; overflow-wrap: anywhere; font-weight: 500; }
+#history [data-part="activity-phase"] {
+  padding-block: 2px;
+  padding-inline: 6px;
+  border-radius: 6px;
+  background: var(--workflow-field);
+  color: var(--workflow-muted);
+  box-shadow: 0 0 0 1px var(--workflow-line);
+  font-family: "JetBrains Mono", "JetBrains Mono Fallback", monospace;
+  font-size: calc(11.5em / 12.5);
+  line-height: 1.5;
+}
+#history .tool-calls:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-block: 4px 8px;
+}
+#history .tool-group[hidden] { display: none; }
+#history .tool-group > summary {
+  position: relative;
+  display: flex;
+  align-items: center;
+  inline-size: fit-content;
+  max-inline-size: 100%;
+  min-block-size: 24px;
+  gap: 6px;
+  padding-block: 2px;
+  padding-inline: 6px;
+  border-radius: 8px;
+  color: var(--workflow-muted);
+  font-size: calc(12.5em / 14);
+  font-weight: 400;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+  list-style: none;
+  user-select: none;
+  transition: background-color 100ms var(--ease-out);
+}
+#history .tool-group > summary::-webkit-details-marker { display: none; }
+#history .tool-group [data-part="tool-count"] { white-space: nowrap; }
+#history .tool-call > summary {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-block-size: 28px;
+  padding-block: 2px;
+  padding-inline: 6px;
+  border-radius: 8px;
+  color: var(--workflow-ink);
+  font-size: calc(12.5em / 14);
+  line-height: 1.5;
+  list-style: none;
+  user-select: none;
+}
+#history .tool-call > summary::-webkit-details-marker,
+#history .report-history > summary::-webkit-details-marker,
+#history .run-activity > summary::-webkit-details-marker { display: none; }
+#history .tool-call [data-part="tool-chevron"] { display: inline-flex; flex: none; }
+#history .tool-call [data-part="tool-chevron"] svg {
+  display: block;
+  inline-size: 0.96em;
+  block-size: 0.96em;
+  rotate: -90deg;
+}
+#history .tool-call[open] [data-part="tool-chevron"] svg { rotate: 0deg; }
+#history .tool-call [data-part="tool-name"] {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+  font-weight: 500;
+}
+#history .tool-call [data-part="tool-phase"] {
+  flex: 0 1 auto;
+  min-inline-size: 0;
+  max-inline-size: 55%;
+  margin-inline-start: auto;
+  padding-block: 2px;
+  padding-inline: 6px;
+  border-radius: 6px;
+  background: var(--workflow-field);
+  color: var(--workflow-muted);
+  box-shadow: 0 0 0 1px var(--workflow-line);
+  font-family: "JetBrains Mono", "JetBrains Mono Fallback", monospace;
+  font-size: calc(11.5em / 12.5);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+#history .tool-call [data-part="tool-body"] {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-block: 6px 10px;
+  margin-inline-start: 8px;
+  padding-inline: 14px 8px;
+  border-inline-start: 1px solid var(--workflow-line);
+}
+#history .tool-call [data-part="tool-body"] > * { margin-block: 0; }
+#history .tool-call [data-part="tool-title"] { font-weight: 500; }
+#history .tool-call [data-part="tool-id"] {
+  color: var(--workflow-muted);
+  font-family: "JetBrains Mono", "JetBrains Mono Fallback", monospace;
+  font-size: calc(11.5em / 12.5);
+  overflow-wrap: anywhere;
+}
+#history .tool-call section:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-inline-size: 0;
+}
+#history .tool-call section strong {
+  color: var(--workflow-muted);
+  font-size: calc(12.5em / 14);
+  font-weight: 500;
+}
+#history .tool-call pre {
+  max-inline-size: 100%;
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font-family: "JetBrains Mono", "JetBrains Mono Fallback", monospace;
+  font-size: calc(11.5em / 12.5);
+  line-height: 1.55;
+  user-select: text;
+}
+#history .tool-call [data-preview-incomplete] {
+  margin: 0;
+  color: var(--workflow-muted);
+  font-size: calc(12.5em / 14);
+}
+@media (hover: hover) and (pointer: fine) {
+  :is(#browser-actions, #opencode-permissions) button:not(:disabled):hover { background: var(--workflow-hover); color: var(--workflow-ink); }
+  :is(#browser-receipts, .run-activity, .report-history, .tool-group, .tool-call) > summary:hover { background: var(--workflow-hover); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  :is(#browser-receipts, .run-activity, .report-history, .tool-group, .tool-call)::details-content {
+    transition: block-size 300ms var(--ease-out), content-visibility 300ms allow-discrete;
+  }
+  :is(#browser-receipts, .run-activity, .report-history, .tool-group, .tool-call) > summary svg,
+  #history .tool-call [data-part="tool-chevron"] svg { transition: rotate 200ms var(--ease-out); }
+}

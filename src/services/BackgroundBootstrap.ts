@@ -62,10 +62,6 @@ export class BackgroundBootstrap {
       log.error('dictionary init failed', (err as Error).message)
     }
     
-    // preload embedding model on startup via offscreen document
-    // reduces first-indexing latency from ~150s to ~5s
-    this._preloadEmbeddingModel()
-    
     this.isInitialized = true
 
     // Listen for provider preference changes
@@ -804,12 +800,6 @@ export class BackgroundBootstrap {
     })()
   }
 
-  static _preloadEmbeddingModel(): void {
-    aiGateway.initializeLocalModels(['embed'])
-      .then(() => log.log('Embedding model preloaded'))
-      .catch(err => log.warn('Model preload failed', err.message))
-  }
-
   static _onPdfSummarize(msg: { type: string; url: string }, respond: ResponseCallback): void {
     (async () => {
       try {
@@ -881,7 +871,7 @@ export class BackgroundBootstrap {
     if (!windowId) {
       chrome.windows.getCurrent((win) => {
         if (win?.id) {
-          chrome.sidePanel.open({ windowId: win.id })
+          this._openPageTools(win.id)
             .then(() => {
               log.log('side panel opened (fallback)', msg.focus ? `focus: ${msg.focus}` : '')
               respond({ success: true })
@@ -897,7 +887,7 @@ export class BackgroundBootstrap {
       return
     }
     
-    chrome.sidePanel.open({ windowId })
+    this._openPageTools(windowId, sender.tab?.id)
       .then(() => {
         log.log('side panel opened', msg.focus ? `focus: ${msg.focus}` : '')
         respond({ success: true })
@@ -918,7 +908,7 @@ export class BackgroundBootstrap {
     if (!windowId) {
       chrome.windows.getCurrent((win) => {
         if (win?.id) {
-          chrome.sidePanel.open({ windowId: win.id })
+          this._openPageTools(win.id)
             .then(() => {
               log.log('side panel opened (toggle)', msg.focus ? `focus: ${msg.focus}` : '')
               respond({ success: true, action: 'opened' })
@@ -934,7 +924,7 @@ export class BackgroundBootstrap {
       return
     }
     
-    chrome.sidePanel.open({ windowId })
+    this._openPageTools(windowId, sender.tab?.id)
       .then(() => {
         chrome.runtime.sendMessage({ type: 'TOGGLE_SIDE_PANEL' }).catch(() => {})
         log.log('side panel toggle', msg.focus ? `focus: ${msg.focus}` : '')
@@ -944,6 +934,29 @@ export class BackgroundBootstrap {
         log.error('onToggleSidePanel', err.message)
         respond({ success: false, error: err.message })
       })
+  }
+
+  static _openPageTools(windowId: number, tabId?: number): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const open = (selected?: number): void => {
+        if (selected === undefined) {
+          reject(new Error('No active tab is available.'))
+          return
+        }
+        chrome.sidePanel.setOptions({ tabId: selected, path: 'index.html', enabled: true }, () => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message))
+            return
+          }
+          chrome.sidePanel.open({ tabId: selected }).then(resolve, reject)
+        })
+      }
+      if (tabId !== undefined) open(tabId)
+      else chrome.tabs.query({ active: true, windowId }, tabs => {
+        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message))
+        else open(tabs[0]?.id)
+      })
+    })
   }
 
   static _onPdfProcessArrayBuffer(

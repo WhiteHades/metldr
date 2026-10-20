@@ -128,6 +128,7 @@ export default defineConfig({
     }
   },
   build: {
+    modulePreload: false,
     outDir: 'dist',
     emptyOutDir: !isContentBuild,
     rollupOptions: isContentBuild ? {
@@ -141,6 +142,7 @@ export default defineConfig({
     } : {
       input: {
         side_panel: 'index.html',
+        panel: 'panel.html',
         welcome: 'welcome.html',
         background: 'src/background/index.ts',
       },
