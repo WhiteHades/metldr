@@ -854,26 +854,7 @@ fn track_detached(tab: i32, params: &JsValue) {
         let Some(active) = state.active.as_mut().filter(|active| active.tab == tab) else {
             return false;
         };
-        if !active.sessions.contains_key(&id) {
-            return false;
-        }
-        let mut removed = BTreeSet::from([id]);
-        loop {
-            let children: Vec<_> = active
-                .sessions
-                .iter()
-                .filter(|(_, parent)| parent.as_ref().is_some_and(|p| removed.contains(p)))
-                .map(|(id, _)| id.clone())
-                .collect();
-            if children.is_empty() {
-                break;
-            }
-            removed.extend(children);
-        }
-        for id in removed {
-            active.sessions.remove(&id);
-        }
-        true
+        remove_session_tree(&mut active.sessions, &id)
     });
     if !known {
         invalidate_event(tab);
@@ -1014,6 +995,28 @@ fn valid_parent_route(
         && parent.is_none_or(|parent| bounded_id(parent, 128) && sessions.contains_key(parent))
 }
 
+fn remove_session_tree(sessions: &mut BTreeMap<String, Option<String>>, id: &str) -> bool {
+    if !sessions.contains_key(id) {
+        return false;
+    }
+    let mut removed = BTreeSet::from([id.to_owned()]);
+    loop {
+        let children: Vec<_> = sessions
+            .iter()
+            .filter(|(id, parent)| {
+                !removed.contains(*id) && parent.as_ref().is_some_and(|p| removed.contains(p))
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        if children.is_empty() {
+            break;
+        }
+        removed.extend(children);
+    }
+    sessions.retain(|id, _| !removed.contains(id));
+    true
+}
+
 fn current_connection(current: u64, captured: u64) -> bool {
     current == captured
 }
@@ -1030,6 +1033,27 @@ fn current_lease(
 #[cfg(test)]
 mod checks {
     use super::*;
+
+    #[test]
+    fn nested_session_detach_removes_descendants_and_preserves_other_trees() {
+        let mut sessions = BTreeMap::from([
+            ("child".into(), None),
+            ("nested".into(), Some("child".into())),
+            ("deep".into(), Some("nested".into())),
+            ("sibling".into(), None),
+            ("sibling-child".into(), Some("sibling".into())),
+        ]);
+        assert!(remove_session_tree(&mut sessions, "child"));
+        assert_eq!(
+            sessions,
+            BTreeMap::from([
+                ("sibling".into(), None),
+                ("sibling-child".into(), Some("sibling".into())),
+            ])
+        );
+        assert!(!remove_session_tree(&mut sessions, "unknown"));
+        assert_eq!(sessions.len(), 2);
+    }
 
     #[test]
     fn validates_browser_event_routing_and_lifecycle_helpers() {
