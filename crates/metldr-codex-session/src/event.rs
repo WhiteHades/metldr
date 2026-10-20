@@ -18,11 +18,25 @@ pub struct ToolCall {
 }
 
 pub enum Event {
-    TextDelta { item_id: String, text: String },
-    Message { item_id: String, text: String },
+    TextDelta {
+        item_id: String,
+        text: String,
+    },
+    Message {
+        item_id: String,
+        text: String,
+    },
     ToolCall(ToolCall),
     ToolReport(crate::ToolReport),
-    Finished { turn: TurnId, status: TurnStatus },
+    ToolProgress {
+        turn: TurnId,
+        item_id: String,
+        output: crate::Preview,
+    },
+    Finished {
+        turn: TurnId,
+        status: TurnStatus,
+    },
 }
 
 impl CodexSession {
@@ -43,6 +57,7 @@ impl CodexSession {
                 | "item/agentMessage/delta"
                 | "item/started"
                 | "item/completed"
+                | "item/commandExecution/outputDelta"
                 | "turn/completed"
         ) {
             return Ok(None);
@@ -91,6 +106,15 @@ impl CodexSession {
                 .reports
                 .decode(params, method == "item/started", active)?
                 .map(Event::ToolReport),
+            "item/commandExecution/outputDelta" => {
+                self.reports
+                    .progress(params, active)?
+                    .map(|(item_id, output)| Event::ToolProgress {
+                        turn: active.clone(),
+                        item_id,
+                        output,
+                    })
+            }
             "turn/completed" => {
                 let status = match params["turn"]["status"].as_str() {
                     Some("completed") => TurnStatus::Completed,

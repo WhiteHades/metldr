@@ -95,3 +95,86 @@ fn native_reports_bound_text_and_reject_conflicting_lifecycles() {
         ToolState::Finished(ToolOutcome::Declined)
     );
 }
+
+#[test]
+fn command_output_progress_is_bounded_and_keeps_lifecycle_authority() {
+    let turn = TurnId("turn-owned".into());
+    let mut reports = Reports::default();
+    let command = json!({"item":{"type":"commandExecution","id":"command-progress","status":"inProgress","command":"read","cwd":"/owned","aggregatedOutput":null,"exitCode":null}});
+    assert!(
+        reports
+            .progress(&json!({"itemId":"unknown","delta":"ignored"}), &turn)
+            .unwrap()
+            .is_none()
+    );
+    reports
+        .decode(&dynamic("dynamic-progress", "inProgress"), true, &turn)
+        .unwrap();
+    assert!(
+        reports
+            .progress(
+                &json!({"itemId":"dynamic-progress","delta":"ignored"}),
+                &turn
+            )
+            .unwrap()
+            .is_none()
+    );
+    let started = reports.decode(&command, true, &turn).unwrap().unwrap();
+    assert!(
+        reports
+            .progress(&json!({"itemId":"command-progress","delta":""}), &turn)
+            .unwrap()
+            .is_none()
+    );
+    let first = reports
+        .progress(&json!({"itemId":"command-progress","delta":"one"}), &turn)
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.1.text, "one");
+    let repeated = reports
+        .progress(&json!({"itemId":"command-progress","delta":"one"}), &turn)
+        .unwrap()
+        .unwrap();
+    assert_eq!(repeated.1.text, "oneone");
+    let ordered = reports
+        .progress(&json!({"itemId":"command-progress","delta":"-then"}), &turn)
+        .unwrap()
+        .unwrap();
+    assert_eq!(ordered.1.text, "oneone-then");
+    assert!(reports.decode(&command, true, &turn).unwrap().is_none());
+    let bounded = reports
+        .progress(
+            &json!({"itemId":"command-progress","delta":format!("{}é", "x".repeat(2036))}),
+            &turn,
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(bounded.1.text.len(), 2047);
+    assert!(bounded.1.truncated);
+    assert!(
+        reports
+            .progress(
+                &json!({"itemId":"command-progress","delta":"after cap"}),
+                &turn
+            )
+            .unwrap()
+            .is_none()
+    );
+    let mut completed = command;
+    completed["item"]["status"] = json!("completed");
+    completed["item"]["exitCode"] = json!(0);
+    completed["item"]["aggregatedOutput"] = json!("final output");
+    let report = reports.decode(&completed, false, &turn).unwrap().unwrap();
+    assert_eq!(report.item_id, started.item_id);
+    assert_eq!(
+        report.output.unwrap().text,
+        "Reported outcome: succeeded\nExit code: 0\nfinal output"
+    );
+    assert!(
+        reports
+            .progress(&json!({"itemId":"command-progress","delta":"late"}), &turn)
+            .unwrap()
+            .is_none()
+    );
+    assert!(reports.decode(&completed, false, &turn).unwrap().is_none());
+}

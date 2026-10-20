@@ -35,7 +35,13 @@ pub struct ToolReport {
 }
 
 #[derive(Default)]
-pub(crate) struct Reports(BTreeMap<String, (String, ToolReport)>);
+pub(crate) struct Reports(BTreeMap<String, SavedReport>);
+
+struct SavedReport {
+    kind: String,
+    report: ToolReport,
+    progress: Option<Preview>,
+}
 
 impl Reports {
     pub(crate) fn clear(&mut self) {
@@ -206,15 +212,15 @@ impl Reports {
             }
             _ => unreachable!(),
         }
-        if let Some((previous_kind, previous)) = self.0.get(&report.item_id) {
-            if previous_kind != kind {
+        if let Some(previous) = self.0.get(&report.item_id) {
+            if previous.kind != kind {
                 return Err(invalid("Codex native item kind changed"));
             }
-            if previous == &report {
+            if previous.report == report {
                 return Ok(None);
             }
             if !matches!(
-                (previous.state, report.state),
+                (previous.report.state, report.state),
                 (ToolState::Started, ToolState::Finished(_))
             ) {
                 return Err(invalid("Codex native item lifecycle conflict"));
@@ -222,9 +228,49 @@ impl Reports {
         } else if self.0.len() >= 32 {
             return Err(invalid("Codex native item limit exceeded"));
         }
-        self.0
-            .insert(report.item_id.clone(), (kind.into(), report.clone()));
+        self.0.insert(
+            report.item_id.clone(),
+            SavedReport {
+                kind: kind.into(),
+                progress: None,
+                report: report.clone(),
+            },
+        );
         Ok(Some(report))
+    }
+
+    pub(crate) fn progress(
+        &mut self,
+        params: &Value,
+        turn: &TurnId,
+    ) -> Result<Option<(String, Preview)>> {
+        let item_id = identity(params, "itemId")?;
+        let delta = text(params, "delta")?;
+        let Some(saved) = self.0.get_mut(item_id) else {
+            return Ok(None);
+        };
+        if saved.kind != "commandExecution"
+            || &saved.report.turn != turn
+            || saved.report.state != ToolState::Started
+            || delta.is_empty()
+            || saved
+                .progress
+                .as_ref()
+                .is_some_and(|preview| preview.truncated)
+        {
+            return Ok(None);
+        }
+        let mut output = Sink::new(2048);
+        if let Some(previous) = &saved.progress {
+            output.push(&previous.text);
+        }
+        output.push(delta);
+        let output = output.finish();
+        if saved.progress.as_ref() == Some(&output) {
+            return Ok(None);
+        }
+        saved.progress = Some(output.clone());
+        Ok(Some((item_id.to_owned(), output)))
     }
 }
 

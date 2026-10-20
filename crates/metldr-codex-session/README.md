@@ -24,7 +24,7 @@ async fn main() -> metldr_codex_session::Result<()> {
             Event::ToolCall(call) => {
                 session.reply_tool(call, "No client tool handler is configured.", false).await?;
             }
-            Event::Message { .. } => (),
+            Event::Message { .. } | Event::ToolProgress { .. } => (),
             Event::ToolReport(report) => println!("{}: {:?}", report.tool, report.state),
             Event::Finished { .. } => break,
         }
@@ -46,6 +46,8 @@ Native approval requests are unsupported and fail without approval. Clean direct
 
 Run `make check-codex` from the repository root.
 
-Native command execution, file changes and dynamic tools produce `Event::ToolReport` observations. Reports retain the native item ID, turn, lifecycle outcome and bounded plain text previews. Unknown success stays unspecified. An observation cannot authorize a client tool or prove a browser effect. Native item IDs are independent of client tool call IDs. Unsupported native item kinds are ignored.
+Native command execution, file changes and dynamic tools produce `Event::ToolReport` observations. Reports retain the native item ID, turn, lifecycle outcome and bounded plain text previews. Codex command output can also produce `Event::ToolProgress` with a bounded provisional preview. It may omit quick early bytes, and the terminal report remains authoritative. Unknown success stays unspecified. An observation cannot authorize a client tool or prove a browser effect. Native item IDs are independent of client tool call IDs. Unsupported native item kinds are ignored.
+
+Progress output is a complete cumulative preview. Replace the previous preview for its item ID instead of appending it. The example ignores these optional previews and prints agent text separately.
 
 The session retains at most 32 supported item identities per turn. Exact repeated reports are suppressed, and conflicting lifecycle reports fail the session. Preview limits are 256 bytes for titles, 1024 for inputs and 2048 for outputs, cut at UTF8 boundaries with explicit incomplete flags. Nontext dynamic results are omitted and marked incomplete. Optional native timestamps are metadata. Callers decide what to display or retain.
