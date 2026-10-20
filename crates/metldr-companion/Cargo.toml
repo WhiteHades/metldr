@@ -1,0 +1,42 @@
+[package]
+name = "metldr-companion"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+
+[workspace]
+
+[dependencies]
+metldr-conversation = { path = "../metldr-conversation" }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+sha2 = "=0.10.9"
+futures = "=0.3.34"
+tokio = { version = "=1.53.1", features = ["rt", "net", "time", "sync", "macros", "io-util"] }
+reqwest = { version = "=0.13.5", default-features = false, features = ["rustls"] }
+chromiumoxide = { version = "=0.9.1", default-features = false }
+async-tungstenite = { version = "=0.32.1", features = ["tokio-runtime"] }
+metldr-pi-session = { path = "../metldr-pi-session" }
+metldr-codex-session = { path = "../metldr-codex-session" }
+metldr-opencode-session = { path = "../metldr-opencode-session" }
+metldr-browser-tools = { path = "../metldr-browser-tools" }
+metldr-responses = { path = "../metldr-responses" }
+metldr-google-interactions = { path = "../metldr-google-interactions" }
+metldr-messages = { path = "../metldr-messages" }
+metldr-chat-completions = { path = "../metldr-chat-completions" }
+metldr-native-credentials = { path = "../metldr-native-credentials" }
+getrandom = { version = "=0.4.3", features = ["std"] }
+zeroize = "=1.9.1"
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "=1.1.5", default-features = false, features = ["std", "process"] }
+
+[dev-dependencies]
+tokio = { version = "=1.53.1", features = ["test-util"] }
+rustls = { version = "=0.23.43", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pemfile = "=2.2.0"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1

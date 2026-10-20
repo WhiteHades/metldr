@@ -58,7 +58,9 @@ The welcome page runs in Rust through WebAssembly, with static Help available wh
 
 The [Rust conversation model](crates/metldr-conversation/README.md) preserves assistant message identities and observed tool order. It validates saved content and text projections, with explicit states for streaming, final snapshots and interruption. Run `make check-conversation` to check it.
 
-The [Rust panel module](crates/metldr-panel/README.md) supplies the replacement panel logic and background message handling. Run `make check-panel` for its checks and `make panel-wasm` for its generated browser module. Extension packaging and companion installation remain separate integration work.
+The [Rust panel module](crates/metldr-panel/README.md) supplies the replacement panel logic and background message handling. Run `make check-panel` for its checks and `make panel-wasm` for its generated browser module.
+
+The [Rust companion](crates/metldr-companion/README.md) runs provider requests, installed agents and browser tasks through native messaging. Run `make check-companion` for its checks and `make companion` for the executable. The default extension frontend and complete extension packaging are still being migrated.
 
 Install Rust and the matching binding generator before building the extension. The repository pins Rust 1.99.1.
 

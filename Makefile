@@ -1,4 +1,4 @@
-.PHONY: rust check-rust check-codex check-pi check-opencode check-browser-tools check-responses check-google check-messages check-chat check-credentials check-conversation check-panel panel-wasm
+.PHONY: rust check-rust check-codex check-pi check-opencode check-browser-tools check-responses check-google check-messages check-chat check-credentials check-conversation check-panel panel-wasm check-companion companion
 
 rust:
 	npm run build:rust
@@ -46,3 +46,9 @@ panel-wasm:
 	cargo build --locked --release --manifest-path crates/metldr-panel/Cargo.toml --target wasm32-unknown-unknown --target-dir "$(PANEL_TARGET_DIR)"
 	mkdir -p dist/rust-panel/pkg
 	$(WASM_BINDGEN) --target web --out-dir dist/rust-panel/pkg "$(PANEL_TARGET_DIR)/wasm32-unknown-unknown/release/metldr_panel.wasm"
+
+check-companion:
+	cargo test --locked --manifest-path crates/metldr-companion/Cargo.toml
+
+companion:
+	cargo build --locked --release --manifest-path crates/metldr-companion/Cargo.toml --bin metldr-companion
