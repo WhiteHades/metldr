@@ -44,4 +44,6 @@ For Google Chrome on Linux, the user manifest directory is `~/.config/google-chr
 
 Provider keys stay in the native credential store. Installed agents keep their own authentication. Configure the desired provider or agent through the paired Rust panel before starting work. An action that loses confirmation remains uncertain and is not repeated automatically.
 
+If an action request ends before its browser command is queued, the companion records that the action was prevented. Cancellation and command delivery share one admission check, so an expired request cannot queue a write later. After a command is queued, a lost result remains uncertain. Closing the browser connection still requires confirmed detach and transport cleanup.
+
 The three files in `test-tls` are synthetic fixture material. The loopback fixture profile embeds `ca.pem`; the server certificate and server key are used only by tests. Public provider requests use their configured trust settings. None of these files grants access to a live service.

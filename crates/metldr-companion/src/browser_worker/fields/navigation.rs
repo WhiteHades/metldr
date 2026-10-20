@@ -29,18 +29,12 @@ impl Tools {
                     ack,
                 })
                 .await?;
-                let outcome = match self
+                let outcome = self
                     .engine
                     .as_ref()
                     .ok_or("browser is not attached")?
                     .navigate(&dispatched)
-                    .await
-                {
-                    Ok(outcome) => outcome,
-                    Err(_) => Outcome::Uncertain {
-                        reason: "navigation destination or effect could not be verified".into(),
-                    },
-                };
+                    .await;
                 action_observed(&self.client, &dispatched, outcome).await?
             }
             Phase::Settled { .. } => approved,

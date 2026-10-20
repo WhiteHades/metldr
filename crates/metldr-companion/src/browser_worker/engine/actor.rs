@@ -151,10 +151,10 @@ impl Actor {
             navigation: None,
         }
     }
-    pub(super) async fn run(mut self) -> Result<()> {
+    pub(super) async fn run(mut self) -> (Result<()>, Result<()>) {
         let result = self.drive().await;
         let closed = self.transport.close().await.map_err(Into::into);
-        result.and(closed)
+        (result, closed)
     }
     async fn drive(&mut self) -> Result<()> {
         self.initialize(None, true)?;
@@ -345,7 +345,14 @@ impl Actor {
                 params: command.params,
             },
         };
-        let reply = self.client.begin(operation)?;
+        let reply = match &pending.work {
+            Work::Write { job, .. } | Work::Navigate { job, .. } => job
+                .admission
+                .as_ref()
+                .ok_or("browser action admission absent")?
+                .begin(&self.client, operation)?,
+            _ => self.client.begin(operation)?,
+        };
         if navigating {
             self.navigation_granted = true;
         }

@@ -143,18 +143,12 @@ impl Tools {
                     ack,
                 })
                 .await?;
-                let outcome = match self
+                let outcome = self
                     .engine
                     .as_ref()
                     .ok_or("browser is not attached")?
                     .change(&dispatched)
-                    .await
-                {
-                    Ok(outcome) => outcome,
-                    Err(_) => Outcome::Uncertain {
-                        reason: "field dispatch result was lost".into(),
-                    },
-                };
+                    .await;
                 action_observed(&self.client, &dispatched, outcome).await?
             }
             Phase::Settled { .. } => approved,

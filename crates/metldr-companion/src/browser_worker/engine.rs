@@ -19,6 +19,7 @@ use tokio::{
 };
 
 mod actor;
+mod admission;
 mod observation;
 mod runtime;
 mod scripts;
@@ -28,6 +29,7 @@ type Reply = oneshot::Sender<runtime::Result<Value>>;
 struct Job {
     reply: Reply,
     deadline: Instant,
+    admission: Option<Arc<admission::Admission>>,
 }
 struct Request {
     kind: Kind,
@@ -58,7 +60,7 @@ pub(super) struct Engine {
     requests: mpsc::Sender<Request>,
     stop: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
-    task: JoinHandle<Result<()>>,
+    task: JoinHandle<(Result<()>, Result<()>)>,
     client: Client,
     tab: i32,
 }
@@ -150,6 +152,13 @@ impl Engine {
     }
 
     async fn request<T: DeserializeOwned>(&self, kind: Kind) -> Result<T> {
+        self.request_with(kind, None).await
+    }
+    async fn request_with<T: DeserializeOwned>(
+        &self,
+        kind: Kind,
+        admission: Option<Arc<admission::Admission>>,
+    ) -> Result<T> {
         if self.stop.load(Ordering::Acquire) || self.shutdown.load(Ordering::Acquire) {
             return Err("browser task stopped".into());
         }
@@ -158,7 +167,11 @@ impl Engine {
         self.requests
             .try_send(Request {
                 kind,
-                job: Job { reply, deadline },
+                job: Job {
+                    reply,
+                    deadline,
+                    admission,
+                },
             })
             .map_err(|_| "browser actor is unavailable or full")?;
         let value = tokio::time::timeout_at(deadline, rx)
@@ -184,8 +197,24 @@ impl Engine {
         })
         .await
     }
-    pub(super) async fn change(&self, action: &Action) -> Result<Outcome> {
-        self.request(Kind::Change(action.clone())).await
+    async fn effect(&self, kind: Kind, lost_reason: &str) -> Outcome {
+        let guard = admission::CancelOnDrop::default();
+        match self.request_with(kind, Some(guard.0.clone())).await {
+            Ok(outcome) => outcome,
+            Err(error) if guard.0.cancel() => Outcome::Prevented {
+                reason: format!("browser action was not dispatched: {error}"),
+            },
+            Err(_) => Outcome::Uncertain {
+                reason: lost_reason.into(),
+            },
+        }
+    }
+    pub(super) async fn change(&self, action: &Action) -> Outcome {
+        self.effect(
+            Kind::Change(action.clone()),
+            "field dispatch result was lost",
+        )
+        .await
     }
     pub(super) async fn prepare_navigation(
         &self,
@@ -198,13 +227,18 @@ impl Engine {
         })
         .await
     }
-    pub(super) async fn navigate(&self, action: &Action) -> Result<Outcome> {
-        self.request(Kind::Navigate(action.clone())).await
+    pub(super) async fn navigate(&self, action: &Action) -> Outcome {
+        self.effect(
+            Kind::Navigate(action.clone()),
+            "navigation destination or effect could not be verified",
+        )
+        .await
     }
     pub(super) async fn detach(mut self) -> Result<()> {
         self.shutdown.store(true, Ordering::Release);
         let task = match tokio::time::timeout(TIMEOUT, &mut self.task).await {
-            Ok(Ok(result)) => result,
+            // Requests own execution outcomes; release still requires both cleanup checks.
+            Ok(Ok((_, cleanup))) => cleanup,
             Ok(Err(e)) if e.is_cancelled() => Ok(()),
             Ok(Err(e)) => Err(e.into()),
             Err(_) => {

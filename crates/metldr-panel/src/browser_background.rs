@@ -10,6 +10,7 @@ use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use wasm_bindgen_futures::spawn_local;
 
 mod navigation;
+mod release;
 
 const MAX_FRAME: usize = 65_536;
 const MAX_SESSIONS: usize = 64;
@@ -27,6 +28,7 @@ struct State {
     generation: u64,
     listeners: bool,
     active: Option<Attachment>,
+    released: Option<release::Released>,
     busy: BTreeSet<u64>,
     blocked_tabs: BTreeMap<i32, u64>,
 }
@@ -140,10 +142,11 @@ pub(super) fn disconnect() {
         let mut state = state.borrow_mut();
         state.connection = state.connection.wrapping_add(1).max(1);
         state.native = None;
+        state.released = None;
         state.active.take()
     });
     if let Some(attachment) = attachment.filter(|attachment| !attachment.attaching) {
-        detach_later(attachment.tab);
+        let _ = detach_later(attachment.tab);
     }
 }
 
@@ -244,6 +247,7 @@ async fn attach(
         let epoch = fence;
         state.busy.insert(fence);
         state.blocked_tabs.insert(tab, fence);
+        state.released = None;
         state.active = Some(Attachment {
             run: run.clone(),
             tab,
@@ -406,6 +410,9 @@ async fn command(
 }
 
 async fn detach(connection: u64, call_id: u64, run: &str, tab: i32) -> Result<Value, String> {
+    if STATE.with(|state| state.borrow().active.is_none()) {
+        return release::acknowledge(connection, call_id, run, tab).await;
+    }
     let epoch = reserve_call(connection, call_id, run, tab, None)?;
     let current = STATE.with(|state| {
         let mut state = state.borrow_mut();
@@ -585,7 +592,7 @@ fn set_attached(connection: u64, epoch: u64) -> bool {
 }
 
 fn clear_attachment(connection: u64, epoch: u64) {
-    let tab = STATE.with(|state| {
+    let attachment = STATE.with(|state| {
         let mut state = state.borrow_mut();
         if state.connection == connection
             && state
@@ -593,15 +600,18 @@ fn clear_attachment(connection: u64, epoch: u64) {
                 .as_ref()
                 .is_some_and(|active| active.epoch == epoch)
         {
-            state.active.take().map(|active| active.tab)
+            state.active.take()
         } else {
             None
         }
     });
-    if let Some(tab) = tab {
-        let attaching = STATE.with(|state| state.borrow().blocked_tabs.contains_key(&tab));
+    if let Some(attachment) = attachment {
+        let attaching =
+            STATE.with(|state| state.borrow().blocked_tabs.contains_key(&attachment.tab));
         if !attaching {
-            detach_later(tab);
+            if let Some(cleanup) = detach_later(attachment.tab) {
+                release::remember(connection, &attachment, cleanup);
+            }
         }
     }
 }
@@ -616,7 +626,7 @@ fn release_fence(tab: i32, fence: u64) {
     });
 }
 
-fn detach_later(tab: i32) {
+fn detach_later(tab: i32) -> Option<js_sys::Promise> {
     let fence = STATE.with(|state| {
         let mut state = state.borrow_mut();
         if state
@@ -634,11 +644,13 @@ fn detach_later(tab: i32) {
             Some(fence)
         }
     });
-    if let Some(fence) = fence {
-        spawn_local(async move {
-            let _ = cleanup_pending(tab, fence, true).await;
-        });
-    }
+    fence.map(|fence| {
+        wasm_bindgen_futures::future_to_promise(async move {
+            Ok(JsValue::from_bool(
+                cleanup_pending(tab, fence, true).await.is_ok(),
+            ))
+        })
+    })
 }
 
 async fn cleanup_pending(tab: i32, fence: u64, attached: bool) -> Result<(), String> {
@@ -937,10 +949,11 @@ fn invalidate_all() {
         let mut state = state.borrow_mut();
         state.connection = state.connection.wrapping_add(1).max(1);
         state.native = None;
+        state.released = None;
         state.active.take().map(|active| active.tab)
     });
     if let Some(tab) = tab {
-        detach_later(tab);
+        let _ = detach_later(tab);
     }
 }
 
