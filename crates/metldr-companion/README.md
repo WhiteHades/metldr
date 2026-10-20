@@ -2,6 +2,8 @@
 
 The companion runs provider requests, installed agents and browser tasks for the [Rust panel](../metldr-panel/README.md). It keeps run state, approvals and recovery in one native process. Browser commands use the normal Chromiumoxide dependency and the extension's debugger bridge.
 
+Browser inspection and field changes run in a named isolated world. Page scripts cannot replace the JavaScript properties used to read or change a field. The companion still checks the current frame and execution context before using an approved action, and requests no universal access for the isolated world. A verified field value does not establish that a website accepted or saved it.
+
 From the repository root, run:
 
 ```sh

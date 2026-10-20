@@ -72,4 +72,4 @@ pub use transport::{Dispatch, Output, Transport};
 
 mod context;
 #[doc(hidden)]
-pub use context::{Change, ContextMap, FrameContext};
+pub use context::{AUTOMATION_WORLD, Change, ContextMap, FrameContext};

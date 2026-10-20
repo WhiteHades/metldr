@@ -338,7 +338,11 @@ async fn command(
     method: &str,
     params: Value,
 ) -> Result<Value, String> {
-    if !allowed_method(method) || !params.is_object() || !bounded_json(&params, MAX_FRAME) {
+    if !allowed_method(method)
+        || !params.is_object()
+        || !bounded_json(&params, MAX_FRAME)
+        || method == "Page.createIsolatedWorld" && !valid_isolated_world(&params)
+    {
         return Err("Unsupported or oversized debugger command.".into());
     }
     let epoch = reserve_call(connection, call_id, run, tab, session.as_deref())?;
@@ -938,6 +942,19 @@ fn invalidate_all() {
     if let Some(tab) = tab {
         detach_later(tab);
     }
+}
+
+fn valid_isolated_world(params: &Value) -> bool {
+    params.as_object().is_some_and(|params| {
+        params.len() == 3
+            && ["frameId", "worldName"].into_iter().all(|key| {
+                params
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| bounded_id(value, 128))
+            })
+            && params.get("grantUniveralAccess").and_then(Value::as_bool) == Some(false)
+    })
 }
 
 fn allowed_method(method: &str) -> bool {

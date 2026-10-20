@@ -149,6 +149,7 @@ impl Actor {
             self.source.document = confirmed.document.clone();
             self.source.url = confirmed.url.clone();
             self.grant_revision = confirmed.grant_revision;
+            self.granted_root = Some(context.clone());
             Ok(Outcome::Navigated {
                 binding: Binding {
                     document: confirmed.document,

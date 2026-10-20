@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 const MAX_FRAMES: usize = 4096;
 const ROOT_SESSION: &str = "metldr-owned-root";
+pub const AUTOMATION_WORLD: &str = "metldr-browser-automation";
 type SessionKey = Option<String>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -64,6 +65,7 @@ struct Execution {
 pub enum Change {
     None,
     Attached { session: String, page: bool },
+    CreateWorld { session: SessionKey, frame: String },
 }
 
 impl ContextMap {
@@ -236,7 +238,7 @@ impl ContextMap {
                 }
                 frame.url = url.into();
             }
-            "Runtime.executionContextCreated" => self.created(session, &params["context"])?,
+            "Runtime.executionContextCreated" => return self.created(session, &params["context"]),
             "Runtime.executionContextDestroyed" => {
                 let unique = params
                     .get("executionContextUniqueId")
@@ -382,7 +384,7 @@ impl ContextMap {
         Ok(())
     }
 
-    fn created(&mut self, session: Option<&str>, value: &Value) -> Result<()> {
+    fn created(&mut self, session: Option<&str>, value: &Value) -> Result<Change> {
         let numeric = value
             .get("id")
             .and_then(Value::as_i64)
@@ -391,8 +393,19 @@ impl ContextMap {
             .get("auxData")
             .filter(|v| v.is_object())
             .ok_or("missing execution context metadata")?;
-        if aux.get("isDefault").and_then(Value::as_bool) != Some(true) {
-            return Ok(());
+        let default = aux.get("isDefault").and_then(Value::as_bool);
+        if default == Some(true) {
+            let frame = text(aux, "frameId")?.to_owned();
+            identifier(&frame)?;
+            return Ok(Change::CreateWorld {
+                session: session.map(str::to_owned),
+                frame,
+            });
+        }
+        if default != Some(false)
+            || value.get("name").and_then(Value::as_str) != Some(AUTOMATION_WORLD)
+        {
+            return Ok(Change::None);
         }
         let frame = text(aux, "frameId")?.to_owned();
         identifier(&frame)?;
@@ -422,7 +435,7 @@ impl ContextMap {
             self.provisional
                 .insert((key, frame), Execution { numeric, unique });
         }
-        Ok(())
+        Ok(Change::None)
     }
 
     fn detach(&mut self, parent: Option<&str>, child: &str) -> Result<()> {
@@ -556,13 +569,24 @@ mod checks {
         assert!(matches!(map.event(&event(None,"Target.attachedToTarget",json!({
             "sessionId":"actual-child-session","targetInfo":{"targetId":"different-child-target","type":"iframe","parentFrameId":"root-frame"}
         }))).unwrap(),Change::Attached {page:true,..}));
-        map.event(&event(Some("actual-child-session"),"Runtime.executionContextCreated",json!({
-            "context":{"id":7,"uniqueId":"actual-unique-context","auxData":{"frameId":"child-frame","isDefault":true}}
-        }))).unwrap();
+        assert!(
+            matches!(map.event(&event(Some("actual-child-session"),"Runtime.executionContextCreated",json!({
+            "context":{"id":6,"uniqueId":"page-context","auxData":{"frameId":"child-frame","isDefault":true}}
+        }))).unwrap(),Change::CreateWorld{session:Some(owner),frame} if owner=="actual-child-session" && frame=="child-frame")
+        );
         map.tree(Some("actual-child-session"),&json!({"frame":{"id":"child-frame","loaderId":"child-load","url":"https://child.test/"}})).unwrap();
         assert!(map.context("child-frame").is_none());
         map.ready(Some("actual-child-session")).unwrap();
+        assert!(map.context("child-frame").is_none());
+        map.event(&event(Some("actual-child-session"),"Runtime.executionContextCreated",json!({
+            "context":{"id":8,"name":"other-extension","uniqueId":"foreign-context","auxData":{"frameId":"child-frame","isDefault":false}}
+        }))).unwrap();
+        assert!(map.context("child-frame").is_none());
+        map.event(&event(Some("actual-child-session"),"Runtime.executionContextCreated",json!({
+            "context":{"id":7,"name":AUTOMATION_WORLD,"uniqueId":"actual-unique-context","auxData":{"frameId":"child-frame","isDefault":false}}
+        }))).unwrap();
         let context = map.context("child-frame").unwrap();
+        assert_eq!(context.unique_context_id(), "actual-unique-context");
         assert_eq!(context.target_id(), "selected-target");
         assert_eq!(context.session_id(), "actual-child-session");
         assert_eq!(map.parent_frame("child-frame"), Some("root-frame"));

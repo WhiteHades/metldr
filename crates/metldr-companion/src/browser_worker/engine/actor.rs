@@ -44,6 +44,7 @@ struct Pending {
 }
 enum Work {
     Init(Initialization),
+    CreateWorld,
     ReleaseObserve {
         generation: u64,
         job: Job,
@@ -94,6 +95,8 @@ pub(super) struct Actor {
     client: Client,
     source: Target,
     grant_revision: u64,
+    granted_root: Option<FrameContext>,
+    navigation_granted: bool,
     transport: Transport,
     contexts: ContextMap,
     events: mpsc::Receiver<Notice>,
@@ -128,6 +131,8 @@ impl Actor {
             client,
             source,
             grant_revision: 1,
+            granted_root: None,
+            navigation_granted: false,
             transport,
             contexts,
             events,
@@ -177,16 +182,17 @@ impl Actor {
                 return Err("browser actor deadline expired".into());
             }
             if !self.transport.events_pending() {
-                if self.ready.is_some()
-                    && self.contexts.is_ready()
-                    && !self
-                        .pending
-                        .values()
-                        .any(|p| matches!(p.work, Work::Init(_)))
+                if !self
+                    .pending
+                    .values()
+                    .any(|p| matches!(p.work, Work::Init(_) | Work::CreateWorld))
                 {
-                    let _ = self.ready.take().unwrap().send(Ok(()));
+                    if self.ready.is_some() && self.contexts.is_ready() {
+                        self.granted_root = self.contexts.main_context();
+                        let _ = self.ready.take().unwrap().send(Ok(()));
+                    }
+                    self.advance_navigation()?;
                 }
-                self.advance_navigation()?;
                 if let Some(command) = self.offers.pop_front() {
                     self.dispatch(command)?;
                 }
@@ -196,7 +202,16 @@ impl Actor {
                 notice=self.events.recv()=>self.notice(notice.ok_or("browser event channel ended")?)?,
                 output=self.transport.next()=>match output? {
                     runtime::Output::Event(event)=>{
-                        if let runtime::Change::Attached{session,page}=self.contexts.event(&event)? {self.initialize(Some(session),page)?;}
+                        match self.contexts.event(&event)? {
+                            runtime::Change::Attached{session,page}=>self.initialize(Some(session),page)?,
+                            runtime::Change::CreateWorld{session,frame} if self.world_allowed()=>self.queue(
+                                "Page.createIsolatedWorld", session,
+                                json!({"frameId":frame,"worldName":runtime::AUTOMATION_WORLD,"grantUniveralAccess":false}),
+                                Work::CreateWorld,
+                                if self.ready.is_none() && !self.navigation_granted {self.granted_root.clone()} else {None},None,
+                            )?,
+                            runtime::Change::None | runtime::Change::CreateWorld{..}=>(),
+                        }
                     }
                     runtime::Output::Dispatch(command)=>{
                         if self.offers.len()==64 {return Err("browser offered command limit".into())}
@@ -228,6 +243,14 @@ impl Actor {
             params: notice.params,
         })?;
         Ok(())
+    }
+    fn world_allowed(&self) -> bool {
+        self.ready.is_some()
+            || self.navigation_granted
+            || self
+                .granted_root
+                .as_ref()
+                .is_some_and(|root| self.contexts.validate(root).is_ok())
     }
     fn queue(
         &mut self,
@@ -264,6 +287,9 @@ impl Actor {
             .get(&command.id)
             .ok_or("unknown actor dispatch")?;
         let guard = (|| -> Result<()> {
+            if matches!(pending.work, Work::CreateWorld) && !self.world_allowed() {
+                return Err("browser setup grant is stale".into());
+            }
             if Instant::now() >= pending.deadline
                 || pending.work.job().is_some_and(|j| j.reply.is_closed())
             {
@@ -297,6 +323,7 @@ impl Actor {
             return Err("browser task stopped before dispatch".into());
         }
         self.transport.dispatch(&command)?;
+        let navigating = matches!(pending.work, Work::Navigate { .. });
         let operation = match &pending.work {
             Work::Navigate { action, .. } => {
                 let Intent::Navigate { destination } = &action.proposal.intent else {
@@ -319,6 +346,9 @@ impl Actor {
             },
         };
         let reply = self.client.begin(operation)?;
+        if navigating {
+            self.navigation_granted = true;
+        }
         let id = command.id;
         self.inflight.push(
             async move { (Completion::Command(id), wait_reply(deadline, reply).await) }.boxed(),
@@ -354,6 +384,7 @@ impl Actor {
     }
     fn finish(&mut self, job: Job, result: Result<Value>) {
         self.busy = false;
+        self.navigation_granted = false;
         let _ = job.reply.send(result.map_err(|e| e.to_string()));
     }
     fn value(&mut self, job: Job, value: impl Serialize) -> Result<()> {

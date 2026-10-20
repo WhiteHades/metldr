@@ -52,6 +52,7 @@ pub(super) fn allowed_while_pending(method: &str) -> bool {
         method,
         "Page.enable"
             | "Page.getFrameTree"
+            | "Page.createIsolatedWorld"
             | "Target.setAutoAttach"
             | "Runtime.runIfWaitingForDebugger"
             | "Runtime.enable"
@@ -508,6 +509,14 @@ mod checks {
     #[test]
     fn pending_navigation_allows_only_setup_and_cleanup() {
         assert!(allowed_while_pending("Page.getFrameTree"));
+        assert!(allowed_while_pending("Page.createIsolatedWorld"));
+        let mut world = json!({"frameId":"frame","worldName":"metldr-browser-automation","grantUniveralAccess":false});
+        assert!(valid_isolated_world(&world));
+        world["grantUniveralAccess"] = json!(true);
+        assert!(!valid_isolated_world(&world));
+        world["grantUniveralAccess"] = json!(false);
+        world["unrecognised"] = json!(true);
+        assert!(!valid_isolated_world(&world));
         assert!(allowed_while_pending("Runtime.runIfWaitingForDebugger"));
         assert!(!allowed_while_pending("Runtime.evaluate"));
         assert!(!allowed_while_pending("Runtime.callFunctionOn"));

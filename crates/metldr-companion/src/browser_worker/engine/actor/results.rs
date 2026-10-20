@@ -35,6 +35,7 @@ impl Actor {
                 init.step += 1;
                 self.initialize_step(init)
             }
+            Work::CreateWorld => Ok(()),
             Work::ReleaseObserve { generation, job } => {
                 self.snapshot = None;
                 self.capture(self.context()?, generation, job)
@@ -209,7 +210,10 @@ impl Actor {
     }
     fn failed(&mut self, work: Work, reason: String, prevented: bool) -> Result<()> {
         match work {
-            Work::Init(_) => Err(format!("browser session initialization failed: {reason}").into()),
+            Work::CreateWorld if prevented => Ok(()),
+            Work::Init(_) | Work::CreateWorld => {
+                Err(format!("browser session initialization failed: {reason}").into())
+            }
             Work::Write { job, .. } => self.value(
                 job,
                 if prevented {
