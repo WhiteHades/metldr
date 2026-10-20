@@ -1,4 +1,4 @@
-.PHONY: rust check-rust check-codex check-pi check-opencode check-browser-tools check-responses check-google check-messages check-credentials
+.PHONY: rust check-rust check-codex check-pi check-opencode check-browser-tools check-responses check-google check-messages check-chat check-credentials
 
 rust:
 	npm run build:rust
@@ -26,6 +26,9 @@ check-google:
 
 check-messages:
 	cargo test --locked --manifest-path crates/metldr-messages/Cargo.toml
+
+check-chat:
+	cargo test --locked --manifest-path crates/metldr-chat-completions/Cargo.toml
 
 check-credentials:
 	cargo test --locked --manifest-path crates/metldr-native-credentials/Cargo.toml
