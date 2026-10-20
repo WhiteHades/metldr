@@ -1,9 +1,11 @@
 #![doc = include_str!("../README.md")]
 
 mod event;
+mod report;
 mod rpc;
 
 pub use event::{Event, ToolCall, TurnStatus};
+pub use report::{Preview, ToolOutcome, ToolReport, ToolState};
 pub use rpc::ProcessExit;
 use serde_json::{Value, json};
 use std::{
@@ -83,6 +85,7 @@ pub struct CodexSession {
     turn: Option<TurnId>,
     connection: u64,
     pending_tools: Vec<Value>,
+    reports: report::Reports,
     failed: bool,
 }
 
@@ -144,6 +147,7 @@ impl CodexSession {
             turn: None,
             connection: CONNECTION.fetch_add(1, Ordering::Relaxed),
             pending_tools: Vec::new(),
+            reports: report::Reports::default(),
             failed: false,
         })
     }
@@ -165,6 +169,7 @@ impl CodexSession {
             .await?;
         let turn = TurnId(field(&response["turn"], "id")?);
         self.turn = Some(turn.clone());
+        self.reports.clear();
         Ok(turn)
     }
 

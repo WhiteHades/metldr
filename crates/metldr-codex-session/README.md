@@ -25,6 +25,7 @@ async fn main() -> metldr_codex_session::Result<()> {
                 session.reply_tool(call, "No client tool handler is configured.", false).await?;
             }
             Event::Message { .. } => (),
+            Event::ToolReport(report) => println!("{}: {:?}", report.tool, report.state),
             Event::Finished { .. } => break,
         }
     }
@@ -44,3 +45,7 @@ Cancelling an event wait preserves its partial frame. Cancelling an RPC or pipe 
 Native approval requests are unsupported and fail without approval. Clean direct process exit and drained stdout do not establish cleanup of every possible descendant. Callers still own process supervision and recovery after host loss.
 
 Run `make check-codex` from the repository root.
+
+Native command execution, file changes and dynamic tools produce `Event::ToolReport` observations. Reports retain the native item ID, turn, lifecycle outcome and bounded plain text previews. Unknown success stays unspecified. An observation cannot authorize a client tool or prove a browser effect. Native item IDs are independent of client tool call IDs. Unsupported native item kinds are ignored.
+
+The session retains at most 32 supported item identities per turn. Exact repeated reports are suppressed, and conflicting lifecycle reports fail the session. Preview limits are 256 bytes for titles, 1024 for inputs and 2048 for outputs, cut at UTF8 boundaries with explicit incomplete flags. Nontext dynamic results are omitted and marked incomplete. Optional native timestamps are metadata. Callers decide what to display or retain.

@@ -21,6 +21,7 @@ pub enum Event {
     TextDelta { item_id: String, text: String },
     Message { item_id: String, text: String },
     ToolCall(ToolCall),
+    ToolReport(crate::ToolReport),
     Finished { turn: TurnId, status: TurnStatus },
 }
 
@@ -38,22 +39,16 @@ impl CodexSession {
         }
         if !matches!(
             method.as_str(),
-            "item/tool/call" | "item/agentMessage/delta" | "item/completed" | "turn/completed"
+            "item/tool/call"
+                | "item/agentMessage/delta"
+                | "item/started"
+                | "item/completed"
+                | "turn/completed"
         ) {
             return Ok(None);
         }
-        if params["threadId"] != self.info.id.0 {
-            return Err(invalid("Codex event thread mismatch"));
-        }
         let terminal = method == "turn/completed";
-        let turn = if terminal {
-            &params["turn"]["id"]
-        } else {
-            &params["turnId"]
-        };
-        if turn != active.as_str() {
-            return Err(invalid("Codex event turn mismatch"));
-        }
+        scope(params, self.info.id.as_str(), active.as_str(), terminal)?;
         Ok(match method.as_str() {
             "item/tool/call" => {
                 let id = value
@@ -92,6 +87,10 @@ impl CodexSession {
                     .ok_or_else(|| invalid("Codex message text missing"))?
                     .to_owned(),
             }),
+            "item/started" | "item/completed" => self
+                .reports
+                .decode(params, method == "item/started", active)?
+                .map(Event::ToolReport),
             "turn/completed" => {
                 let status = match params["turn"]["status"].as_str() {
                     Some("completed") => TurnStatus::Completed,
@@ -100,6 +99,7 @@ impl CodexSession {
                     _ => return Err(invalid("Codex terminal status invalid")),
                 };
                 self.pending_tools.clear();
+                self.reports.clear();
                 Some(Event::Finished {
                     turn: self.turn.take().unwrap(),
                     status,
@@ -107,5 +107,34 @@ impl CodexSession {
             }
             _ => None,
         })
+    }
+}
+
+fn scope(params: &Value, thread: &str, turn: &str, terminal: bool) -> Result<()> {
+    if params["threadId"] != thread {
+        return Err(invalid("Codex event thread mismatch"));
+    }
+    let observed = if terminal {
+        &params["turn"]["id"]
+    } else {
+        &params["turnId"]
+    };
+    if observed != turn {
+        return Err(invalid("Codex event turn mismatch"));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod checks {
+    use super::*;
+    #[test]
+    fn native_notifications_keep_thread_and_turn_scope() {
+        let mut params = json!({"threadId":"thread-1","turnId":"turn-2"});
+        assert!(scope(&params, "thread-1", "turn-2", false).is_ok());
+        assert!(scope(&params, "thread-other", "turn-2", false).is_err());
+        assert!(scope(&params, "thread-1", "turn-other", false).is_err());
+        params["turn"] = json!({"id":"turn-2"});
+        assert!(scope(&params, "thread-1", "turn-2", true).is_ok());
     }
 }
