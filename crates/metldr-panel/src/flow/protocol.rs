@@ -319,7 +319,7 @@ impl Protocol {
         let version = value.get("v").and_then(Value::as_u64);
         let request = value.get("request");
         let kind = value.get("kind").and_then(Value::as_str);
-        if version != Some(3) || request.is_none() || kind.is_none() {
+        if version != Some(4) || request.is_none() || kind.is_none() {
             return Err(FlowError::Protocol("invalid host frame envelope".into()));
         }
         let kind = kind.unwrap();
@@ -636,7 +636,7 @@ pub(super) fn validate_snapshot_frame(value: &Value, kind: &str) -> Result<(), F
     let object = value
         .as_object()
         .ok_or_else(|| FlowError::Protocol("host frame must be an object".into()))?;
-    if value.get("v").and_then(Value::as_u64) != Some(3)
+    if value.get("v").and_then(Value::as_u64) != Some(4)
         || value.get("request") != Some(&Value::Null)
         || value.get("kind").and_then(Value::as_str) != Some(kind)
     {
@@ -700,7 +700,7 @@ mod tests {
     }
 
     fn frame(request: Value, kind: &str, view: Value, ended: bool) -> Value {
-        json!({"v": 3, "request": request, "kind": kind, "view": view, "ended": ended})
+        json!({"v": 4, "request": request, "kind": kind, "view": view, "ended": ended})
     }
 
     fn poll(cell: &Rc<RefCell<WatchCell>>) -> Poll<Result<Option<PageView>, FlowError>> {
@@ -713,7 +713,7 @@ mod tests {
         let mut protocol = Protocol::new();
         assert!(
             protocol
-                .receive(json!({"v":3,"request":7,"kind":"started","run":RUN}))
+                .receive(json!({"v":4,"request":7,"kind":"started","run":RUN}))
                 .is_err()
         );
         let reply = protocol
@@ -726,7 +726,7 @@ mod tests {
             )
             .unwrap();
         protocol
-            .receive(json!({"v":3,"request":"foreign","kind":"started","run":RUN}))
+            .receive(json!({"v":4,"request":"foreign","kind":"started","run":RUN}))
             .unwrap();
         assert!(matches!(
             reply
@@ -735,7 +735,7 @@ mod tests {
             Poll::Pending
         ));
         protocol
-            .receive(json!({"v":3,"request":"start-1","kind":"started","run":RUN}))
+            .receive(json!({"v":4,"request":"start-1","kind":"started","run":RUN}))
             .unwrap();
         assert!(matches!(
             reply
@@ -818,7 +818,7 @@ mod tests {
             )
             .unwrap();
         protocol
-            .receive(json!({"v":3,"request":"wrong-stop","kind":"stopping","run":"0123456789abcdef0123456789abcdef:3"}))
+            .receive(json!({"v":4,"request":"wrong-stop","kind":"stopping","run":"0123456789abcdef0123456789abcdef:3"}))
             .unwrap();
         assert!(matches!(
             wrong_stop
@@ -854,7 +854,7 @@ mod tests {
             .unwrap();
 
         protocol
-            .receive(json!({"v":3,"request":null,"kind":"disconnected"}))
+            .receive(json!({"v":4,"request":null,"kind":"disconnected"}))
             .unwrap();
         assert!(matches!(
             reply

@@ -1,3 +1,6 @@
+mod buttons;
+pub(super) use buttons::{arm_button, button_receipt, check_button};
+
 const HELPERS: &str = r#"
 const clean = value => String(value || '').replace(/\s+/g, ' ').trim();
 const bounded = (value, limit) => {
@@ -56,6 +59,16 @@ const eligible = element => {
   if (/password|passcode|one[ -]?time[ -]?code|\botp\b|token|secret|api[ _-]?key|payment[ _-]?card|credit[ _-]?card|card[ _-]?(number|cvc|cvv)|cc[ _-]?(number|name|exp|csc|cvc|cvv)|\b(cvc|cvv)\b|social[ _-]?security|\bssn\b/.test(metadata)) return null;
   return accessible;
 };
+const eligibleButton = element => {
+  const native = element instanceof HTMLButtonElement || element instanceof HTMLInputElement && ['button','submit','reset'].includes(element.type);
+  if (!native || element.matches(':disabled') || element.getAttribute('aria-disabled') === 'true' || !visible(element)) return null;
+  const accessible = label(element);
+  if (accessible === null) return null;
+  const text = accessible || (element instanceof HTMLButtonElement ? labelText(element) : element.value);
+  if (text === null) return null;
+  const result = clean(text);
+  return result && result.length <= 512 ? result : null;
+};
 "#;
 
 fn function(body: &str) -> String {
@@ -66,14 +79,24 @@ pub(super) fn capture() -> String {
     function(
         r#"
 const snapshot = [];
-const summary = { url: bounded(location.href, 2048)[0], title: bounded(document.title, 128)[0], text: '', text_truncated: false, fields_truncated: false, fields: [] };
+const buttons = [];
+Object.defineProperty(snapshot, '__metldr_buttons', { value: buttons });
+const summary = { url: bounded(location.href, 2048)[0], title: bounded(document.title, 128)[0], text: '', text_truncated: false, fields_truncated: false, fields: [], buttons_truncated: false, buttons: [] };
 let bytes = 0, nodes = 0;
 const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
 while (walker.nextNode()) {
   nodes++;
-  if (nodes > 4096) { summary.text_truncated = true; summary.fields_truncated = true; break; }
+  if (nodes > 4096) { summary.text_truncated = true; summary.fields_truncated = true; summary.buttons_truncated = true; break; }
   const node = walker.currentNode;
   if (node.nodeType === Node.ELEMENT_NODE) {
+    const buttonLabel = eligibleButton(node);
+    if (buttonLabel !== null) {
+      if (buttons.length === 32) summary.buttons_truncated = true;
+      else {
+        const slot = buttons.push(node) - 1;
+        summary.buttons.push({ slot, label: bounded(buttonLabel, 128)[0], check_label: buttonLabel });
+      }
+    }
     if (node instanceof HTMLInputElement && node.type === 'text') {
       const accessible = eligible(node);
       if (accessible !== null) {

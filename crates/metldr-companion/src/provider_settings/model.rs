@@ -219,7 +219,7 @@ mod checks {
         assert!(settings.validate().is_err());
         settings.pending = None;
         settings.validate().unwrap();
-        let invalid = br#"{"v":3,"request":"save:2","command":{"op":"provider_save","protocol":"messages","expected_revision":1,"endpoint":"https://example.com","model":"test","key":{"kind":"replace","value":"secret with space"}}}"#;
+        let invalid = br#"{"v":4,"request":"save:2","command":{"op":"provider_save","protocol":"messages","expected_revision":1,"endpoint":"https://example.com","model":"test","key":{"kind":"replace","value":"secret with space"}}}"#;
         let error = crate::wire::decode_request(invalid)
             .err()
             .unwrap()

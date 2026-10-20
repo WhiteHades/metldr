@@ -7,13 +7,13 @@ const ROOT_SESSION: &str = "metldr-owned-root";
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Binding {
-    tab: i32,
-    document: String,
-    target: String,
-    frame: String,
-    session: String,
-    unique_context: String,
-    grant_revision: u64,
+    pub(super) tab: i32,
+    pub(super) document: String,
+    pub(super) target: String,
+    pub(super) frame: String,
+    pub(super) session: String,
+    pub(super) unique_context: String,
+    pub(super) grant_revision: u64,
 }
 
 #[derive(Deserialize)]
@@ -461,11 +461,11 @@ fn clear_unstarted(connection: u64, epoch: u64, action: &str, revision: u64) {
     });
 }
 
-fn root_session(session: &str) -> Option<&str> {
+pub(super) fn root_session(session: &str) -> Option<&str> {
     (session != ROOT_SESSION).then_some(session)
 }
 
-fn valid_binding(binding: &Binding) -> bool {
+pub(super) fn valid_binding(binding: &Binding) -> bool {
     binding.grant_revision > 0
         && [
             &binding.document,

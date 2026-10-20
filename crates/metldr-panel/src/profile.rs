@@ -24,7 +24,14 @@ pub(super) fn is_profile_required(message: &JsValue) -> Result<bool, JsValue> {
     let object = value
         .as_object()
         .ok_or_else(|| JsValue::from_str("Invalid profile control frame."))?;
-    if object.len() != 2 || value.get("v").and_then(serde_json::Value::as_u64) != Some(3) {
+    if let Some(version) = value.get("v").and_then(serde_json::Value::as_u64) {
+        if version != 4 {
+            return Err(JsValue::from_str(&format!(
+                "Unsupported native wire version {version}; expected 4."
+            )));
+        }
+    }
+    if object.len() != 2 || value.get("v").and_then(serde_json::Value::as_u64) != Some(4) {
         return Err(JsValue::from_str("Invalid profile control frame."));
     }
     Ok(true)

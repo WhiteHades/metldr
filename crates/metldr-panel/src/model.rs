@@ -380,6 +380,10 @@ pub(crate) enum BrowserActionIntent {
     Navigate {
         destination: String,
     },
+    ActivateButton {
+        button_id: String,
+        button_label: String,
+    },
 }
 
 #[derive(Deserialize)]
@@ -403,6 +407,10 @@ struct WireBrowserAction {
     value: Option<String>,
     #[serde(default)]
     destination: Option<String>,
+    #[serde(default)]
+    button_id: Option<String>,
+    #[serde(default)]
+    button_label: Option<String>,
     phase: BrowserActionPhase,
     #[serde(default, deserialize_with = "Option::deserialize")]
     outcome: Option<BrowserActionOutcome>,
@@ -420,24 +428,37 @@ impl<'de> Deserialize<'de> for BrowserActionView {
             || wire.field_label.is_some()
             || wire.previous_value.is_some()
             || wire.value.is_some();
+        let button_members = wire.button_id.is_some() || wire.button_label.is_some();
         let intent = match wire.kind.as_str() {
-            "field" if field_members && wire.destination.is_none() => BrowserActionIntent::Field {
-                field_id: wire
-                    .field_id
-                    .ok_or_else(|| serde::de::Error::missing_field("field_id"))?,
-                field_label: wire.field_label.unwrap_or_else(default_field_label),
-                previous_value: wire
-                    .previous_value
-                    .ok_or_else(|| serde::de::Error::missing_field("previous_value"))?,
-                value: wire
-                    .value
-                    .ok_or_else(|| serde::de::Error::missing_field("value"))?,
-            },
-            "navigate" if !field_members => BrowserActionIntent::Navigate {
+            "field" if field_members && !button_members && wire.destination.is_none() => {
+                BrowserActionIntent::Field {
+                    field_id: wire
+                        .field_id
+                        .ok_or_else(|| serde::de::Error::missing_field("field_id"))?,
+                    field_label: wire.field_label.unwrap_or_else(default_field_label),
+                    previous_value: wire
+                        .previous_value
+                        .ok_or_else(|| serde::de::Error::missing_field("previous_value"))?,
+                    value: wire
+                        .value
+                        .ok_or_else(|| serde::de::Error::missing_field("value"))?,
+                }
+            }
+            "navigate" if !field_members && !button_members => BrowserActionIntent::Navigate {
                 destination: wire
                     .destination
                     .ok_or_else(|| serde::de::Error::missing_field("destination"))?,
             },
+            "activate_button" if !field_members && wire.destination.is_none() && button_members => {
+                BrowserActionIntent::ActivateButton {
+                    button_id: wire
+                        .button_id
+                        .ok_or_else(|| serde::de::Error::missing_field("button_id"))?,
+                    button_label: wire
+                        .button_label
+                        .ok_or_else(|| serde::de::Error::missing_field("button_label"))?,
+                }
+            }
             _ => return Err(serde::de::Error::custom("invalid browser action intent")),
         };
         Ok(Self {
@@ -488,6 +509,7 @@ impl std::fmt::Display for BrowserActionPhase {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum BrowserActionOutcome {
     Verified,
+    ClickObserved,
     Prevented,
     Uncertain,
 }
@@ -496,6 +518,7 @@ impl std::fmt::Display for BrowserActionOutcome {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Verified => "verified",
+            Self::ClickObserved => "click_observed",
             Self::Prevented => "prevented",
             Self::Uncertain => "uncertain",
         })
@@ -1131,12 +1154,20 @@ impl PageView {
                 BrowserActionPhase::Pending => action.revision == 1,
                 BrowserActionPhase::Approved => action.revision == 2,
                 BrowserActionPhase::Dispatching => action.revision == 3,
-                BrowserActionPhase::Settled => match action.outcome {
-                    Some(BrowserActionOutcome::Verified | BrowserActionOutcome::Uncertain) => {
-                        action.revision == 4
+                BrowserActionPhase::Settled => match (action.outcome, &action.intent) {
+                    (
+                        Some(BrowserActionOutcome::Verified),
+                        BrowserActionIntent::Field { .. } | BrowserActionIntent::Navigate { .. },
+                    )
+                    | (
+                        Some(BrowserActionOutcome::ClickObserved),
+                        BrowserActionIntent::ActivateButton { .. },
+                    )
+                    | (Some(BrowserActionOutcome::Uncertain), _) => action.revision == 4,
+                    (Some(BrowserActionOutcome::Prevented), _) => {
+                        (2..=4).contains(&action.revision)
                     }
-                    Some(BrowserActionOutcome::Prevented) => (2..=4).contains(&action.revision),
-                    None => false,
+                    _ => false,
                 },
             };
             let reason_valid = match (action.phase, action.outcome, action.reason.as_deref()) {
@@ -1149,7 +1180,11 @@ impl PageView {
                         && reason.len() <= 200
                         && !reason.chars().any(char::is_control)
                 }
-                (BrowserActionPhase::Settled, Some(BrowserActionOutcome::Verified), None) => true,
+                (
+                    BrowserActionPhase::Settled,
+                    Some(BrowserActionOutcome::Verified | BrowserActionOutcome::ClickObserved),
+                    None,
+                ) => true,
                 (
                     BrowserActionPhase::Pending
                     | BrowserActionPhase::Approved
@@ -1410,6 +1445,19 @@ fn valid_browser_intent(intent: &BrowserActionIntent) -> bool {
             !destination.is_empty()
                 && destination.len() <= 2_048
                 && !destination.chars().any(char::is_control)
+        }
+        BrowserActionIntent::ActivateButton {
+            button_id,
+            button_label,
+        } => {
+            !button_id.is_empty()
+                && button_id.len() <= 64
+                && button_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+                && !button_label.trim().is_empty()
+                && button_label.len() <= 128
+                && !button_label.chars().any(char::is_control)
         }
     }
 }
@@ -1892,6 +1940,32 @@ mod tests {
         view["browser_actions"][0]["reason"] = serde_json::json!("The page changed.");
         assert!(PageView::decode(&serde_json::to_vec(&view).unwrap()).is_ok());
         view["browser_actions"][0]["revision"] = serde_json::json!(3);
+        assert!(PageView::decode(&serde_json::to_vec(&view).unwrap()).is_err());
+
+        view["browser_actions"] = serde_json::json!([{
+            "id":format!("{STORE}:4"), "revision":1,
+            "run":format!("{STORE}:2"), "tab":4, "document":"doc-1",
+            "url":"http://127.0.0.1:43123/article", "kind":"activate_button",
+            "button_id":"button_1", "button_label":"Send",
+            "phase":"pending"
+        }]);
+        let button = PageView::decode(&serde_json::to_vec(&view).unwrap()).unwrap();
+        assert!(matches!(
+            &button.browser_actions[0].intent,
+            BrowserActionIntent::ActivateButton { button_id, button_label }
+                if button_id == "button_1" && button_label == "Send"
+        ));
+        view["browser_actions"][0]["field_id"] = serde_json::json!("mixed");
+        assert!(PageView::decode(&serde_json::to_vec(&view).unwrap()).is_err());
+        view["browser_actions"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("field_id");
+        view["browser_actions"][0]["phase"] = serde_json::json!("settled");
+        view["browser_actions"][0]["revision"] = serde_json::json!(4);
+        view["browser_actions"][0]["outcome"] = serde_json::json!("click_observed");
+        assert!(PageView::decode(&serde_json::to_vec(&view).unwrap()).is_ok());
+        view["browser_actions"][0]["outcome"] = serde_json::json!("verified");
         assert!(PageView::decode(&serde_json::to_vec(&view).unwrap()).is_err());
     }
 

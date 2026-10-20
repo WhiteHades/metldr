@@ -68,11 +68,20 @@ pub(super) fn render(
                             value["kind"] = json!("navigate");
                             value["destination"] = json!(destination);
                         }
+                        crate::browser_action::Intent::ActivateButton {
+                            button_id,
+                            button_label,
+                        } => {
+                            value["kind"] = json!("activate_button");
+                            value["button_id"] = json!(button_id);
+                            value["button_label"] = json!(button_label);
+                        }
                     }
                     if let crate::browser_action::Phase::Settled { outcome } = &action.state {
                         use crate::browser_action::Outcome;
                         value["outcome"] = json!(match outcome {
                             Outcome::Verified { .. } | Outcome::Navigated { .. } => "verified",
+                            Outcome::ButtonClickObserved => "click_observed",
                             Outcome::Prevented { .. } => "prevented",
                             Outcome::Uncertain { .. } => "uncertain",
                         });

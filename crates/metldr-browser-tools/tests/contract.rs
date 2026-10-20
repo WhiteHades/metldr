@@ -1,4 +1,4 @@
-use metldr_browser_tools::{Call, decode_call, definitions};
+use metldr_browser_tools::{ACTIVATE_TOOL, Call, decode_call, definitions};
 use serde_json::json;
 
 #[test]
@@ -6,6 +6,12 @@ fn decodes_the_shared_browser_calls_and_bounds_untrusted_arguments() {
     assert_eq!(
         decode_call("observe_page", json!({})).unwrap(),
         Call::Observe
+    );
+    assert_eq!(
+        decode_call(ACTIVATE_TOOL, json!({"handle":"button_1-A"})).unwrap(),
+        Call::ActivateButton {
+            handle: "button_1-A".into()
+        }
     );
     assert_eq!(
         decode_call("navigate_page", json!({"url":"https://example.com/report"})).unwrap(),
@@ -33,6 +39,13 @@ fn decodes_the_shared_browser_calls_and_bounds_untrusted_arguments() {
         ("unknown", json!({})),
         ("observe_page", json!([])),
         ("observe_page", json!({"selector":"body"})),
+        (ACTIVATE_TOOL, json!({})),
+        (
+            ACTIVATE_TOOL,
+            json!({"handle":"button_1","selector":"button"}),
+        ),
+        (ACTIVATE_TOOL, json!({"handle":"#submit"})),
+        (ACTIVATE_TOOL, json!({"handle":"é"})),
         ("navigate_page", json!({})),
         ("navigate_page", json!({"url":""})),
         ("navigate_page", json!({"url":12})),
@@ -74,8 +87,21 @@ fn decodes_the_shared_browser_calls_and_bounds_untrusted_arguments() {
     }
     let tools = definitions();
     assert_eq!(
-        tools.map(|tool| tool.name),
-        ["observe_page", "set_field_value", "navigate_page"]
+        tools.each_ref().map(|tool| tool.name),
+        [
+            "observe_page",
+            "set_field_value",
+            "navigate_page",
+            ACTIVATE_TOOL
+        ]
+    );
+    assert_eq!(tools[3].input_schema["required"], json!(["handle"]));
+    assert_eq!(
+        tools[3].input_schema["properties"]
+            .as_object()
+            .unwrap()
+            .len(),
+        1
     );
     for tool in definitions() {
         assert_eq!(tool.input_schema["additionalProperties"], false);

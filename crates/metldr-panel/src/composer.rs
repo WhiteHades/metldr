@@ -519,8 +519,8 @@ pub(super) fn render(panel: &Panel) -> Result<(), JsValue> {
     } else {
         match destination {
             Ok(Destination::Browser { .. }) => match view.and_then(|view| view.browser_route.as_ref()) {
-                Some(BrowserRouteView::Messages { model }) => format!("Browser task uses the owned model fixture ({model}). Proposed field changes require your approval."),
-                Some(BrowserRouteView::HttpsMessages { endpoint, model, .. }) => format!("Browser task uses configured HTTPS model {model} at {endpoint}. Proposed field changes require your approval."),
+                Some(BrowserRouteView::Messages { model }) => format!("Browser task uses the owned model fixture ({model}). Proposed browser actions require your approval."),
+                Some(BrowserRouteView::HttpsMessages { endpoint, model, .. }) => format!("Browser task uses configured HTTPS model {model} at {endpoint}. Proposed browser actions require your approval."),
                 None => "The browser task is unavailable.".into(),
             },
             Ok(Destination::Responses { .. }) => match view.and_then(|view| view.responses_route.as_ref()) {

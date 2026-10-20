@@ -274,8 +274,17 @@ mod tests {
 
     #[test]
     fn native_boundary_rejects_partial_oversize_and_invalid_utf8() {
-        let value = json!({"v":3,"request":"check:1","command":{"op":"view"}});
+        let value = json!({"v":4,"request":"check:1","command":{"op":"view"}});
         let bytes = serde_json::to_vec(&value).unwrap();
+        let mut old = value.clone();
+        old["v"] = json!(3);
+        assert_eq!(
+            crate::wire::decode_request(&serde_json::to_vec(&old).unwrap())
+                .err()
+                .unwrap()
+                .to_string(),
+            "unsupported native wire version 3; expected 4"
+        );
         let mut framed = (bytes.len() as u32).to_ne_bytes().to_vec();
         framed.extend_from_slice(&bytes);
         assert!(matches!(

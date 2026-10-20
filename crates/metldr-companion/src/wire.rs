@@ -30,7 +30,14 @@ pub(crate) fn read_frame(reader: &mut impl Read) -> Result<Option<Request>> {
 
 pub(crate) fn decode_request(bytes: &[u8]) -> Result<Request> {
     let request: Request = serde_json::from_slice(bytes).map_err(|_| "invalid native request")?;
-    if request.v != WIRE_VERSION || !valid_request_id(&request.request) {
+    if request.v != WIRE_VERSION {
+        return Err(format!(
+            "unsupported native wire version {}; expected {WIRE_VERSION}",
+            request.v
+        )
+        .into());
+    }
+    if !valid_request_id(&request.request) {
         return Err("invalid native request envelope".into());
     }
     Ok(request)

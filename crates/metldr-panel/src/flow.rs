@@ -798,7 +798,7 @@ impl Connection {
         if self.protocol.borrow().closed {
             return Err(FlowError::Disconnected);
         }
-        let value = json_js(&json!({"v":3,"request":id,"command":command}))?;
+        let value = json_js(&json!({"v":4,"request":id,"command":command}))?;
         call(&self.port, "postMessage", &[value]).map_err(js_error)?;
         Ok(())
     }
@@ -904,7 +904,10 @@ impl Connection {
         })
     }
     async fn action_is_current(&self, action: &crate::model::BrowserActionView) -> Result<bool> {
-        let tab = self.active_tab().await?;
+        let tabs = chrome_api("tabs").map_err(js_error)?;
+        let tab = await_call(&tabs, "get", &[action.tab.into()])
+            .await
+            .map_err(js_error)?;
         if get(&tab, "id").map_err(js_error)?.as_f64() != Some(f64::from(action.tab))
             || string_property(&tab, "url").map_err(js_error)? != action.url
         {
@@ -912,7 +915,9 @@ impl Connection {
         }
         let item = self.inject(action.tab, Some(&action.document)).await?;
         let observed = get(&item, "result").map_err(js_error)?;
-        let current = self.active_tab().await?;
+        let current = await_call(&tabs, "get", &[action.tab.into()])
+            .await
+            .map_err(js_error)?;
         Ok(
             get(&current, "id").map_err(js_error)?.as_f64() == Some(f64::from(action.tab))
                 && string_property(&current, "url").map_err(js_error)? == action.url

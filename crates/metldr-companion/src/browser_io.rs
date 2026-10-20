@@ -31,6 +31,13 @@ pub(super) enum Operation {
         destination: String,
         params: Value,
     },
+    ActivateButton {
+        action: String,
+        revision: u64,
+        binding: crate::browser_action::Binding,
+        url: String,
+        params: Value,
+    },
     ConfirmNavigation {
         action: String,
         revision: u64,
@@ -70,6 +77,7 @@ pub(super) struct Slot {
     pending: BTreeMap<u64, oneshot::Sender<Reply>>,
     next: u64,
     navigations: std::collections::BTreeSet<String>,
+    buttons: std::collections::BTreeSet<String>,
 }
 
 impl Slot {
@@ -84,6 +92,7 @@ impl Slot {
                 pending: BTreeMap::new(),
                 next: 0,
                 navigations: Default::default(),
+                buttons: Default::default(),
             },
             rx,
         )
@@ -178,6 +187,35 @@ impl Owner {
                         );
                     }
                 }
+                Operation::ActivateButton {
+                    action,
+                    revision,
+                    binding,
+                    url,
+                    ..
+                } => {
+                    let record = self
+                        .state
+                        .browser_actions
+                        .get(action)
+                        .ok_or("unknown button action")?;
+                    if record.proposal.run != call.run
+                        || record.revision != *revision
+                        || record.state != crate::browser_action::Phase::Dispatching
+                        || &record.proposal.binding != binding
+                        || &record.proposal.url != url
+                        || !matches!(
+                            &record.proposal.intent,
+                            crate::browser_action::Intent::ActivateButton { .. }
+                        )
+                        || binding.tab != slot.tab
+                        || !slot.buttons.insert(action.clone())
+                    {
+                        return Err(
+                            "button dispatch does not match a fresh durable approval".into()
+                        );
+                    }
+                }
                 Operation::ConfirmNavigation {
                     action,
                     revision,
@@ -230,7 +268,7 @@ impl Owner {
         }
         // Install the waiter before exposing the command to the extension.
         slot.pending.insert(id, call.ack);
-        if let Err(error) = self.emit(json!({"v":3,"kind":"browser_rpc","call":id,
+        if let Err(error) = self.emit(json!({"v":4,"kind":"browser_rpc","call":id,
             "run":call.run,"operation":call.operation}))
         {
             self.browser_io_finish(&call.run);

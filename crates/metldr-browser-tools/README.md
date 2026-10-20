@@ -1,6 +1,6 @@
 # Browser tool contract
 
-This Rust crate defines the shared tools for observing a page, proposing navigation and proposing a text field change. API providers and installed agents can use the same definitions and argument decoder.
+This Rust crate defines the shared tools for observing a page and proposing navigation, text field changes and native button clicks. API providers and installed agents can use the same definitions and argument decoder.
 
 ```rust
 use metldr_browser_tools::{Call, decode_call};
@@ -22,3 +22,5 @@ The decoder rejects unknown tools, extra arguments and handles outside the suppo
 Decoded calls do not grant browser access or approve effects. The caller must validate destination URLs against its navigation policy, resolve handles against the latest observation, bind actions to the current document and obtain approval before dispatch. The crate does not execute browser commands.
 
 Run `make check-browser-tools` from the repository root.
+
+`activate_button` proposes a native click on a button handle from the latest observation. The user must approve the exact control. `button_click_observed` reports one trusted click observed on that control; it does not certify a site result or identify who supplied concurrent input. An uncertain result stops automatic continuation and is never replayed. Model callers cannot supply selectors, scripts or coordinates.

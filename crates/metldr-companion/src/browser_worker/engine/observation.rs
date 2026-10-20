@@ -13,6 +13,8 @@ struct Census {
     text_truncated: bool,
     fields_truncated: bool,
     fields: Vec<CensusField>,
+    buttons_truncated: bool,
+    buttons: Vec<CensusField>,
 }
 
 #[derive(Deserialize)]
@@ -32,6 +34,7 @@ pub(super) struct Snapshot {
     pub(super) context: FrameContext,
     pub(super) root: RemoteObjectId,
     pub(super) fields: BTreeMap<String, Field>,
+    pub(super) buttons: BTreeMap<String, Field>,
 }
 
 impl Snapshot {
@@ -59,6 +62,20 @@ impl Snapshot {
             );
             observed_fields.push(json!({ "handle": handle, "label": field.label.clone() }));
         }
+        let mut buttons = BTreeMap::new();
+        let mut observed_buttons = Vec::with_capacity(census.buttons.len());
+        for button in &census.buttons {
+            let handle = format!("b{}-{generation:x}-{:x}", &run_identity[..32], button.slot);
+            buttons.insert(
+                handle.clone(),
+                Field {
+                    slot: button.slot,
+                    label: button.label.clone(),
+                    check_label: button.check_label.clone(),
+                },
+            );
+            observed_buttons.push(json!({"handle":handle,"label":button.label}));
+        }
         let result = json!({
             "kind": "page_observation",
             "untrusted": true,
@@ -68,12 +85,15 @@ impl Snapshot {
             "text_truncated": census.text_truncated,
             "fields_truncated": census.fields_truncated,
             "fields": observed_fields,
+            "buttons_truncated": census.buttons_truncated,
+            "buttons": observed_buttons,
         });
         Ok((
             Self {
                 context,
                 root,
                 fields,
+                buttons,
             },
             result,
         ))
@@ -84,23 +104,30 @@ impl Snapshot {
             .get(handle)
             .ok_or_else(|| "invalid or expired browser field handle".into())
     }
+    pub(super) fn button(&self, handle: &str) -> Result<&Field> {
+        self.buttons
+            .get(handle)
+            .ok_or_else(|| "invalid or expired browser button handle".into())
+    }
 }
 
 impl Census {
     fn validate(&self) -> Result<()> {
-        let mut slots = BTreeSet::new();
         if self.url.is_empty()
             || self.url.len() > 2048
             || self.title.len() > 128
             || self.text.len() > 4096
-            || self.fields.len() > 32
-            || self.fields.iter().any(|field| {
-                field.slot >= 32
-                    || !slots.insert(field.slot)
-                    || field.label.is_empty()
-                    || field.label.len() > 128
-                    || field.label.chars().any(char::is_control)
-                    || field.check_label.len() > 2048
+            || [&self.fields, &self.buttons].into_iter().any(|controls| {
+                let mut slots = BTreeSet::new();
+                controls.len() > 32
+                    || controls.iter().any(|field| {
+                        field.slot >= 32
+                            || !slots.insert(field.slot)
+                            || field.label.is_empty()
+                            || field.label.len() > 128
+                            || field.label.chars().any(char::is_control)
+                            || field.check_label.len() > 2048
+                    })
             })
         {
             return Err("invalid or oversized browser observation".into());
@@ -118,6 +145,7 @@ mod checks {
         let mut census: Census = serde_json::from_value(json!({
             "url":"https://example.test/", "title":"Example", "text":"Live text",
             "text_truncated":false, "fields_truncated":false,
+            "buttons_truncated":false,"buttons":[],
             "fields":[{"slot":0,"label":"Report title","check_label":"Report title"}]
         }))
         .unwrap();

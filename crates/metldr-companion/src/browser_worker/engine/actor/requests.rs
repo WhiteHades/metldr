@@ -10,6 +10,8 @@ impl Actor {
         }
         self.busy = true;
         match kind {
+            Kind::PrepareButton { tool, handle } => self.prepare_button(tool, handle, job),
+            Kind::ActivateButton(action) => self.arm_button(action, job),
             Kind::Observe { generation } => {
                 if generation <= self.generation {
                     self.finish(job, Err("observation generation was reused".into()));

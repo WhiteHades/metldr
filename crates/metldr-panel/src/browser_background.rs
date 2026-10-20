@@ -9,6 +9,7 @@ use std::{
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use wasm_bindgen_futures::spawn_local;
 
+mod button;
 mod navigation;
 mod release;
 
@@ -45,6 +46,7 @@ struct Attachment {
     sessions: BTreeMap<String, Option<String>>,
     grant_revision: u64,
     pending_navigation: Option<navigation::PendingNavigation>,
+    buttons: BTreeSet<String>,
     confirming_navigation: bool,
     command_count: usize,
 }
@@ -79,6 +81,13 @@ enum Operation {
         binding: navigation::Binding,
         url: String,
         destination: String,
+        params: Value,
+    },
+    ActivateButton {
+        action: String,
+        revision: u64,
+        binding: navigation::Binding,
+        url: String,
         params: Value,
     },
     ConfirmNavigation {
@@ -125,7 +134,7 @@ pub(super) fn receive(message: &JsValue) -> bool {
     let Ok(envelope) = serde_json::from_str::<Envelope>(&raw) else {
         return true;
     };
-    if envelope.v != 3 || envelope.kind != "browser_rpc" || !valid_run(&envelope.run) {
+    if envelope.v != 4 || envelope.kind != "browser_rpc" || !valid_run(&envelope.run) {
         return true;
     }
     let connection = STATE.with(|state| state.borrow().connection);
@@ -197,6 +206,25 @@ async fn handle(envelope: Envelope, connection: u64) -> Result<Value, String> {
             )
             .await
         }
+        Operation::ActivateButton {
+            action,
+            revision,
+            binding,
+            url,
+            params,
+        } => {
+            button::activate(
+                connection,
+                envelope.call,
+                &envelope.run,
+                action,
+                revision,
+                binding,
+                url,
+                params,
+            )
+            .await
+        }
         Operation::ConfirmNavigation {
             action,
             revision,
@@ -260,6 +288,7 @@ async fn attach(
             sessions: BTreeMap::new(),
             grant_revision: 1,
             pending_navigation: None,
+            buttons: BTreeSet::new(),
             confirming_navigation: false,
             command_count: 0,
         });
@@ -933,7 +962,7 @@ fn post_native(connection: u64, request: String, command: Value) {
     let Some(native) = native else {
         return;
     };
-    let message = json!({"v":3,"request":request,"command":command});
+    let message = json!({"v":4,"request":request,"command":command});
     if !bounded_json(&message, MAX_FRAME) {
         invalidate_all();
         return;

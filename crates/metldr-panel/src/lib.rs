@@ -85,7 +85,7 @@ pub fn accept_panel(port: JsValue) {
                 if let Some(request) = request {
                     let message: String = js_message(&error).chars().take(64).collect();
                     if let Ok(raw) = serde_json::to_string(
-                        &json!({"v":3,"request":request,"kind":"error","message":message}),
+                        &json!({"v":4,"request":request,"kind":"error","message":message}),
                     ) {
                         if let Ok(value) = js_sys::JSON::parse(&raw) {
                             let _ = call(&reply_port, "postMessage", &[value]);
@@ -769,7 +769,7 @@ fn connect_native() -> Result<(), JsValue> {
             return;
         }
         browser_background::disconnect();
-        forward_panel(&json!({"v":3,"request":null,"kind":"disconnected"}));
+        forward_panel(&json!({"v":4,"request":null,"kind":"disconnected"}));
         set_background_native(JsValue::NULL);
     })?;
     Ok(())

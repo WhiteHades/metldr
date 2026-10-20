@@ -14,6 +14,10 @@ pub(crate) enum Intent {
     Navigate {
         destination: String,
     },
+    ActivateButton {
+        button_id: String,
+        button_label: String,
+    },
 }
 
 #[derive(Deserialize)]
@@ -77,6 +81,17 @@ impl Intent {
                 Ok(())
             }
             Self::Navigate { destination } if valid_destination(current_url, destination) => Ok(()),
+            Self::ActivateButton {
+                button_id,
+                button_label,
+            } if bounded(button_id, 64)
+                && button_id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+                && bounded(button_label, 128) =>
+            {
+                Ok(())
+            }
             _ => Err("invalid browser action intent".into()),
         }
     }

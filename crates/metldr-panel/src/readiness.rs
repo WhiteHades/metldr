@@ -178,11 +178,11 @@ fn request_profile(native: JsValue) {
             return;
         }
         let Some(key) = key else {
-            forward_panel(&json!({"v":3,"request":null,"kind":"disconnected"}));
+            forward_panel(&json!({"v":4,"request":null,"kind":"disconnected"}));
             disconnect_current();
             return;
         };
-        let frame = json!({"v":3,"kind":"profile","key":key});
+        let frame = json!({"v":4,"kind":"profile","key":key});
         let Ok(raw) = serde_json::to_string(&frame) else {
             disconnect_current();
             return;

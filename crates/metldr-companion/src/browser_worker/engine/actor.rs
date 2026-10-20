@@ -24,6 +24,7 @@ use tokio::{
     time::Instant,
 };
 
+mod buttons;
 mod initialization;
 mod navigation;
 mod requests;
@@ -61,6 +62,22 @@ enum Work {
         tool: String,
         handle: String,
         value: String,
+        job: Job,
+    },
+    ReadButton {
+        tool: String,
+        handle: String,
+        job: Job,
+    },
+    ArmButton {
+        action: Action,
+        job: Job,
+    },
+    Gesture {
+        action: Action,
+        job: Job,
+    },
+    ButtonReceipt {
         job: Job,
     },
     Write {
@@ -304,11 +321,13 @@ impl Actor {
                 }
             }
             match &pending.work {
-                Work::Write { action, .. } | Work::Navigate { action, .. } => self
-                    .validate_action(
-                        action,
-                        pending.context.as_ref().ok_or("missing action context")?,
-                    )?,
+                Work::Write { action, .. }
+                | Work::Navigate { action, .. }
+                | Work::ArmButton { action, .. }
+                | Work::Gesture { action, .. } => self.validate_action(
+                    action,
+                    pending.context.as_ref().ok_or("missing action context")?,
+                )?,
                 _ => (),
             }
             Ok(())
@@ -325,6 +344,13 @@ impl Actor {
         self.transport.dispatch(&command)?;
         let navigating = matches!(pending.work, Work::Navigate { .. });
         let operation = match &pending.work {
+            Work::Gesture { action, .. } => Operation::ActivateButton {
+                action: action.id.clone(),
+                revision: action.revision,
+                binding: action.proposal.binding.clone(),
+                url: action.proposal.url.clone(),
+                params: command.params,
+            },
             Work::Navigate { action, .. } => {
                 let Intent::Navigate { destination } = &action.proposal.intent else {
                     return Err("invalid navigation intent".into());
@@ -346,7 +372,7 @@ impl Actor {
             },
         };
         let reply = match &pending.work {
-            Work::Write { job, .. } | Work::Navigate { job, .. } => job
+            Work::Write { job, .. } | Work::Navigate { job, .. } | Work::Gesture { job, .. } => job
                 .admission
                 .as_ref()
                 .ok_or("browser action admission absent")?
@@ -407,6 +433,10 @@ impl Work {
             | Self::Capture { job, .. }
             | Self::Census { job, .. }
             | Self::ReadField { job, .. }
+            | Self::ReadButton { job, .. }
+            | Self::ArmButton { job, .. }
+            | Self::Gesture { job, .. }
+            | Self::ButtonReceipt { job }
             | Self::Write { job, .. }
             | Self::Verify { job, .. }
             | Self::Navigate { job, .. } => Some(job),

@@ -42,6 +42,7 @@ pub(super) enum Outcome {
         url: String,
         loader: String,
     },
+    ButtonClickObserved,
     Prevented {
         reason: String,
     },
@@ -344,6 +345,10 @@ pub(super) fn validate(state: &Store, valid_id: impl Fn(&str) -> bool) -> Result
                     Outcome::Verified { .. }
                     | Outcome::Navigated { .. }
                     | Outcome::Uncertain { .. } => action.revision == 4,
+                    Outcome::ButtonClickObserved => {
+                        action.revision == 4
+                            && matches!(&action.proposal.intent, Intent::ActivateButton { .. })
+                    }
                     Outcome::Prevented { .. } => (2..=4).contains(&action.revision),
                 };
                 if !valid_revision {
@@ -375,6 +380,7 @@ fn validate_outcome(outcome: &Outcome, proposal: &Proposal) -> Result<()> {
         (Outcome::Verified { observed }, Intent::Field { value, .. }) if observed == value => {
             Ok(())
         }
+        (Outcome::ButtonClickObserved, Intent::ActivateButton { .. }) => Ok(()),
         (
             Outcome::Navigated {
                 binding,
@@ -403,4 +409,21 @@ fn validate_outcome(outcome: &Outcome, proposal: &Proposal) -> Result<()> {
         }
         _ => Err("invalid browser outcome".into()),
     }
+}
+
+pub(super) fn reject_button_actions(
+    actions: &std::collections::BTreeMap<String, Action>,
+) -> Result<()> {
+    if actions.values().any(|action| {
+        matches!(&action.proposal.intent, Intent::ActivateButton { .. })
+            || matches!(
+                &action.state,
+                Phase::Settled {
+                    outcome: Outcome::ButtonClickObserved
+                }
+            )
+    }) {
+        return Err("legacy browser store contains button action data".into());
+    }
+    Ok(())
 }

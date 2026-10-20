@@ -45,6 +45,11 @@ enum Kind {
         value: String,
     },
     Change(Action),
+    PrepareButton {
+        tool: String,
+        handle: String,
+    },
+    ActivateButton(Action),
     PrepareNavigation {
         tool: String,
         destination: String,
@@ -213,6 +218,20 @@ impl Engine {
         self.effect(
             Kind::Change(action.clone()),
             "field dispatch result was lost",
+        )
+        .await
+    }
+    pub(super) async fn prepare_button(&self, tool: &str, handle: &str) -> Result<Proposal> {
+        self.request(Kind::PrepareButton {
+            tool: tool.into(),
+            handle: handle.into(),
+        })
+        .await
+    }
+    pub(super) async fn activate_button(&self, action: &Action) -> Outcome {
+        self.effect(
+            Kind::ActivateButton(action.clone()),
+            "button input result was lost",
         )
         .await
     }

@@ -1,5 +1,7 @@
 use super::*;
-use chromiumoxide::cdp::js_protocol::runtime::RemoteObject;
+use chromiumoxide::cdp::js_protocol::runtime::{
+    RemoteObject, RemoteObjectSubtype, RemoteObjectType,
+};
 impl Actor {
     pub(super) fn result(&mut self, id: CallId, result: runtime::Result<Value>) -> Result<()> {
         let pending = self.pending.remove(&id).ok_or("unknown actor response")?;
@@ -56,6 +58,7 @@ impl Actor {
                     context: context.clone(),
                     root: root.clone(),
                     fields: BTreeMap::new(),
+                    buttons: BTreeMap::new(),
                 });
                 self.queue(
                     "Runtime.callFunctionOn",
@@ -101,6 +104,22 @@ impl Actor {
                         Ok(())
                     }
                 }
+            }
+            Work::ReadButton { tool, handle, job } => self.button_read(tool, handle, job, value),
+            Work::ArmButton { action, job } => self.button_armed(action, job, value),
+            Work::Gesture { job, .. } => self.button_gestured(job),
+            Work::ButtonReceipt { job } => {
+                let delivered = evaluation_value(&value).is_ok_and(|v| v == Value::Bool(true));
+                self.value(
+                    job,
+                    if delivered {
+                        Outcome::ButtonClickObserved
+                    } else {
+                        Outcome::Uncertain {
+                            reason: "approved button click could not be verified".into(),
+                        }
+                    },
+                )
             }
             Work::ReadField {
                 tool,
@@ -214,6 +233,22 @@ impl Actor {
             Work::Init(_) | Work::CreateWorld => {
                 Err(format!("browser session initialization failed: {reason}").into())
             }
+            Work::Gesture { job, .. } => self.value(
+                job,
+                if prevented {
+                    Outcome::Prevented { reason }
+                } else {
+                    Outcome::Uncertain {
+                        reason: "button input result was lost".into(),
+                    }
+                },
+            ),
+            Work::ButtonReceipt { job } => self.value(
+                job,
+                Outcome::Uncertain {
+                    reason: "approved button click could not be verified".into(),
+                },
+            ),
             Work::Write { job, .. } => self.value(
                 job,
                 if prevented {
@@ -241,6 +276,8 @@ impl Actor {
             | Work::Capture { job, .. }
             | Work::Census { job, .. }
             | Work::ReadField { job, .. }
+            | Work::ReadButton { job, .. }
+            | Work::ArmButton { job, .. }
             | Work::Navigate { job, .. } => {
                 self.finish(job, Err(reason.into()));
                 Ok(())
@@ -255,6 +292,32 @@ fn evaluation(value: &Value) -> Result<RemoteObject> {
     }
     Ok(serde_json::from_value(value["result"].clone())?)
 }
-fn evaluation_value(value: &Value) -> Result<Value> {
-    Ok(chromiumoxide::js::EvaluationResult::new(evaluation(value)?).into_value::<Value>()?)
+pub(super) fn evaluation_value(value: &Value) -> Result<Value> {
+    let object = evaluation(value)?;
+    if object.r#type == RemoteObjectType::Object
+        && object.subtype == Some(RemoteObjectSubtype::Null)
+    {
+        return Ok(Value::Null);
+    }
+    Ok(chromiumoxide::js::EvaluationResult::new(object).into_value::<Value>()?)
+}
+
+#[cfg(test)]
+mod checks {
+    use super::*;
+
+    #[test]
+    fn unavailable_control_keeps_cdp_null_distinct_from_missing_value() {
+        assert_eq!(
+            evaluation_value(&json!({"result":{"type":"object","subtype":"null","value":null}}))
+                .unwrap(),
+            Value::Null
+        );
+        assert!(evaluation_value(&json!({"result":{"type":"undefined"}})).is_err());
+        assert!(evaluation_value(&json!({"result":{"type":"object"}})).is_err());
+        assert_eq!(
+            evaluation_value(&json!({"result":{"type":"boolean","value":false}})).unwrap(),
+            Value::Bool(false)
+        );
+    }
 }

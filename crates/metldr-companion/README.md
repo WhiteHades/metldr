@@ -13,7 +13,7 @@ make companion
 
 The default output is `crates/metldr-companion/target/release/metldr-companion`. Cargo uses `CARGO_TARGET_DIR` instead when it is set. The checks write their local artifacts under this crate's `.tmp` directory.
 
-Pair the executable with an extension that implements MetLDR's native wire version 3. The default Vue frontend and complete extension packaging are still being migrated. Linux is the verified native platform. Windows and macOS installation and runtime checks remain open.
+Pair the executable with an extension that implements MetLDR's native wire version 4. The default Vue frontend and complete extension packaging are still being migrated. Linux is the verified native platform. Windows and macOS installation and runtime checks remain open.
 
 To register the companion with Chrome:
 
@@ -47,3 +47,5 @@ Provider keys stay in the native credential store. Installed agents keep their o
 If an action request ends before its browser command is queued, the companion records that the action was prevented. Cancellation and command delivery share one admission check, so an expired request cannot queue a write later. After a command is queued, a lost result remains uncertain. Closing the browser connection still requires confirmed detach and transport cleanup.
 
 The three files in `test-tls` are synthetic fixture material. The loopback fixture profile embeds `ca.pem`; the server certificate and server key are used only by tests. Public provider requests use their configured trust settings. None of these files grants access to a live service.
+
+Browser button actions use the existing saved approval and Chromiumoxide engine. Native controls in the observed main document receive one bounded Chrome mouse gesture. Approval checks the task tab and exact document even when another tab is active. Changing tabs does not redirect the action. The receipt uses the isolated automation world and reports an observed trusted click separately from site success. A page can move a control between the check and input. Missing or conflicting evidence after admission stays uncertain, and an effect may already have occurred. Button navigation does not adopt a new document grant. Saved schema 6 migrates older stores with their exact backups; pair the host and extension wire version 4 before use.

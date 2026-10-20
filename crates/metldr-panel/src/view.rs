@@ -31,10 +31,8 @@ pub(super) fn render(panel: &Panel) -> Result<(), JsValue> {
         .unwrap_or(SourceStatus::Checking)
     {
         SourceStatus::Current => "current document",
-        SourceStatus::Changed | SourceStatus::Saved => {
-            "saved history, current document differs or is unavailable"
-        }
-        SourceStatus::Checking => "saved history, checking current document",
+        SourceStatus::Changed | SourceStatus::Saved => "saved page",
+        SourceStatus::Checking => "checking saved page",
     };
     set_text(
         doc,
@@ -288,11 +286,11 @@ fn render_browser_actions(panel: &Panel) -> Result<(), JsValue> {
     let receipts = panel
         .document
         .get_element_by_id("browser-receipts")
-        .ok_or_else(|| err("Verified browser receipts are missing."))?;
+        .ok_or_else(|| err("Browser action results are missing."))?;
     let receipt_rows = panel
         .document
         .get_element_by_id("browser-receipt-rows")
-        .ok_or_else(|| err("Verified browser receipt rows are missing."))?;
+        .ok_or_else(|| err("Browser action result rows are missing."))?;
     let actions = panel
         .snapshot
         .as_ref()
@@ -334,8 +332,10 @@ fn render_browser_actions(panel: &Panel) -> Result<(), JsValue> {
         }
         update_action_card(panel, &card, action, &mut restore_focus)?;
         let (parent, position) = if action.phase == BrowserActionPhase::Settled
-            && action.outcome == Some(BrowserActionOutcome::Verified)
-        {
+            && matches!(
+                action.outcome,
+                Some(BrowserActionOutcome::Verified | BrowserActionOutcome::ClickObserved)
+            ) {
             (&receipt_rows, &mut receipt_position)
         } else {
             (&current_actions, &mut current_position)
@@ -352,7 +352,7 @@ fn render_browser_actions(panel: &Panel) -> Result<(), JsValue> {
     set_text(
         &panel.document,
         "browser-receipts-count",
-        &format!("Verified browser actions ({receipt_position})"),
+        &format!("Browser action results ({receipt_position})"),
     );
     if receipt_position == 0 {
         restore_focus |= contains_focus(&panel.document, &receipts);
@@ -391,6 +391,7 @@ fn create_action_card(
     card.append_child(&heading)?;
     for (part, label) in [
         ("destination", "Destination"),
+        ("button", "Button"),
         ("field", "Field"),
         ("previous-value", "Previous value"),
         ("value", "Proposed value"),
@@ -425,6 +426,12 @@ fn update_action_card(
             "Approve navigation"
         }
         BrowserActionIntent::Navigate { .. } => "Navigation",
+        BrowserActionIntent::ActivateButton { .. }
+            if action.phase == BrowserActionPhase::Pending =>
+        {
+            "Approve button click"
+        }
+        BrowserActionIntent::ActivateButton { .. } => "Button action",
         BrowserActionIntent::Field { .. } => "Browser action",
     }));
     match &action.intent {
@@ -451,20 +458,30 @@ fn update_action_card(
             )?;
             show_rows(card, &["destination", "status"])?;
         }
+        BrowserActionIntent::ActivateButton { button_label, .. } => {
+            update_row_label(card, "destination", "Source")?;
+            update_detail(card, "destination", &action.url)?;
+            update_detail(card, "button", button_label)?;
+            show_rows(card, &["destination", "button", "status"])?;
+        }
     }
-    let status = format!(
-        "{}{}{}",
-        action.phase,
-        action
-            .outcome
-            .map(|outcome| format!(" ({outcome})"))
-            .unwrap_or_default(),
-        action
-            .reason
-            .as_ref()
-            .map(|reason| format!(": {reason}"))
-            .unwrap_or_default()
-    );
+    let status = if action.outcome == Some(BrowserActionOutcome::ClickObserved) {
+        "Button click observed".to_owned()
+    } else {
+        format!(
+            "{}{}{}",
+            action.phase,
+            action
+                .outcome
+                .map(|outcome| format!(" ({outcome})"))
+                .unwrap_or_default(),
+            action
+                .reason
+                .as_ref()
+                .map(|reason| format!(": {reason}"))
+                .unwrap_or_default()
+        )
+    };
     update_detail(card, "status", &status)?;
     let controls = card.query_selector("[data-part='controls']")?;
     if action.phase != BrowserActionPhase::Pending {
@@ -522,7 +539,14 @@ fn update_action_card(
 }
 
 fn show_rows(card: &Element, visible: &[&str]) -> Result<(), JsValue> {
-    for row in ["destination", "field", "previous-value", "value", "status"] {
+    for row in [
+        "destination",
+        "button",
+        "field",
+        "previous-value",
+        "value",
+        "status",
+    ] {
         let element = card
             .query_selector(&format!("[data-row='{row}']"))?
             .ok_or_else(|| err("Browser action row is missing."))?;
@@ -540,6 +564,14 @@ fn update_detail(card: &Element, name: &str, value: &str) -> Result<(), JsValue>
         .query_selector(&format!("[data-part='{name}']"))?
         .ok_or_else(|| err("Browser action field is missing."))?;
     write_text(&element, value);
+    Ok(())
+}
+
+fn update_row_label(card: &Element, name: &str, label: &str) -> Result<(), JsValue> {
+    let element = card
+        .query_selector(&format!("[data-row='{name}'] strong"))?
+        .ok_or_else(|| err("Browser action label is missing."))?;
+    element.set_text_content(Some(&format!("{label}: ")));
     Ok(())
 }
 

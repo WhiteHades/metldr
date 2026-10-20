@@ -2,7 +2,7 @@ use super::{Call, engine::Engine};
 use crate::{
     Result,
     browser_action::Target,
-    browser_action::{Action, Outcome, Phase},
+    browser_action::{Action, Intent, Outcome, Phase, Proposal},
     browser_io::{Client, Notice},
     browser_owner,
     flow::Event,
@@ -76,6 +76,15 @@ impl Tools {
             Call::Observe => self.observe().await?,
             Call::Navigate { destination } => self.navigate(call_id, destination, stop).await?,
             Call::Change { handle, value } => self.change(call_id, handle, value, stop).await?,
+            Call::ActivateButton { handle } => {
+                let proposal = self
+                    .engine
+                    .as_ref()
+                    .ok_or("browser is not attached")?
+                    .prepare_button(call_id, handle)
+                    .await?;
+                self.perform(proposal, stop).await?
+            }
         };
         self.completed
             .insert(call_id.to_owned(), (call, result.clone()));
@@ -130,6 +139,10 @@ impl Tools {
             .ok_or("browser is not attached")?
             .prepare_change(tool_use_id, handle, value)
             .await?;
+        self.perform(proposal, stop).await
+    }
+
+    async fn perform(&self, proposal: Proposal, stop: &AtomicBool) -> Result<Value> {
         let approved = action(&self.client, stop, |ack| browser_owner::Event::Proposed {
             proposal,
             ack,
@@ -143,12 +156,14 @@ impl Tools {
                     ack,
                 })
                 .await?;
-                let outcome = self
-                    .engine
-                    .as_ref()
-                    .ok_or("browser is not attached")?
-                    .change(&dispatched)
-                    .await;
+                let engine = self.engine.as_ref().ok_or("browser is not attached")?;
+                let outcome = match &dispatched.proposal.intent {
+                    Intent::Field { .. } => engine.change(&dispatched).await,
+                    Intent::ActivateButton { .. } => engine.activate_button(&dispatched).await,
+                    Intent::Navigate { .. } => {
+                        return Err("navigation requires its own result owner".into());
+                    }
+                };
                 action_observed(&self.client, &dispatched, outcome).await?
             }
             Phase::Settled { .. } => approved,
@@ -201,6 +216,16 @@ fn validate_call(call_id: &str, call: &Call) -> Result<()> {
             Ok(())
         }
         Call::Change { .. } => Err("invalid browser field change".into()),
+        Call::ActivateButton { handle }
+            if !handle.is_empty()
+                && handle.len() <= 64
+                && handle
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')) =>
+        {
+            Ok(())
+        }
+        Call::ActivateButton { .. } => Err("invalid browser button handle".into()),
     }
 }
 
