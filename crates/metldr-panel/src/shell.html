@@ -1,0 +1,162 @@
+<header class="toolbar" aria-label="MetLDR">
+  <div class="header-source">
+    <button id="source-trigger" type="button" popovertarget="source" aria-haspopup="dialog" aria-label="Source details" title="Source details">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+    </button>
+    <div class="identity">
+      <div class="title-row"><h1 id="source-title">No saved source</h1><span id="connection" role="status">Connecting</span></div>
+      <p id="source-state">MetLDR | No saved source</p>
+    </div>
+  </div>
+  <div class="toolbar-actions">
+    <button id="settings-trigger" type="button" popovertarget="appearance-settings" aria-haspopup="dialog">Settings</button>
+    <button data-action="reconnect" type="button" aria-label="Reconnect" title="Reconnect"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></svg></button>
+  </div>
+</header>
+<section id="appearance-settings" popover role="dialog" aria-labelledby="appearance-title">
+  <h2 id="appearance-title">Settings</h2>
+  <section aria-labelledby="appearance-heading">
+    <h3 id="appearance-heading">Appearance</h3>
+    <p>Choose how MetLDR looks on this device.</p>
+    <label for="appearance-theme">Theme</label>
+    <select id="appearance-theme" aria-describedby="appearance-status" disabled autofocus>
+      <option value="catppuccin">Catppuccin</option>
+      <option value="gruvbox">Gruvbox</option>
+      <option value="cyberpunk">Cyberpunk</option>
+      <option value="light">Light</option>
+    </select>
+    <label for="appearance-size">Text size</label>
+    <select id="appearance-size" aria-describedby="appearance-status" disabled>
+      <option value="small">Small</option><option value="medium" selected>Medium</option><option value="large">Large</option>
+    </select>
+    <p id="appearance-status" tabindex="-1" role="status" aria-live="polite">Loading appearance.</p>
+  </section>
+  <section id="provider-settings" aria-labelledby="provider-settings-heading" hidden>
+    <h3 id="provider-settings-heading">Provider connections</h3>
+    <p>Keys stay in the native credential store. Leave a key blank to keep the saved key.</p>
+    <p id="provider-settings-notice" role="status" aria-live="polite"></p>
+    <details name="provider-connection" open>
+      <summary id="provider-messages-heading">Messages</summary>
+      <div class="provider-body">
+      <p id="provider-messages-status" data-revision="0">Loading</p><p id="provider-messages-metadata"></p>
+      <label for="provider-messages-endpoint">Endpoint<input id="provider-messages-endpoint" type="url" maxlength="1024" autocomplete="off"></label>
+      <label for="provider-messages-model">Model<input id="provider-messages-model" maxlength="128" autocomplete="off"></label>
+      <label for="provider-messages-key">API key<input id="provider-messages-key" type="password" maxlength="4096" autocomplete="new-password"></label>
+      <div class="provider-actions"><button id="provider-messages-save" type="button" disabled>Save connection</button><button id="provider-messages-remove" type="button" disabled>Disable connection</button>
+      <button id="provider-messages-reset" type="button">Use saved values</button></div>
+      </div>
+    </details>
+    <details name="provider-connection">
+      <summary id="provider-chat_completions-heading">Chat Completions</summary>
+      <div class="provider-body">
+      <p id="provider-chat_completions-status" data-revision="0">Loading</p><p id="provider-chat_completions-metadata"></p>
+      <label for="provider-chat_completions-endpoint">Endpoint<input id="provider-chat_completions-endpoint" type="url" maxlength="1024" autocomplete="off"></label>
+      <label for="provider-chat_completions-model">Model<input id="provider-chat_completions-model" maxlength="128" autocomplete="off"></label>
+      <label for="provider-chat_completions-key">API key<input id="provider-chat_completions-key" type="password" maxlength="4096" autocomplete="new-password"></label>
+      <div class="provider-actions"><button id="provider-chat_completions-save" type="button" disabled>Save connection</button><button id="provider-chat_completions-remove" type="button" disabled>Disable connection</button>
+      <button id="provider-chat_completions-reset" type="button">Use saved values</button></div>
+      </div>
+    </details>
+    <details name="provider-connection">
+      <summary id="provider-responses-heading">OpenAI Responses</summary>
+      <div class="provider-body">
+      <p id="provider-responses-status" data-revision="0">Loading</p><p id="provider-responses-metadata"></p>
+      <label for="provider-responses-endpoint">Endpoint<input id="provider-responses-endpoint" type="url" maxlength="1024" autocomplete="off"></label>
+      <label for="provider-responses-model">Model<input id="provider-responses-model" maxlength="128" autocomplete="off"></label>
+      <label for="provider-responses-key">API key<input id="provider-responses-key" type="password" maxlength="4096" autocomplete="new-password"></label>
+      <div class="provider-actions"><button id="provider-responses-save" type="button" disabled>Save connection</button><button id="provider-responses-remove" type="button" disabled>Disable connection</button>
+      <button id="provider-responses-reset" type="button">Use saved values</button></div>
+      </div>
+    </details>
+    <details name="provider-connection">
+      <summary id="provider-google_interactions-heading">Google Interactions</summary>
+      <div class="provider-body">
+      <p id="provider-google_interactions-status" data-revision="0">Loading</p><p id="provider-google_interactions-metadata"></p>
+      <label for="provider-google_interactions-endpoint">Endpoint<input id="provider-google_interactions-endpoint" type="url" maxlength="1024" autocomplete="off"></label>
+      <label for="provider-google_interactions-model">Model<input id="provider-google_interactions-model" maxlength="128" autocomplete="off"></label>
+      <label for="provider-google_interactions-key">API key<input id="provider-google_interactions-key" type="password" maxlength="4096" autocomplete="new-password"></label>
+      <div class="provider-actions"><button id="provider-google_interactions-save" type="button" disabled>Save connection</button><button id="provider-google_interactions-remove" type="button" disabled>Disable connection</button>
+      <button id="provider-google_interactions-reset" type="button">Use saved values</button></div>
+      </div>
+    </details>
+    <button id="provider-refresh" type="button">Refresh connections</button>
+    <p id="provider-settings-status" role="status" aria-live="polite">Provider settings load with the saved view.</p>
+  </section>
+  <section id="agent-settings" aria-labelledby="agent-settings-heading" hidden>
+    <h3 id="agent-settings-heading">Installed agents</h3>
+    <p id="agent-settings-status" role="status" aria-live="polite">Agent settings load with the saved view.</p>
+    <details name="installed-agent" open>
+      <summary>Codex</summary>
+      <div class="provider-body">
+      <p id="agent-codex-status" data-revision="0">Loading</p>
+      <label for="agent-codex-executable">Executable<input id="agent-codex-executable" type="text" maxlength="2048" autocomplete="off"></label>
+      <label for="agent-codex-workspace">Workspace<input id="agent-codex-workspace" type="text" maxlength="2048" autocomplete="off"></label>
+      <div class="provider-actions"><button id="agent-codex-save" type="button" disabled>Save</button><button id="agent-codex-remove" type="button" disabled>Disable</button><button id="agent-codex-reset" type="button">Use saved values</button></div>
+      </div>
+    </details>
+    <details name="installed-agent">
+      <summary>OpenCode</summary>
+      <div class="provider-body">
+      <p id="agent-opencode-status" data-revision="0">Loading</p>
+      <label for="agent-opencode-executable">Executable<input id="agent-opencode-executable" type="text" maxlength="2048" autocomplete="off"></label>
+      <label for="agent-opencode-workspace">Workspace<input id="agent-opencode-workspace" type="text" maxlength="2048" autocomplete="off"></label>
+      <div class="provider-actions"><button id="agent-opencode-save" type="button" disabled>Save</button><button id="agent-opencode-remove" type="button" disabled>Disable</button><button id="agent-opencode-reset" type="button">Use saved values</button></div>
+      </div>
+    </details>
+    <details name="installed-agent">
+      <summary>Pi</summary>
+      <div class="provider-body">
+      <p id="agent-pi-status" data-revision="0">Loading</p>
+      <label for="agent-pi-executable">Executable<input id="agent-pi-executable" type="text" maxlength="2048" autocomplete="off"></label>
+      <label for="agent-pi-workspace">Workspace<input id="agent-pi-workspace" type="text" maxlength="2048" autocomplete="off"></label>
+      <label for="agent-pi-session_dir">Session directory<input id="agent-pi-session_dir" type="text" maxlength="2048" autocomplete="off"></label>
+      <label for="agent-pi-provider">Provider<input id="agent-pi-provider" type="text" maxlength="128" autocomplete="off"></label>
+      <label for="agent-pi-model">Model<input id="agent-pi-model" type="text" maxlength="128" autocomplete="off"></label>
+      <label for="agent-pi-offline">Use offline mode<input id="agent-pi-offline" type="checkbox"></label>
+      <div class="provider-actions"><button id="agent-pi-save" type="button" disabled>Save</button><button id="agent-pi-remove" type="button" disabled>Disable</button><button id="agent-pi-reset" type="button">Use saved values</button></div>
+      </div>
+    </details>
+    <button id="agent-refresh" type="button">Refresh agent availability</button>
+  </section>
+  <div class="appearance-actions">
+    <button id="appearance-retry" type="button" hidden>Retry</button>
+    <button type="button" popovertarget="appearance-settings" popovertargetaction="hide">Done</button>
+  </div>
+</section>
+<section id="source" popover role="dialog" aria-labelledby="source-full-title">
+  <div class="source-heading">
+    <h2 id="source-full-title">No saved source</h2>
+    <button data-action="capture" type="button">Capture page</button>
+  </div>
+  <p id="source-meta">Capture a page, then choose where to send your request.</p>
+  <button data-action="summarize" type="button" hidden>Capture and summarize with test model</button>
+  <details id="source-details">
+    <summary>View source text</summary>
+    <pre id="source-text"></pre>
+  </details>
+</section>
+<div id="workspace" tabindex="0" role="region" aria-label="Conversation and agent details">
+  <section id="opencode-permissions" aria-label="OpenCode permission requests" hidden></section>
+  <section id="browser-actions" aria-label="Browser actions" hidden>
+    <div id="browser-current"></div>
+    <details id="browser-receipts" hidden>
+      <summary id="browser-receipts-toggle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg><span id="browser-receipts-count">0 verified browser actions</span></summary>
+      <div id="browser-receipt-rows"></div>
+    </details>
+  </section>
+  <p id="empty-history">Capture a page and send a request. Your saved work will appear here.</p>
+  <section id="history" aria-label="Saved work"></section>
+  <details id="agent-details" open>
+    <summary>Execution details</summary>
+    <div class="agent-body">
+      <p id="execution-detail" role="status">The fixture model receives the saved source.</p>
+      <p id="pi-profile">Pi profile unavailable.</p>
+      <p id="codex-profile">Codex configuration unavailable.</p>
+      <p id="opencode-profile">OpenCode configuration unavailable.</p>
+    </div>
+  </details>
+</div>
+<footer>
+  <form id="composer"></form>
+  <p id="status" role="status" aria-live="polite" tabindex="-1">Reconnect loads the saved view without starting work.</p>
+</footer>

@@ -1,0 +1,835 @@
+use std::{cell::RefCell, rc::Rc};
+
+use js_sys::{Array, Function, Object, Promise, Reflect};
+use serde_json::{Value, json};
+use wasm_bindgen::{JsCast, JsValue, closure::Closure, prelude::*};
+use wasm_bindgen_futures::{JsFuture, spawn_local};
+use web_sys::{Document, Element, Event};
+
+mod agent_settings;
+mod appearance;
+mod browser_background;
+mod composer;
+mod composer_ui;
+mod flow;
+mod interaction_audio;
+mod model;
+mod profile;
+mod provider_settings;
+mod readiness;
+mod results;
+mod site;
+mod view;
+use flow::{FlowClient, StopReceipt};
+use model::{BrowserActionId, BrowserActionPhase, FlowError, PageView, RunId, SourceStatus};
+
+const HOST: &str = "io.metldr.first_flow";
+const PANEL_PORT: &str = "metldr-first-flow";
+const MAX_FRAME: usize = 65_536;
+const MAX_PAGE: usize = 8_192;
+
+thread_local! {
+    static BACKGROUND: RefCell<Background> = RefCell::new(Background::default());
+}
+
+#[derive(Default)]
+struct Background {
+    native: Option<JsValue>,
+    readiness: readiness::Gate,
+    panels: Vec<JsValue>,
+}
+
+struct Panel {
+    composer: composer_ui::State,
+    flow: FlowClient,
+    document: Document,
+    snapshot: Option<PageView>,
+    connected: bool,
+    start_pending: bool,
+    status_message: String,
+    browser_decision_pending: Option<(BrowserActionId, u64)>,
+    opencode_permission_pending: Option<(RunId, RunId)>,
+    stale_generation: u64,
+    connection_generation: u64,
+}
+
+#[wasm_bindgen]
+pub fn accept_panel(port: JsValue) {
+    let result = (|| -> Result<(), JsValue> {
+        if string_property(&port, "name")? != PANEL_PORT {
+            let _ = call(&port, "disconnect", &[]);
+            return Ok(());
+        }
+        let runtime = chrome_api("runtime")?;
+        let extension_id = string_property(&runtime, "id")?;
+        let origin = format!("chrome-extension://{extension_id}");
+        let sender = get(&port, "sender")?;
+        if string_property(&sender, "id")? != extension_id
+            || string_property(&sender, "origin")? != origin
+            || string_property(&sender, "url")? != format!("{origin}/panel.html")
+        {
+            let _ = call(&port, "disconnect", &[]);
+            return Ok(());
+        }
+        if BACKGROUND.with(|state| state.borrow().native.is_none()) {
+            connect_native()?;
+        }
+        if BACKGROUND.with(|state| state.borrow().panels.len() >= 16) {
+            let _ = call(&port, "disconnect", &[]);
+            return Ok(());
+        }
+        BACKGROUND.with(|state| state.borrow_mut().panels.push(port.clone()));
+        let reply_port = port.clone();
+        listen(&port, "onMessage", move |message| {
+            let request = get(&message, "request").ok().and_then(|v| v.as_string());
+            if let Err(error) = forward_request(message) {
+                if let Some(request) = request {
+                    let message: String = js_message(&error).chars().take(64).collect();
+                    if let Ok(raw) = serde_json::to_string(
+                        &json!({"v":3,"request":request,"kind":"error","message":message}),
+                    ) {
+                        if let Ok(value) = js_sys::JSON::parse(&raw) {
+                            let _ = call(&reply_port, "postMessage", &[value]);
+                        }
+                    }
+                }
+            }
+        })?;
+        let disconnected_port = port.clone();
+        listen(&port, "onDisconnect", move |_| {
+            remove_panel(&disconnected_port)
+        })?;
+        Ok(())
+    })();
+    if let Err(error) = result {
+        web_sys::console::error_1(&error);
+    }
+}
+
+#[wasm_bindgen]
+pub fn start_panel(capture: Function) {
+    flow::install_capture(capture);
+    spawn_local(async {
+        if let Err(error) = panel_start().await {
+            web_sys::console::error_1(&error);
+        }
+    });
+}
+
+async fn panel_start() -> Result<(), JsValue> {
+    let document = web_sys::window()
+        .ok_or_else(|| err("window unavailable"))?
+        .document()
+        .ok_or_else(|| err("document unavailable"))?;
+    view::mount(&document)?;
+    if let Err(error) = interaction_audio::install(&document) {
+        web_sys::console::error_1(&error);
+    }
+    if let Err(error) = appearance::install(&document) {
+        web_sys::console::error_1(&error);
+        if let Some(status) = document.get_element_by_id("appearance-status") {
+            status.set_text_content(Some(
+                "Appearance is unavailable. Reload the panel to retry.",
+            ));
+        }
+    }
+    let flow = FlowClient::connect()
+        .await
+        .map_err(|e| err(&e.to_string()))?;
+    let panel = Rc::new(RefCell::new(Panel {
+        composer: composer_ui::State::default(),
+        flow,
+        document: document.clone(),
+        snapshot: None,
+        connected: false,
+        start_pending: false,
+        status_message: "Reconnect loads the saved view without starting work.".into(),
+        browser_decision_pending: None,
+        opencode_permission_pending: None,
+        stale_generation: 0,
+        connection_generation: 0,
+    }));
+    provider_settings::install(&document, &panel)?;
+    agent_settings::install(&document, &panel)?;
+    let click = Rc::clone(&panel);
+    let listener = Closure::<dyn FnMut(Event)>::new(move |event| {
+        if let Err(error) = handle_click(&click, event) {
+            set_panel_status(&click, &format!("Request failed: {error}"));
+        }
+    });
+    document.add_event_listener_with_callback("click", listener.as_ref().unchecked_ref())?;
+    listener.forget();
+
+    composer::install(&panel)?;
+    composer_ui::install(&panel)?;
+
+    install_flow(&panel).map_err(|e| err(&e.to_string()))?;
+    reconnect(Rc::clone(&panel));
+    Ok(())
+}
+
+fn capture_page(panel: &Rc<RefCell<Panel>>) {
+    {
+        let state = panel.borrow();
+        if !state.connected || state.start_pending || active_run(&state.snapshot).is_some() {
+            return;
+        }
+    }
+    let (flow, generation) = {
+        let p = panel.borrow();
+        (p.flow.clone(), p.connection_generation)
+    };
+    begin_start(panel);
+    let capture = flow.capture_selected();
+    let panel = Rc::clone(panel);
+    spawn_local(async move {
+        let result = capture.await;
+        if panel.borrow().connection_generation != generation {
+            return;
+        }
+        panel.borrow_mut().start_pending = false;
+        match result {
+            Ok(view) => {
+                apply_view(&panel, view, generation);
+                set_panel_status(
+                    &panel,
+                    "Page saved. Choose a destination and send your request.",
+                );
+            }
+            Err(error) => {
+                set_panel_status(
+                    &panel,
+                    &format!(
+                        "Capture failed: {error}. Reconnect to check the saved source before trying again."
+                    ),
+                );
+                render(&panel.borrow());
+            }
+        }
+    });
+}
+
+fn handle_click(panel: &Rc<RefCell<Panel>>, event: Event) -> Result<(), FlowError> {
+    let Some(target) = event
+        .target()
+        .and_then(|target| target.dyn_into::<Element>().ok())
+    else {
+        return Ok(());
+    };
+    let Some(button) = target
+        .closest("[data-action]")
+        .map_err(|e| FlowError::Host(js_message(&e)))?
+    else {
+        return Ok(());
+    };
+    let action = button.get_attribute("data-action");
+    if matches!(action.as_deref(), Some("summarize")) {
+        let p = panel.borrow();
+        if !p.connected || p.start_pending || active_run(&p.snapshot).is_some() {
+            return Ok(());
+        }
+    }
+    match action.as_deref() {
+        Some("opencode-permission") if event.is_trusted() => {
+            let run: RunId =
+                serde_json::from_value(json!(button.get_attribute("data-native-run").ok_or_else(
+                    || FlowError::InvalidInput("OpenCode run identity is missing.".into())
+                )?))
+                .map_err(|_| FlowError::InvalidInput("OpenCode run identity is invalid.".into()))?;
+            let request: RunId = serde_json::from_value(json!(
+                button.get_attribute("data-native-request").ok_or_else(|| {
+                    FlowError::InvalidInput("OpenCode request identity is missing.".into())
+                })?
+            ))
+            .map_err(|_| FlowError::InvalidInput("OpenCode request identity is invalid.".into()))?;
+            let option = button.get_attribute("data-native-option");
+            let (flow, generation) = {
+                let mut p = panel.borrow_mut();
+                let pending = p.connected
+                    && p.opencode_permission_pending.is_none()
+                    && active_run(&p.snapshot) == Some(&run)
+                    && p.snapshot.as_ref().is_some_and(|view| {
+                        view.opencode_permissions.iter().any(|item| {
+                            item.run == run
+                                && item.request == request
+                                && option.as_ref().is_none_or(|id| {
+                                    item.options.iter().any(|offered| &offered.id == id)
+                                })
+                        })
+                    });
+                if !pending {
+                    return Ok(());
+                }
+                p.opencode_permission_pending = Some((run.clone(), request.clone()));
+                (p.flow.clone(), p.connection_generation)
+            };
+            disable_native_permission_buttons(panel);
+            set_panel_status(
+                panel,
+                "Sending OpenCode permission decision to the local host.",
+            );
+            let panel = Rc::clone(panel);
+            spawn_local(async move {
+                let result = flow.opencode_permission(run, request, option).await;
+                let mut p = panel.borrow_mut();
+                if p.connection_generation != generation {
+                    return;
+                }
+                match result {
+                    Ok(view) => {
+                        p.opencode_permission_pending = None;
+                        drop(p);
+                        apply_view(&panel, view, generation);
+                    }
+                    Err(error) => {
+                        if !matches!(&error, FlowError::Timeout | FlowError::Disconnected) {
+                            p.opencode_permission_pending = None;
+                        }
+                        p.status_message = if matches!(
+                            &error,
+                            FlowError::Timeout | FlowError::Disconnected
+                        ) {
+                            "No permission receipt arrived. Reconnect to check the saved request before trying again.".into()
+                        } else {
+                            format!("Permission decision failed: {error}")
+                        };
+                        render(&p);
+                    }
+                }
+            });
+        }
+        Some("browser-approve" | "browser-decline") if event.is_trusted() => {
+            let approve = action.as_deref() == Some("browser-approve");
+            let id = button.get_attribute("data-browser-action").ok_or_else(|| {
+                FlowError::InvalidInput("Browser action identity is missing.".into())
+            })?;
+            let id: BrowserActionId = serde_json::from_value(json!(id)).map_err(|_| {
+                FlowError::InvalidInput("Browser action identity is invalid.".into())
+            })?;
+            let revision = button
+                .get_attribute("data-revision")
+                .and_then(|value| value.parse::<u64>().ok())
+                .filter(|revision| *revision > 0)
+                .ok_or_else(|| {
+                    FlowError::InvalidInput("Browser action revision is invalid.".into())
+                })?;
+            let (flow, generation) = {
+                let mut p = panel.borrow_mut();
+                let pending = p.connected
+                    && p.browser_decision_pending.is_none()
+                    && p.snapshot.as_ref().is_some_and(|view| {
+                        view.browser_actions.iter().any(|item| {
+                            item.id == id
+                                && item.revision == revision
+                                && item.phase == BrowserActionPhase::Pending
+                        })
+                    });
+                let current_document = p.snapshot.as_ref().is_some_and(|view| {
+                    view.browser_actions.iter().any(|item| {
+                        item.id == id
+                            && item.revision == revision
+                            && view.can_approve(item, p.flow.source_epoch())
+                    })
+                });
+                if !pending || (approve && !current_document) {
+                    return Ok(());
+                }
+                p.browser_decision_pending = Some((id.clone(), revision));
+                (p.flow.clone(), p.connection_generation)
+            };
+            let document = panel.borrow().document.clone();
+            if let Ok(buttons) = document.query_selector_all("[data-action^='browser-']") {
+                for index in 0..buttons.length() {
+                    if let Some(button) = buttons
+                        .item(index)
+                        .and_then(|node| node.dyn_into::<Element>().ok())
+                    {
+                        let _ = button.set_attribute("disabled", "");
+                    }
+                }
+            }
+            set_panel_status(panel, "Sending decision to the local host.");
+            let panel = Rc::clone(panel);
+            spawn_local(async move {
+                let result = flow.decide_browser_action(id, revision, approve).await;
+                let mut p = panel.borrow_mut();
+                if p.connection_generation != generation {
+                    return;
+                }
+                match result {
+                    Ok(view) => {
+                        p.browser_decision_pending = None;
+                        drop(p);
+                        apply_view(&panel, view, generation);
+                    }
+                    Err(error) => {
+                        if !matches!(&error, FlowError::Timeout | FlowError::Disconnected) {
+                            p.browser_decision_pending = None;
+                        }
+                        p.status_message = if matches!(
+                            &error,
+                            FlowError::Timeout | FlowError::Disconnected
+                        ) {
+                            "No decision receipt arrived. Reconnect to check the saved action state before trying again.".into()
+                        } else {
+                            format!("Decision failed: {error}")
+                        };
+                        render(&p);
+                    }
+                }
+            });
+        }
+        Some("copy") if event.is_trusted() => {
+            results::copy(panel, &button).map_err(|error| FlowError::Host(js_message(&error)))?
+        }
+        Some("reconnect") => reconnect(Rc::clone(panel)),
+        Some("capture") if event.is_trusted() => capture_page(panel),
+        Some("summarize") => {
+            if let Some(select) = panel
+                .borrow()
+                .document
+                .get_element_by_id("execution")
+                .and_then(|element| element.dyn_into::<web_sys::HtmlSelectElement>().ok())
+                .filter(|select| select.value().is_empty())
+            {
+                select.set_value("model");
+            }
+            let (flow, generation) = {
+                let p = panel.borrow();
+                (p.flow.clone(), p.connection_generation)
+            };
+            begin_start(panel);
+            let start = flow.summarize_selected();
+            let panel = Rc::clone(panel);
+            spawn_local(async move {
+                follow_start(panel, flow, generation, start.await, "Capture failed").await;
+            });
+        }
+        Some("stop") => {
+            let (flow, run, generation) = {
+                let p = panel.borrow();
+                (
+                    p.flow.clone(),
+                    active_run(&p.snapshot)
+                        .ok_or_else(|| {
+                            FlowError::InvalidInput("There is no active run to stop.".into())
+                        })?
+                        .clone(),
+                    p.connection_generation,
+                )
+            };
+            let panel = Rc::clone(panel);
+            spawn_local(async move {
+                let result = flow.request_stop(run).await;
+                if panel.borrow().connection_generation != generation {
+                    return;
+                }
+                match result {
+                    Ok(StopReceipt::Requested) => set_panel_status(&panel, "Stop requested."),
+                    Ok(StopReceipt::AlreadyTerminal) => {
+                        set_panel_status(&panel, "Work has already finished.")
+                    }
+                    Err(error) => set_panel_status(&panel, &format!("Request failed: {error}")),
+                }
+            });
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn begin_start(panel: &Rc<RefCell<Panel>>) {
+    let mut p = panel.borrow_mut();
+    if let Some(source) = p
+        .document
+        .get_element_by_id("source")
+        .and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok())
+    {
+        let _ = source.hide_popover();
+    }
+    p.start_pending = true;
+    p.status_message = "Starting work.".into();
+    render(&p);
+}
+
+fn install_flow(panel: &Rc<RefCell<Panel>>) -> Result<(), FlowError> {
+    let (flow, generation) = {
+        let p = panel.borrow();
+        (p.flow.clone(), p.connection_generation)
+    };
+    let weak = Rc::downgrade(panel);
+    flow.on_source_change(move || {
+        if let Some(panel) = weak.upgrade() {
+            stale_check(panel);
+        }
+    });
+    let mut views = flow.observe()?;
+    let weak = Rc::downgrade(panel);
+    spawn_local(async move {
+        loop {
+            let next = views.changed().await;
+            let Some(panel) = weak.upgrade() else {
+                break;
+            };
+            if panel.borrow().connection_generation != generation {
+                break;
+            }
+            match next {
+                Ok(Some(view)) => apply_view(&panel, view, generation),
+                Ok(None) => break,
+                Err(error) => {
+                    let mut p = panel.borrow_mut();
+                    p.connected = false;
+                    p.status_message = error.to_string();
+                    if let Some(view) = &mut p.snapshot {
+                        view.source_status = SourceStatus::Checking;
+                    }
+                    render(&p);
+                }
+            }
+        }
+    });
+    Ok(())
+}
+
+fn reconnect(panel: Rc<RefCell<Panel>>) {
+    set_panel_status(&panel, "Loading saved work.");
+    spawn_local(async move {
+        let mut flow = panel.borrow().flow.clone();
+        if flow.is_closed() {
+            match FlowClient::connect().await {
+                Ok(replacement) => {
+                    flow = replacement;
+                    {
+                        let mut p = panel.borrow_mut();
+                        p.flow = flow.clone();
+                        p.start_pending = false;
+                        p.opencode_permission_pending = None;
+                        p.connection_generation = p.connection_generation.wrapping_add(1);
+                        p.stale_generation = p.stale_generation.wrapping_add(1);
+                        if let Some(view) = &mut p.snapshot {
+                            view.source_status = SourceStatus::Checking;
+                            view.source_epoch = 0;
+                        }
+                    }
+                    if let Err(error) = install_flow(&panel) {
+                        set_panel_status(&panel, &error.to_string());
+                        return;
+                    }
+                }
+                Err(error) => {
+                    set_panel_status(&panel, &error.to_string());
+                    return;
+                }
+            }
+        }
+        let generation = panel.borrow().connection_generation;
+        let read_epoch = provider_settings::mutation_epoch();
+        let agent_read_epoch = agent_settings::mutation_epoch();
+        match flow.current_page().await {
+            Ok(view) => {
+                panel.borrow_mut().browser_decision_pending = None;
+                provider_settings::reconcile_current_page(&panel, &view, generation, read_epoch);
+                agent_settings::reconcile_current_page(&panel, &view, generation, agent_read_epoch);
+                apply_view(&panel, view, generation);
+            }
+            Err(error) => {
+                if panel.borrow().connection_generation == generation {
+                    set_panel_status(&panel, &error.to_string());
+                }
+            }
+        }
+    });
+}
+
+async fn follow_start(
+    panel: Rc<RefCell<Panel>>,
+    flow: FlowClient,
+    generation: u64,
+    start: Result<RunId, FlowError>,
+    label: &str,
+) {
+    let mut awaiting_view = true;
+    let result = async {
+        let mut views = flow.watch(start?).await?;
+        while let Some(view) = views.changed().await? {
+            if awaiting_view && panel.borrow().connection_generation == generation {
+                panel.borrow_mut().start_pending = false;
+            }
+            awaiting_view = false;
+            apply_view(&panel, view, generation);
+        }
+        Ok::<(), FlowError>(())
+    }
+    .await;
+    if awaiting_view && panel.borrow().connection_generation == generation {
+        panel.borrow_mut().start_pending = false;
+        render(&panel.borrow());
+    }
+    if let Err(error) = result {
+        if panel.borrow().connection_generation == generation {
+            set_panel_status(&panel, &format!("{label}: {error}"));
+            render(&panel.borrow());
+        }
+    }
+}
+
+fn apply_view(panel: &Rc<RefCell<Panel>>, view: PageView, generation: u64) {
+    let mut p = panel.borrow_mut();
+    if p.connection_generation != generation {
+        return;
+    }
+    if p.snapshot
+        .as_ref()
+        .is_some_and(|old| view.is_older_than(old))
+    {
+        return;
+    }
+    p.snapshot = Some(view);
+    if p.opencode_permission_pending
+        .as_ref()
+        .is_some_and(|(run, request)| {
+            !p.snapshot.as_ref().is_some_and(|view| {
+                view.opencode_permissions
+                    .iter()
+                    .any(|item| &item.run == run && &item.request == request)
+            })
+        })
+    {
+        p.opencode_permission_pending = None;
+    }
+    p.connected = p.flow.is_connected();
+    p.status_message = if p.snapshot.as_ref().and_then(PageView::active_run).is_some() {
+        "Working."
+    } else if p.start_pending {
+        "Starting work."
+    } else {
+        "Ready."
+    }
+    .into();
+    render(&p);
+}
+
+fn stale_check(panel: Rc<RefCell<Panel>>) {
+    let (flow, view, generation, connection) = {
+        let mut p = panel.borrow_mut();
+        p.stale_generation = p.stale_generation.wrapping_add(1);
+        let Some(view) = &mut p.snapshot else {
+            return;
+        };
+        view.source_status = SourceStatus::Checking;
+        let view = view.clone();
+        render(&p);
+        (
+            p.flow.clone(),
+            view,
+            p.stale_generation,
+            p.connection_generation,
+        )
+    };
+    spawn_local(async move {
+        let view = flow.check_source(view).await;
+        let mut p = panel.borrow_mut();
+        if p.connected && p.stale_generation == generation && p.connection_generation == connection
+        {
+            if let Some(old) = &mut p.snapshot {
+                if old.store == view.store && old.sequence == view.sequence {
+                    *old = view;
+                    render(&p);
+                }
+            }
+        }
+    });
+}
+
+fn render(panel: &Panel) {
+    if let Err(error) = view::render(panel) {
+        view::status(
+            &panel.document,
+            &format!(
+                "Saved results could not be displayed: {}",
+                js_message(&error)
+            ),
+        );
+    }
+}
+
+fn disable_native_permission_buttons(panel: &Rc<RefCell<Panel>>) {
+    let document = panel.borrow().document.clone();
+    if let Ok(buttons) = document.query_selector_all("[data-action='opencode-permission']") {
+        for index in 0..buttons.length() {
+            if let Some(button) = buttons
+                .item(index)
+                .and_then(|node| node.dyn_into::<Element>().ok())
+            {
+                let _ = button.set_attribute("disabled", "");
+            }
+        }
+    }
+}
+
+fn active_run(snapshot: &Option<PageView>) -> Option<&model::RunId> {
+    snapshot.as_ref().and_then(PageView::active_run)
+}
+fn set_panel_status(panel: &Rc<RefCell<Panel>>, value: &str) {
+    panel.borrow_mut().status_message = value.to_string();
+    view::status(&panel.borrow().document, value);
+}
+fn forward_request(message: JsValue) -> Result<(), JsValue> {
+    let raw = js_sys::JSON::stringify(&message)?
+        .as_string()
+        .ok_or_else(|| err("Panel sent a non JSON message."))?;
+    if raw.len() > MAX_FRAME {
+        return Err(err("Panel request exceeds the 65536 byte frame limit."));
+    }
+    let parsed = js_sys::JSON::parse(&raw)?;
+    let op = get(&get(&parsed, "command")?, "op")?.as_string();
+    if matches!(op.as_deref(), Some("browser_reply" | "browser_event")) {
+        return Err(err(
+            "Browser transport messages cannot originate in the panel.",
+        ));
+    }
+    let native = match BACKGROUND.with(|b| b.borrow().native.clone()) {
+        Some(native) => native,
+        None => {
+            let command = Reflect::get(&parsed, &JsValue::from_str("command"))?;
+            let op = Reflect::get(&command, &JsValue::from_str("op"))?.as_string();
+            if op.as_deref() != Some("view") {
+                return Err(err(
+                    "Native host is disconnected. Reconnect before starting work.",
+                ));
+            }
+            connect_native()?;
+            BACKGROUND
+                .with(|b| b.borrow().native.clone())
+                .ok_or_else(|| err("Native host did not connect."))?
+        }
+    };
+    let queued = BACKGROUND.with(|b| {
+        let mut background = b.borrow_mut();
+        if background
+            .native
+            .as_ref()
+            .is_none_or(|current| !Object::is(current, &native))
+        {
+            return Err(());
+        }
+        background.readiness.queue(parsed.clone())
+    });
+    let ready = match queued {
+        Ok(ready) => ready,
+        Err(()) => {
+            return Err(err(
+                "Native host is not ready or its request queue is full.",
+            ));
+        }
+    };
+    if ready {
+        call(&native, "postMessage", &[parsed])?;
+    }
+    Ok(())
+}
+fn forward_native(message: JsValue) {
+    readiness::native_message(message);
+}
+fn forward_panel(message: &Value) {
+    let Ok(raw) = serde_json::to_string(message) else {
+        return;
+    };
+    let Ok(value) = js_sys::JSON::parse(&raw) else {
+        return;
+    };
+    for port in BACKGROUND.with(|b| b.borrow().panels.clone()) {
+        let _ = call(&port, "postMessage", &[value.clone()]);
+    }
+}
+fn connect_native() -> Result<(), JsValue> {
+    let runtime = chrome_api("runtime")?;
+    let native = call(&runtime, "connectNative", &[JsValue::from_str(HOST)])?;
+    browser_background::connect(native.clone())?;
+    set_background_native(native.clone());
+    let sending = native.clone();
+    listen(&native, "onMessage", move |message| {
+        if BACKGROUND.with(|b| {
+            b.borrow()
+                .native
+                .as_ref()
+                .is_some_and(|current| Object::is(current, &sending))
+        }) {
+            forward_native(message);
+        }
+    })?;
+    let disconnected = native.clone();
+    listen(&native, "onDisconnect", move |_| {
+        if !BACKGROUND.with(|b| {
+            b.borrow()
+                .native
+                .as_ref()
+                .is_some_and(|current| Object::is(current, &disconnected))
+        }) {
+            return;
+        }
+        browser_background::disconnect();
+        forward_panel(&json!({"v":3,"request":null,"kind":"disconnected"}));
+        set_background_native(JsValue::NULL);
+    })?;
+    Ok(())
+}
+fn set_background_native(native: JsValue) {
+    BACKGROUND.with(|b| {
+        let mut background = b.borrow_mut();
+        background.native = (!native.is_null()).then_some(native);
+        if background.native.is_some() {
+            background.readiness.connect();
+        } else {
+            background.readiness.disconnect();
+        }
+    });
+}
+fn remove_panel(port: &JsValue) {
+    BACKGROUND.with(|b| b.borrow_mut().panels.retain(|p| !Object::is(p, port)));
+}
+fn chrome_api(name: &str) -> Result<JsValue, JsValue> {
+    let chrome = Reflect::get(&js_sys::global(), &JsValue::from_str("chrome"))?;
+    Reflect::get(&chrome, &JsValue::from_str(name))
+}
+fn get(object: &JsValue, key: &str) -> Result<JsValue, JsValue> {
+    Reflect::get(object, &JsValue::from_str(key))
+}
+fn string_property(object: &JsValue, key: &str) -> Result<String, JsValue> {
+    get(object, key)?
+        .as_string()
+        .ok_or_else(|| err(&format!("Missing string field {key}.")))
+}
+fn call(object: &JsValue, method: &str, args: &[JsValue]) -> Result<JsValue, JsValue> {
+    let function = get(object, method)?.dyn_into::<Function>()?;
+    let js_args = Array::new();
+    for value in args {
+        js_args.push(value);
+    }
+    function.apply(object, &js_args)
+}
+fn promise(value: JsValue) -> Result<JsFuture, JsValue> {
+    Ok(JsFuture::from(value.dyn_into::<Promise>()?))
+}
+async fn await_call(object: &JsValue, method: &str, args: &[JsValue]) -> Result<JsValue, JsValue> {
+    promise(call(object, method, args)?)?.await
+}
+fn listen(
+    target: &JsValue,
+    event: &str,
+    mut callback: impl FnMut(JsValue) + 'static,
+) -> Result<(), JsValue> {
+    let event = get(target, event)?;
+    let add = get(&event, "addListener")?.dyn_into::<Function>()?;
+    let listener = Closure::<dyn FnMut(JsValue)>::new(move |value| callback(value));
+    add.call1(&event, listener.as_ref())?;
+    listener.forget();
+    Ok(())
+}
+fn err(message: &str) -> JsValue {
+    JsValue::from_str(message)
+}
+fn js_message(error: &JsValue) -> String {
+    error.as_string().unwrap_or_else(|| format!("{error:?}"))
+}

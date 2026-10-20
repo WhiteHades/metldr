@@ -1,0 +1,63 @@
+[package]
+name = "metldr-panel"
+rust-version = "1.99"
+license = "MIT"
+publish = false
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+metldr-conversation = { path = "../metldr-conversation" }
+serde = { version = "=1.0.229", features = ["derive"] }
+js-sys = "=0.3.105"
+serde_json = "=1.0.154"
+wasm-bindgen = "=0.2.128"
+wasm-bindgen-futures = "=0.4.78"
+web-sys = { version = "=0.3.105", features = [
+  "console",
+  "AudioBuffer",
+  "AudioBufferSourceNode",
+  "AudioContext",
+  "AudioContextState",
+  "AudioDestinationNode",
+  "AudioNode",
+  "AudioParam",
+  "AudioScheduledSourceNode",
+  "BiquadFilterNode",
+  "BiquadFilterType",
+  "Document",
+  "DomRect",
+  "CssStyleDeclaration",
+  "Element",
+  "Event",
+  "EventTarget",
+  "FocusOptions",
+  "HtmlElement",
+  "HtmlFormElement",
+  "HtmlInputElement",
+  "HtmlOptionElement",
+  "HtmlSelectElement",
+  "KeyboardEvent",
+  "HtmlCollection",
+  "HtmlTextAreaElement",
+  "GainNode",
+  "OscillatorNode",
+  "OscillatorType",
+  "PageTransitionEvent",
+  "Storage",
+  "Node",
+  "NodeList",
+  "Text",
+  "Url",
+  "Window",
+] }

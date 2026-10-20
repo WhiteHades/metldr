@@ -1,0 +1,55 @@
+<div class="composer-anchor" data-promptbar>
+  <div id="composer-menu" class="composer-menu" role="listbox" aria-label="Prompt options" hidden>
+    <span id="composer-menu-highlight" class="composer-menu-highlight" aria-hidden="true"></span>
+    <div id="composer-menu-rows"></div>
+    <div id="composer-menu-footer">Type to search sources &amp; files</div>
+  </div>
+
+  <div id="composer-model-menu" class="composer-model-menu" role="listbox" aria-label="Models" hidden>
+    <span id="composer-model-highlight" class="composer-model-highlight" aria-hidden="true"></span>
+    <div id="composer-model-rows"></div>
+  </div>
+
+  <div id="composer-frame">
+    <div id="composer-controls">
+      <button id="composer-add" type="button" aria-label="Add attachments and sources" aria-expanded="false" aria-controls="composer-menu">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+      </button>
+
+      <textarea id="question" maxlength="1024" rows="1" placeholder="Write a message…" aria-label="Prompt" aria-describedby="keyboard-help"></textarea>
+
+      <button id="composer-model" type="button" aria-label="Choose model" aria-describedby="composer-model-label" aria-expanded="false" aria-controls="composer-model-menu">
+        <span id="composer-model-label"></span>
+        <svg class="composer-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
+      </button>
+
+      <button id="composer-dictate" type="button" aria-label="Start dictation" title="Dictation unavailable" disabled>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3" /></svg>
+      </button>
+
+      <button data-action="ask" type="submit" aria-label="Send" disabled>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
+      </button>
+
+      <button data-action="stop" type="button" aria-label="Stop" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+<div class="composer-native-field" hidden>
+  <label for="execution" aria-hidden="true" tabindex="-1">Send to</label>
+  <select id="execution" hidden aria-hidden="true" tabindex="-1" aria-describedby="execution-detail">
+    <option value="" selected>Choose a destination</option>
+    <option id="execution-model" value="model" disabled>Test model</option>
+    <option id="execution-browser" value="browser" disabled>Browser task</option>
+    <option id="execution-chat" value="chat" disabled>Chat Completions</option>
+    <option id="execution-responses" value="responses" disabled>OpenAI Responses</option>
+    <option id="execution-google" value="google" disabled>Google Interactions</option>
+    <option id="execution-pi" value="pi" disabled>Pi, new session</option>
+    <option id="execution-codex" value="codex" disabled>Codex, new session</option>
+    <option id="execution-opencode" value="opencode" disabled>OpenCode, new session</option>
+  </select>
+</div>
+<span id="keyboard-help" class="composer-visually-hidden">Enter to send. Shift+Enter for a new line.</span>
