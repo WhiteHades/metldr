@@ -182,7 +182,7 @@ fn session(
         return Err("Pi browser service ended before its prompt".into());
     }
     let message = format!(
-        "{}\n\n{}\nMetLDR browser tools are available through the {} MCP server for this run. Native tool permissions and MetLDR browser approvals are separate decisions.",
+        "{}\n\n{}\nMetLDR browser tools are available through the {} MCP server for this run. Native tool permissions and metldr browser approvals are separate decisions.",
         message(&job.text, &job.source)?,
         crate::browser_worker::BROWSER_POLICY,
         browser::name(&job.run)

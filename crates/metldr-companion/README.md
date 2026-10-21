@@ -1,8 +1,8 @@
-# MetLDR companion
+# metldr companion
 
 The companion runs provider requests, installed agents and browser tasks for the [Rust panel](../metldr-panel/README.md). It keeps run state, approvals and recovery in one native process. Browser commands use the normal Chromiumoxide dependency and the extension's debugger bridge.
 
-Pi receives the shared browser tools through a temporary MCP registration for each run. Its installed tools, authentication and saved session remain under Pi control. Browser field changes use the same separate MetLDR approval as other execution routes. The registration file contains no endpoint secret and is removed after Pi exits. An uncertain action or unconfirmed release blocks that session from continuing automatically.
+Pi receives the shared browser tools through a temporary MCP registration for each run. Its installed tools, authentication and saved session remain under Pi control. Browser field changes use the same separate metldr approval as other execution routes. The registration file contains no endpoint secret and is removed after Pi exits. An uncertain action or unconfirmed release blocks that session from continuing automatically.
 
 Codex and OpenCode share the panel's approval view. Codex requests can cover commands, file changes and additional permissions. Review the complete details before choosing an option. Saved command rules and session grants have separate labels. A changed file patch replaces its review and invalidates the old choice. The shared approval view is limited to 8192 encoded bytes. Larger reviews stop the task without approval. A native event backlog that prevents checking a queued decision also stops the task without applying that decision. Each agent retains its own policy and response format.
 
@@ -19,7 +19,7 @@ make companion
 
 The default output is `crates/metldr-companion/target/release/metldr-companion`. Cargo uses `CARGO_TARGET_DIR` instead when it is set. The checks write their local artifacts under this crate's `.tmp` directory.
 
-Pair the executable with an extension that implements MetLDR's native wire version 5. The default Vue frontend and complete extension packaging are still being migrated. Linux is the verified native platform. Windows and macOS installation and runtime checks remain open.
+Pair the executable with an extension that implements metldr's native wire version 5. The default Vue frontend and complete extension packaging are still being migrated. Linux is the verified native platform. Windows and macOS installation and runtime checks remain open.
 
 To register the companion with Chrome:
 
@@ -39,7 +39,7 @@ To register the companion with Chrome:
 ```json
 {
   "name": "io.metldr.first_flow",
-  "description": "MetLDR Rust companion",
+  "description": "metldr Rust companion",
   "path": "/absolute/path/to/metldr-companion",
   "type": "stdio",
   "allowed_origins": ["chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/"]

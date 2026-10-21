@@ -1,4 +1,4 @@
-# MetLDR native credentials
+# metldr native credentials
 
 This Rust crate stores provider keys for the native companion in the operating
 system credential store. The caller owns provider selection and recovery of

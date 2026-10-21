@@ -1,6 +1,6 @@
-# MetLDR Responses client
+# metldr Responses client
 
-This Rust client streams the OpenAI Responses protocol with MetLDR's browser
+This Rust client streams the OpenAI Responses protocol with metldr's browser
 tool definitions. It keeps request history and finalized reasoning inside one
 conversation. The application owns browser permissions, approvals and actions.
 

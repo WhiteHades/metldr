@@ -140,7 +140,7 @@ async fn native(
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         };
         if !ready || stop.load(Ordering::Acquire) { return Ok(Outcome::Cancelled); }
-        let message=format!("{}\n\n{BROWSER_POLICY}\nMetLDR browser tools are available through tools.metldr in your normal execute tool. Native tool permissions and MetLDR browser approvals are separate decisions.",agent::message(&job.text,&job.source)?);
+        let message=format!("{}\n\n{BROWSER_POLICY}\nMetLDR browser tools are available through tools.metldr in your normal execute tool. Native tool permissions and metldr browser approvals are separate decisions.",agent::message(&job.text,&job.source)?);
         session.prompt(&message).await?;
         stream::run(job,&mut session,&identity.selection,stop,failed,tx).await
     }.await;

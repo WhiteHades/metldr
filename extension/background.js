@@ -19,11 +19,11 @@ chrome.commands.onCommand.addListener((command, tab) => {
   if (!path || !Number.isInteger(tab?.id) || tab.id < 0 || tab.id > 2147483647) return;
   chrome.sidePanel.setOptions({ tabId: tab.id, path, enabled: true }, () => {
     if (chrome.runtime.lastError) {
-      console.error("MetLDR could not select its panel.", chrome.runtime.lastError.message);
+      console.error("metldr could not select its panel.", chrome.runtime.lastError.message);
       return;
     }
     chrome.sidePanel.open({ tabId: tab.id }).catch((error) => {
-      console.error("MetLDR could not open its panel.", error);
+      console.error("metldr could not open its panel.", error);
     });
   });
 });
@@ -36,5 +36,5 @@ init().then(() => {
   status = "failed";
   for (const port of waiting) port.disconnect();
   waiting.clear();
-  console.error("MetLDR could not load its Rust panel module.", error);
+  console.error("metldr could not load its Rust panel module.", error);
 });

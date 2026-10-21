@@ -119,7 +119,7 @@ pub fn start(app: Shared) -> Result<(), JsValue> {
         };
         let app = app.borrow();
         if result.is_err() && app.alive && app.setup.current(generation) {
-            app.notice("The model is ready, but MetLDR could not save its status. Reopen the panel to check availability again.");
+            app.notice("The model is ready, but metldr could not save its status. Reopen the panel to check availability again.");
         }
     });
     Ok(())

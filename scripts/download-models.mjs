@@ -86,7 +86,7 @@ async function downloadModel(model) {
 }
 
 async function main() {
-  console.log('=== MeTLDR Model Downloader ===\n')
+  console.log('=== metldr Model Downloader ===\n')
   console.log(`Target directory: ${MODELS_DIR}`)
   
   if (!existsSync(MODELS_DIR)) {

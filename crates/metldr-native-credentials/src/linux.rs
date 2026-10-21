@@ -62,7 +62,7 @@ pub(crate) fn put(
     }
     collection
         .create_item(
-            "MetLDR credential",
+            "metldr credential",
             HashMap::from([("application", SERVICE), ("account", account.as_str())]),
             value,
             false,

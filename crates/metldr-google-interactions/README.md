@@ -1,6 +1,6 @@
-# MetLDR Google Interactions client
+# metldr Google Interactions client
 
-This Rust client uses Google's native Interactions API with MetLDR's browser
+This Rust client uses Google's native Interactions API with metldr's browser
 tool definitions. One conversation owns the full request history and pending
 tool result. The application owns browser permissions, approvals and actions.
 

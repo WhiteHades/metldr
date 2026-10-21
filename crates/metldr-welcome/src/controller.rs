@@ -366,7 +366,7 @@ fn finish(app: Shared, connected: bool) {
         app.setup.saving = false;
         match result {
             Ok(()) => {
-                app.notice("Setup saved. You can close this tab and open MetLDR from the toolbar.");
+                app.notice("Setup saved. You can close this tab and open metldr from the toolbar.");
                 if let Some(window) = web_sys::window() {
                     let _ = window.close();
                 }

@@ -38,7 +38,7 @@ pub(super) fn render(panel: &Panel) -> Result<(), JsValue> {
         doc,
         "source-state",
         &format!(
-            "MetLDR | {}",
+            "metldr | {}",
             if source.is_some() {
                 source_state
             } else {

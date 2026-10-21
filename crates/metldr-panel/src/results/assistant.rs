@@ -172,7 +172,7 @@ fn name(route: &RunRoute) -> &'static str {
         RunRoute::Codex { .. } => "Codex",
         RunRoute::OpenCode { .. } => "OpenCode",
         RunRoute::Pi { .. } => "Pi",
-        _ => "MetLDR",
+        _ => "metldr",
     }
 }
 

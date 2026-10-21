@@ -99,7 +99,7 @@ cargo test --locked --manifest-path crates/metldr-welcome/Cargo.toml
 
 Local models process content on your machine. Provider and installed agent requests can send selected page content and instructions to the configured provider. The Rust companion keeps provider credentials outside page scripts and retains local run state for recovery. Review the selected destination before sending content. External providers can charge for their service.
 
-The extension does not require a MetLDR subscription. Local operation depends on the installed model, hardware and task. The build downloads dependencies and pinned assets when they are not already available.
+The extension does not require a metldr subscription. Local operation depends on the installed model, hardware and task. The build downloads dependencies and pinned assets when they are not already available.
 
 ---
 

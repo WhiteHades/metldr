@@ -1,6 +1,6 @@
-# MetLDR Messages client
+# metldr Messages client
 
-This Rust client uses the native Anthropic Messages API with MetLDR's browser
+This Rust client uses the native Anthropic Messages API with metldr's browser
 tool definitions. One conversation owns its request history and pending tool
 result. The application owns browser permissions, approval and action execution.
 
