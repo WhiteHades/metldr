@@ -1,5 +1,6 @@
 use crate::{
     Result,
+    browser_owner::Budget,
     browser_worker::{Call, Tools, decode_call, definitions},
 };
 use serde_json::{Value, json};
@@ -11,7 +12,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 use tokio::{
     net::{TcpListener, TcpStream},
@@ -25,6 +26,8 @@ const HEADERS_MAX: usize = 16 * 1024;
 const QUEUE_MAX: usize = 8;
 const CONNECTION_MAX: usize = 8;
 const TOOL_DEADLINE: Duration = Duration::from_secs(30);
+
+mod progress;
 
 pub(super) struct Server {
     listener: TcpListener,
@@ -92,7 +95,7 @@ impl Server {
             }
             if !stop.load(Ordering::Acquire) && !failed.load(Ordering::Acquire) && !done.load(Ordering::Acquire) && !fatal_cancel && dispatch_error.is_none() {
                 if let Some(request) = pending.pop_front() {
-                    if request.started.elapsed() >= TOOL_DEADLINE {
+                    if request.budget.expired() {
                         answer_tool(request, Err("browser tool deadline expired".into()));
                         continue;
                     }
@@ -101,6 +104,7 @@ impl Server {
                         &request.identity,
                         request.call.clone(),
                         &local_cancel,
+                        Some(&request.budget),
                     ));
                     let mut expired = false;
                     let result = loop {
@@ -123,7 +127,7 @@ impl Server {
                                     local_cancel.store(true, Ordering::Release);
                                     accepting = false;
                                 }
-                                if request.started.elapsed() >= TOOL_DEADLINE {
+                                if request.budget.expired() {
                                     local_cancel.store(true, Ordering::Release);
                                     expired = true;
                                 }
@@ -247,7 +251,7 @@ impl Server {
 struct ToolRequest {
     identity: String,
     call: Call,
-    started: Instant,
+    budget: Budget,
     cancel: Arc<AtomicBool>,
     reply: oneshot::Sender<std::result::Result<Value, String>>,
 }
@@ -361,8 +365,41 @@ async fn handle_connection(
     }
     let tool_call = message["method"] == "tools/call";
     let discovery = message["method"] == "tools/list";
-    let result = process_message(message, run, tx, active.clone()).await;
+    let streaming = tool_call
+        && parsed
+            .headers
+            .get("accept")
+            .is_some_and(|value| progress::accepted(value));
+    let (updates, mut receiver) = mpsc::channel(1);
+    let mut result_future = Box::pin(process_message(
+        message,
+        run,
+        tx,
+        active.clone(),
+        streaming.then_some(updates),
+    ));
+    let mut events = progress::Stream::default();
+    let result = loop {
+        tokio::select! {
+            biased;
+            result = &mut result_future => break result,
+            Some(update) = receiver.recv(), if streaming => {
+                if !active.stopping() && !active.done.load(Ordering::Acquire) {
+                    events.send(&mut stream, &update).await;
+                }
+            }
+        }
+    };
     if tool_call && active.fence_response().await {
+        return Ok(());
+    }
+    if events.started() {
+        let body = match result {
+            Ok(Some(body)) => body,
+            Ok(None) => return Err("streaming tool response absent".into()),
+            Err(error) => json_error(error),
+        };
+        events.send(&mut stream, &body).await;
         return Ok(());
     }
     let response = match result {
@@ -384,6 +421,7 @@ async fn process_message(
     run: &str,
     tx: mpsc::Sender<Inbound>,
     active: Arc<Calls>,
+    updates: Option<mpsc::Sender<String>>,
 ) -> Result<Option<String>> {
     let object = value.as_object().ok_or("invalid JSON-RPC message")?;
     if object.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
@@ -436,6 +474,7 @@ async fn process_message(
             json!({"tools":definitions().into_iter().map(|definition| json!({"name":definition.name,"description":definition.description,"inputSchema":definition.input_schema})).collect::<Vec<_>>() })
         }
         "tools/call" => {
+            let token = progress::token(&params)?;
             let name = params
                 .get("name")
                 .and_then(Value::as_str)
@@ -458,6 +497,7 @@ async fn process_message(
             let identity = request_identity(run, &id);
             let (reply, response) = oneshot::channel();
             let call_cancel = Arc::new(AtomicBool::new(false));
+            let budget = Budget::new(TOOL_DEADLINE);
             {
                 let mut active = active
                     .pending
@@ -474,7 +514,7 @@ async fn process_message(
             let request = ToolRequest {
                 identity: identity.clone(),
                 call,
-                started: Instant::now(),
+                budget: budget.clone(),
                 cancel: call_cancel.clone(),
                 reply,
             };
@@ -486,17 +526,34 @@ async fn process_message(
                     .remove(&identity);
                 return Ok(Some(tool_error(id, "MCP browser queue is full".into())));
             }
-            let response = timeout(TOOL_DEADLINE, response).await;
+            let mut response = response;
+            let mut poll = interval(Duration::from_millis(20));
+            let mut last_progress: Option<Duration> = None;
+            let response = loop {
+                tokio::select! {
+                    biased;
+                    result = &mut response => break Some(result),
+                    _ = poll.tick() => {
+                        if budget.expired() { break None; }
+                        if let (Some(elapsed), Some(token), Some(updates)) = (budget.review_elapsed(), token.as_ref(), updates.as_ref())
+                            && !active.stopping() && !active.done.load(Ordering::Acquire)
+                            && last_progress.is_none_or(|last| elapsed >= last + Duration::from_secs(5))
+                            && updates.try_send(progress::notification(token, elapsed)).is_ok() {
+                            last_progress = Some(elapsed);
+                        }
+                    }
+                }
+            };
             active
                 .pending
                 .lock()
                 .map_err(|_| "MCP cancellation state poisoned")?
                 .remove(&identity);
             match response {
-                Ok(Ok(Ok(value))) => {
+                Some(Ok(Ok(value))) => {
                     json!({"content":[{"type":"text","text":serde_json::to_string(&value)?}]})
                 }
-                Ok(Ok(Err(error))) => return Ok(Some(tool_error(id, error))),
+                Some(Ok(Err(error))) => return Ok(Some(tool_error(id, error))),
                 _ => {
                     call_cancel.store(true, Ordering::Release);
                     active.failed.store(true, Ordering::Release);
@@ -805,6 +862,7 @@ mod tests {
             "owned:2",
             tx,
             active.clone(),
+            None,
         )
         .await
         .unwrap();

@@ -649,7 +649,11 @@ fn propose(
 ) -> (Action, mpsc::Receiver<std::result::Result<Action, String>>) {
     let (ack, rx) = mpsc::sync_channel(1);
     owner
-        .browser_event(Event::Proposed { proposal: p, ack })
+        .browser_event(Event::Proposed {
+            proposal: p,
+            ack,
+            budget: None,
+        })
         .unwrap();
     assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
     let action = owner.state.browser_actions.values().next().unwrap().clone();
@@ -673,13 +677,86 @@ fn cached(owner: &mut Owner, proposal: Proposal, expected: &Action) {
     let before = fs::read(owner.disk.directory.join("snapshot.json")).unwrap();
     let (ack, rx) = mpsc::sync_channel(1);
     owner
-        .browser_event(Event::Proposed { proposal, ack })
+        .browser_event(Event::Proposed {
+            proposal,
+            ack,
+            budget: None,
+        })
         .unwrap();
     assert_eq!(rx.recv().unwrap().unwrap(), *expected);
     assert_eq!(
         fs::read(owner.disk.directory.join("snapshot.json")).unwrap(),
         before
     );
+}
+
+#[test]
+fn browser_review_budget_tracks_only_the_saved_pending_approval() {
+    for decision in [Some(true), Some(false), None] {
+        with_owner(|owner, proposal| {
+            let budget = crate::browser_owner::Budget::new(std::time::Duration::from_secs(30));
+            let (ack, rx) = mpsc::sync_channel(1);
+            owner
+                .browser_event(Event::Proposed {
+                    proposal: proposal.clone(),
+                    ack,
+                    budget: Some(budget.clone()),
+                })
+                .unwrap();
+            let action = saved(owner)
+                .browser_actions
+                .values()
+                .next()
+                .unwrap()
+                .clone();
+            assert!(matches!(action.state, Phase::Pending));
+            assert!(budget.review_elapsed().is_some());
+            assert!(rx.try_recv().is_err());
+
+            let repeated = crate::browser_owner::Budget::new(std::time::Duration::from_secs(30));
+            let (ack, cached) = mpsc::sync_channel(1);
+            owner
+                .browser_event(Event::Proposed {
+                    proposal,
+                    ack,
+                    budget: Some(repeated.clone()),
+                })
+                .unwrap();
+            assert_eq!(cached.recv().unwrap().unwrap(), action);
+            assert!(repeated.review_elapsed().is_none());
+            if let Some(approve) = decision {
+                owner
+                    .browser_decide(&action.id, action.revision, approve)
+                    .unwrap();
+                assert!(rx.recv().unwrap().is_ok());
+            } else {
+                owner
+                    .command(
+                        "stop",
+                        Command::Stop {
+                            run: action.proposal.run,
+                        },
+                    )
+                    .unwrap();
+                assert!(rx.recv().unwrap().is_err());
+            }
+            assert!(budget.review_elapsed().is_none());
+        });
+    }
+    with_owner(|owner, proposal| {
+        let budget = crate::browser_owner::Budget::new(std::time::Duration::ZERO);
+        let (ack, rx) = mpsc::sync_channel(1);
+        owner
+            .browser_event(Event::Proposed {
+                proposal,
+                ack,
+                budget: Some(budget),
+            })
+            .unwrap();
+        assert!(rx.recv().unwrap().is_err());
+        assert!(owner.browser_approval.is_none());
+        assert!(saved(owner).browser_actions.is_empty());
+    });
 }
 
 #[test]

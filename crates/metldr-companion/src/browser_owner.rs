@@ -10,10 +10,14 @@ use std::{
 
 type Reply = SyncSender<std::result::Result<Action, String>>;
 
+mod review;
+pub(crate) use review::Budget;
+
 pub(super) enum Event {
     Proposed {
         proposal: Proposal,
         ack: Reply,
+        budget: Option<Budget>,
     },
     Dispatch {
         action: String,
@@ -32,6 +36,14 @@ pub(super) struct PendingApproval {
     pub run: String,
     pub action: String,
     pub ack: Reply,
+    review: Option<review::Review>,
+}
+
+impl PendingApproval {
+    fn reply(self, result: std::result::Result<Action, String>) {
+        drop(self.review);
+        let _ = self.ack.send(result);
+    }
 }
 
 impl Owner {
@@ -48,7 +60,11 @@ impl Owner {
 
     pub(super) fn browser_event(&mut self, event: Event) -> Result<()> {
         match event {
-            Event::Proposed { proposal, ack } => {
+            Event::Proposed {
+                proposal,
+                ack,
+                budget,
+            } => {
                 let existing = self.state.browser_actions.values().any(|a| {
                     a.proposal.run == proposal.run && a.proposal.tool_use_id == proposal.tool_use_id
                 });
@@ -58,6 +74,9 @@ impl Owner {
                     }
                     if !existing && self.browser_approval.is_some() {
                         return Err("browser approval already pending".into());
+                    }
+                    if !existing && budget.as_ref().is_some_and(Budget::expired) {
+                        return Err("browser tool deadline expired before proposal".into());
                     }
                     let mut next = self.state.clone();
                     let action = next.propose_browser(proposal)?;
@@ -73,10 +92,15 @@ impl Owner {
                         Ok(())
                     }
                     Ok(action) => {
+                        let review = match budget.as_ref().map(Budget::pause).transpose() {
+                            Ok(review) => review,
+                            Err(error) => return reply(ack, Err(error)),
+                        };
                         self.browser_approval = Some(PendingApproval {
                             run: action.proposal.run,
                             action: action.id,
                             ack,
+                            review,
                         });
                         Ok(())
                     }
@@ -148,7 +172,7 @@ impl Owner {
         let record = next.decide_browser(action, revision, approve)?;
         self.commit(next)?;
         if let Some(pending) = self.browser_approval.take() {
-            let _ = pending.ack.send(Ok(record));
+            pending.reply(Ok(record));
         }
         Ok(())
     }
@@ -157,9 +181,7 @@ impl Owner {
         if self.browser_approval.as_ref().is_some_and(|p| p.run == run)
             && let Some(pending) = self.browser_approval.take()
         {
-            let _ = pending
-                .ack
-                .send(Err("browser action stopped before dispatch".into()));
+            pending.reply(Err("browser action stopped before dispatch".into()));
         }
     }
 }

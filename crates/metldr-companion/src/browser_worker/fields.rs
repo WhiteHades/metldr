@@ -54,6 +54,7 @@ impl Tools {
         call_id: &str,
         call: Call,
         stop: &AtomicBool,
+        budget: Option<&browser_owner::Budget>,
     ) -> Result<Value> {
         if stop.load(Ordering::Acquire) {
             return Err("browser task stopped".into());
@@ -74,8 +75,12 @@ impl Tools {
         }
         let result = match &call {
             Call::Observe => self.observe().await?,
-            Call::Navigate { destination } => self.navigate(call_id, destination, stop).await?,
-            Call::Change { handle, value } => self.change(call_id, handle, value, stop).await?,
+            Call::Navigate { destination } => {
+                self.navigate(call_id, destination, stop, budget).await?
+            }
+            Call::Change { handle, value } => {
+                self.change(call_id, handle, value, stop, budget).await?
+            }
             Call::ActivateButton { handle } => {
                 let proposal = self
                     .engine
@@ -83,7 +88,7 @@ impl Tools {
                     .ok_or("browser is not attached")?
                     .prepare_button(call_id, handle)
                     .await?;
-                self.perform(proposal, stop).await?
+                self.perform(proposal, stop, budget).await?
             }
         };
         self.completed
@@ -132,6 +137,7 @@ impl Tools {
         handle: &str,
         value: &str,
         stop: &AtomicBool,
+        budget: Option<&browser_owner::Budget>,
     ) -> Result<Value> {
         let proposal = self
             .engine
@@ -139,13 +145,19 @@ impl Tools {
             .ok_or("browser is not attached")?
             .prepare_change(tool_use_id, handle, value)
             .await?;
-        self.perform(proposal, stop).await
+        self.perform(proposal, stop, budget).await
     }
 
-    async fn perform(&self, proposal: Proposal, stop: &AtomicBool) -> Result<Value> {
+    async fn perform(
+        &self,
+        proposal: Proposal,
+        stop: &AtomicBool,
+        budget: Option<&browser_owner::Budget>,
+    ) -> Result<Value> {
         let approved = action(&self.client, stop, |ack| browser_owner::Event::Proposed {
             proposal,
             ack,
+            budget: budget.cloned(),
         })
         .await?;
         let settled = match &approved.state {
@@ -307,11 +319,16 @@ mod failed_attach_check {
         let stop = AtomicBool::new(true);
         assert!(
             tools
-                .dispatch("cached", Call::Observe, &stop)
+                .dispatch("cached", Call::Observe, &stop, None)
                 .await
                 .is_err()
         );
-        assert!(tools.dispatch("fresh", Call::Observe, &stop).await.is_err());
+        assert!(
+            tools
+                .dispatch("fresh", Call::Observe, &stop, None)
+                .await
+                .is_err()
+        );
         assert!(rx.try_recv().is_err(), "Stop allowed browser I/O");
     }
 
@@ -351,7 +368,7 @@ mod failed_attach_check {
                 Arc::new(AtomicBool::new(false)),
             );
             let result = tools
-                .dispatch("call-1", Call::Observe, &AtomicBool::new(false))
+                .dispatch("call-1", Call::Observe, &AtomicBool::new(false), None)
                 .await;
             assert!(result.is_err());
             assert_eq!(

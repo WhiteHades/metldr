@@ -269,7 +269,7 @@ async fn execute(
             return Ok(());
         };
         let result = tools
-            .dispatch(&invocation.id, invocation.call, stop)
+            .dispatch(&invocation.id, invocation.call, stop, None)
             .await?;
         protocol.continuation(&result)?;
     }

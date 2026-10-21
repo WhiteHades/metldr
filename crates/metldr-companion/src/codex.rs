@@ -238,7 +238,7 @@ async fn run(
             }
             NativeEvent::ToolCall(call) => {
                 let decoded = decode_call(&call.name, call.arguments.clone())?;
-                let outcome = tools.dispatch(&call.call_id, decoded, stop).await;
+                let outcome = tools.dispatch(&call.call_id, decoded, stop, None).await;
                 if stop.load(Ordering::Acquire) {
                     stop_wait.check(true, Instant::now())?;
                     if interrupted.is_none() {

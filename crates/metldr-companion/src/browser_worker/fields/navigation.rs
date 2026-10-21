@@ -6,6 +6,7 @@ impl Tools {
         tool_use_id: &str,
         destination: &str,
         stop: &AtomicBool,
+        budget: Option<&browser_owner::Budget>,
     ) -> Result<Value> {
         if !crate::browser_action::valid_destination(&self.current.url, destination) {
             return Err("browser navigation URL is outside the owned fixture".into());
@@ -19,6 +20,7 @@ impl Tools {
         let approved = action(&self.client, stop, |ack| browser_owner::Event::Proposed {
             proposal,
             ack,
+            budget: budget.cloned(),
         })
         .await?;
         let settled = match &approved.state {
