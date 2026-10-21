@@ -71,6 +71,29 @@ impl Client {
         })
     }
 
+    /// Streams one text response without offering tools. Partial text can precede an error.
+    pub async fn text(
+        self,
+        system: &str,
+        input: &str,
+        stop: &AtomicBool,
+        emit: impl FnMut(String) -> Result<()>,
+    ) -> Result<()> {
+        let turn = self
+            .send(&self.text_request(system, input), stop, emit)
+            .await?;
+        if turn.call.is_some() {
+            return Err("Google Interactions text request returned a tool call".into());
+        }
+        Ok(())
+    }
+
+    fn text_request(&self, system: &str, input: &str) -> Value {
+        json!({"model":self.model,"system_instruction":system,
+            "input":[{"type":"user_input","content":[{"type":"text","text":input}]}],
+            "stream":true,"store":false,"generation_config":{"max_output_tokens":2048}})
+    }
+
     pub(super) fn request(&self, prompt: Prompt<'_>) -> Value {
         let context = json!({"instruction":prompt.instruction,"source":{
             "title":prompt.title,"url":prompt.url,"text":prompt.text}});

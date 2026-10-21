@@ -25,6 +25,41 @@ fn scripted(
     key: &str,
     chat: bool,
 ) -> (String, thread::JoinHandle<Vec<Value>>) {
+    scripted_protocol(
+        replies,
+        key,
+        if chat {
+            Protocol::Chat
+        } else {
+            Protocol::Messages
+        },
+    )
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Protocol {
+    Messages,
+    Responses,
+    Google,
+    Chat,
+}
+
+pub(super) fn text_server(
+    body: &str,
+    protocol: Protocol,
+) -> (String, thread::JoinHandle<Vec<Value>>) {
+    scripted_protocol(
+        vec![("200 OK".into(), body.into())],
+        "dummy-owned-browser-fixture",
+        protocol,
+    )
+}
+
+fn scripted_protocol(
+    replies: Vec<(String, String)>,
+    key: &str,
+    protocol: Protocol,
+) -> (String, thread::JoinHandle<Vec<Value>>) {
     let api_key = key.to_owned();
     let certs = rustls_pemfile::certs(&mut Cursor::new(include_bytes!(
         "../../test-tls/server.pem"
@@ -46,10 +81,11 @@ fn scripted(
     .unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
-    let path = if chat {
-        "/v1/chat/completions"
-    } else {
-        "/v1/messages"
+    let path = match protocol {
+        Protocol::Messages => "/v1/messages",
+        Protocol::Responses => "/v1/responses",
+        Protocol::Google => "/v1/interactions",
+        Protocol::Chat => "/v1/chat/completions",
     };
     let endpoint = format!("https://{}{path}", listener.local_addr().unwrap());
     let location = endpoint.clone();
@@ -93,11 +129,12 @@ fn scripted(
                 assert!(headers.len() < 8192);
             }
             let headers = String::from_utf8(headers).unwrap();
-            let expected_header = if chat { "authorization" } else { "x-api-key" };
-            let expected_key = if chat {
-                format!("Bearer {api_key}")
-            } else {
-                api_key.clone()
+            let (expected_header, expected_key) = match protocol {
+                Protocol::Messages => ("x-api-key", api_key.clone()),
+                Protocol::Responses | Protocol::Chat => {
+                    ("authorization", format!("Bearer {api_key}"))
+                }
+                Protocol::Google => ("x-goog-api-key", api_key.clone()),
             };
             assert!(headers.lines().any(|line| {
                 line.split_once(':').is_some_and(|(name, value)| {

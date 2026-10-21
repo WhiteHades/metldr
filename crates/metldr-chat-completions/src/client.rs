@@ -69,6 +69,29 @@ impl Client {
         })
     }
 
+    /// Streams one text response without offering tools. Partial text can precede an error.
+    pub async fn text(
+        self,
+        system: &str,
+        input: &str,
+        stop: &AtomicBool,
+        emit: impl FnMut(String) -> Result<()>,
+    ) -> Result<()> {
+        let turn = self
+            .send(&self.text_request(system, input), stop, emit)
+            .await?;
+        if !turn.calls.is_empty() {
+            return Err("Chat text request returned a tool call".into());
+        }
+        Ok(())
+    }
+
+    fn text_request(&self, system: &str, input: &str) -> Value {
+        json!({"model":self.model,
+            "messages":[{"role":"system","content":system},{"role":"user","content":input}],
+            "stream":true,"stream_options":{"include_usage":true},"max_tokens":4096})
+    }
+
     pub(super) fn request(&self, prompt: Prompt<'_>) -> Value {
         let context = json!({"instruction":prompt.instruction,"source":{
             "title":prompt.title,"url":prompt.url,"text":prompt.text}});

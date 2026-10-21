@@ -1,7 +1,7 @@
 # metldr Google Interactions client
 
-This Rust client uses Google's native Interactions API with metldr's browser
-tool definitions. One conversation owns the full request history and pending
+This Rust client streams plain text and browser tool calls through Google's
+native Interactions API. One browser conversation owns the full request history and pending
 tool result. The application owns browser permissions, approvals and actions.
 
 ```no_run
@@ -32,6 +32,28 @@ if let Some(invocation) = invocation {
 # Ok(())
 # }
 ```
+
+For a text response, use `Client::text` instead of starting a browser conversation.
+The caller supplies system instructions and input separately.
+
+```no_run
+use metldr_google_interactions::{Client, Result};
+use std::sync::atomic::AtomicBool;
+
+# async fn example() -> Result<()> {
+let client = Client::new("https://generativelanguage.googleapis.com/v1/interactions", "your-supported-model",
+    &std::env::var("GEMINI_API_KEY")?, None)?;
+client.text("Answer using the supplied source.", "The report lists 17 units.",
+    &AtomicBool::new(false), |text| { print!("{text}"); Ok(()) }).await?;
+# Ok(())
+# }
+```
+
+The text request includes no tools, browser policy or validated tool choice and
+uses `store: false`. It rejects tool calls, empty answers and incomplete streams.
+Partial text can arrive before an error. The caller owns source selection,
+history and the final run status. The same transport bounds and cancellation
+behavior apply to both paths.
 
 After approving and executing a returned invocation, submit the actual browser
 result with `conversation.submit_tool_result(&result)`, then call `next` again.

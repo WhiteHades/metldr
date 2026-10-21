@@ -1,8 +1,8 @@
 # metldr Responses client
 
-This Rust client streams the OpenAI Responses protocol with metldr's browser
-tool definitions. It keeps request history and finalized reasoning inside one
-conversation. The application owns browser permissions, approvals and actions.
+This Rust client streams plain text and browser tool calls through the OpenAI
+Responses protocol. A browser conversation keeps request history and finalized
+reasoning. The application owns browser permissions, approvals and actions.
 
 ```no_run
 use metldr_responses::{Client, Prompt, Result};
@@ -33,6 +33,28 @@ if let Some(invocation) = invocation {
 # Ok(())
 # }
 ```
+
+For a text response, use `Client::text` instead of starting a browser conversation.
+The caller supplies system instructions and input separately.
+
+```no_run
+use metldr_responses::{Client, Result};
+use std::sync::atomic::AtomicBool;
+
+# async fn example() -> Result<()> {
+let client = Client::new("https://api.openai.com/v1/responses", "your-supported-model",
+    &std::env::var("OPENAI_API_KEY")?, None)?;
+client.text("Answer using the supplied source.", "The report lists 17 units.",
+    &AtomicBool::new(false), |text| { print!("{text}"); Ok(()) }).await?;
+# Ok(())
+# }
+```
+
+The text request includes no tool definitions or browser policy and uses
+`store: false`. It rejects tool calls, empty answers and incomplete streams.
+Partial text can arrive before an error. The caller owns source selection,
+history and the final run status. The same transport bounds and cancellation
+behavior apply to both paths.
 
 After approving and executing a returned invocation, pass the actual browser
 result to `conversation.submit_tool_result(&result)`, then call `next` again.

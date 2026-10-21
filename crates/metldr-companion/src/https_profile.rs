@@ -8,6 +8,8 @@ use std::{fs::File, io::Read, net::SocketAddr, path::PathBuf};
 pub(crate) const FIXTURE_MODEL: &str = "fixture-browser-model";
 
 #[cfg(test)]
+mod text_checks;
+#[cfg(test)]
 pub(crate) mod transport_checks;
 #[cfg(all(test, target_os = "linux"))]
 mod vault_checks;

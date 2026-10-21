@@ -1,7 +1,7 @@
 # metldr Messages client
 
-This Rust client uses the native Anthropic Messages API with metldr's browser
-tool definitions. One conversation owns its request history and pending tool
+This Rust client streams plain text and uses the native Anthropic Messages API
+with metldr's browser tool definitions. One browser conversation owns its request history and pending tool
 result. The application owns browser permissions, approval and action execution.
 
 ```no_run
@@ -32,7 +32,28 @@ if let Some(invocation) = conversation.next(&stop, |text| {
 # }
 ```
 
-After approving and executing a returned invocation, submit the actual result
+For a text response, use `Client::text` instead of starting a browser conversation.
+The caller supplies system instructions and input separately.
+
+```no_run
+use metldr_messages::{Client, Result};
+use std::sync::atomic::AtomicBool;
+
+# async fn example() -> Result<()> {
+let client = Client::new("https://api.anthropic.com/v1/messages", "your-supported-model-id",
+    &std::env::var("ANTHROPIC_API_KEY")?, None)?;
+client.text("Answer using the supplied source.", "The report lists 17 units.",
+    &AtomicBool::new(false), |text| { print!("{text}"); Ok(()) }).await?;
+# Ok(())
+# }
+```
+
+The text request includes no tool definitions or browser policy. It rejects tool
+calls, empty answers and incomplete streams. Partial text can arrive before an
+error. The caller owns source selection, history and the final run status.
+The same transport bounds and cancellation behavior apply to both paths.
+
+After approving and executing a returned browser invocation, submit the actual result
 with `conversation.submit_tool_result(&result)`, then call `next` again. The
 conversation preserves complete finalized assistant content, including opaque
 thinking signatures and redacted thinking. It appends each matching tool result
