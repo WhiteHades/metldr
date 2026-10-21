@@ -88,12 +88,17 @@ pub(super) fn render(
                             value["button_id"] = json!(button_id);
                             value["button_label"] = json!(button_label);
                         }
+                        crate::browser_action::Intent::SelectOption { selection } => {
+                            value["kind"] = json!("select_option");
+                            value["selection"] = json!(selection);
+                        }
                     }
                     if let crate::browser_action::Phase::Settled { outcome } = &action.state {
                         use crate::browser_action::Outcome;
                         value["outcome"] = json!(match outcome {
                             Outcome::Verified { .. } | Outcome::Navigated { .. } => "verified",
                             Outcome::ButtonClickObserved => "click_observed",
+                            Outcome::SelectionObserved { .. } => "selection_observed",
                             Outcome::Prevented { .. } => "prevented",
                             Outcome::Uncertain { .. } => "uncertain",
                         });
@@ -101,6 +106,9 @@ pub(super) fn render(
                             outcome
                         {
                             value["reason"] = json!(reason);
+                        }
+                        if let Outcome::SelectionObserved { selected } = outcome {
+                            value["observed_selection"] = json!(selected);
                         }
                     }
                     value

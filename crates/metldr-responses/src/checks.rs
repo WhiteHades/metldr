@@ -196,12 +196,17 @@ fn constructs_direct_stateless_request_without_provider_credentials() {
     assert_eq!(request["include"], json!(["reasoning.encrypted_content"]));
     assert!(request.get("previous_response_id").is_none());
     assert!(!request.to_string().contains("Bearer owned"));
-    assert_eq!(request["tools"].as_array().unwrap().len(), 4);
+    assert_eq!(request["tools"].as_array().unwrap().len(), 5);
     for tool in request["tools"].as_array().unwrap() {
         assert_eq!(tool["strict"], true);
         assert!(tool["parameters"]["required"].is_array());
         assert_eq!(tool["parameters"]["additionalProperties"], false);
     }
+    assert_eq!(request["tools"][4]["name"], "select_option");
+    assert_eq!(
+        request["tools"][4]["parameters"],
+        metldr_browser_tools::definitions()[4].input_schema
+    );
 }
 
 fn client() -> Client {

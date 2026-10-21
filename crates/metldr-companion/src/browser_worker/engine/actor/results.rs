@@ -59,6 +59,7 @@ impl Actor {
                     root: root.clone(),
                     fields: BTreeMap::new(),
                     buttons: BTreeMap::new(),
+                    selects: BTreeMap::new(),
                 });
                 self.queue(
                     "Runtime.callFunctionOn",
@@ -106,6 +107,14 @@ impl Actor {
                 }
             }
             Work::ReadButton { tool, handle, job } => self.button_read(tool, handle, job, value),
+            Work::ReadSelection {
+                tool,
+                handle,
+                option,
+                job,
+            } => self.selection_read(tool, handle, option, job, value),
+            Work::WriteSelection { action, job } => self.selection_written(action, job, value),
+            Work::VerifySelection { action, job } => self.selection_verified(action, job, value),
             Work::ArmButton { action, job } => self.button_armed(action, job, value),
             Work::Gesture { job, .. } => self.button_gestured(job),
             Work::ButtonReceipt { job } => {
@@ -249,6 +258,22 @@ impl Actor {
                     reason: "approved button click could not be verified".into(),
                 },
             ),
+            Work::WriteSelection { job, .. } => self.value(
+                job,
+                if prevented {
+                    Outcome::Prevented { reason }
+                } else {
+                    Outcome::Uncertain {
+                        reason: "selection dispatch result was lost".into(),
+                    }
+                },
+            ),
+            Work::VerifySelection { job, .. } => self.value(
+                job,
+                Outcome::Uncertain {
+                    reason: "selection could not be observed after dispatch".into(),
+                },
+            ),
             Work::Write { job, .. } => self.value(
                 job,
                 if prevented {
@@ -277,6 +302,7 @@ impl Actor {
             | Work::Census { job, .. }
             | Work::ReadField { job, .. }
             | Work::ReadButton { job, .. }
+            | Work::ReadSelection { job, .. }
             | Work::ArmButton { job, .. }
             | Work::Navigate { job, .. } => {
                 self.finish(job, Err(reason.into()));

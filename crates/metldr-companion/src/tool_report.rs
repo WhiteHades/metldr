@@ -439,7 +439,7 @@ mod tests {
     #[test]
     fn optional_details_degrade_before_core_store_or_wire_state() {
         let mut state = Store {
-            schema: 6,
+            schema: 7,
             view: crate::model::View {
                 sequence: 7,
                 store: "a".repeat(32),

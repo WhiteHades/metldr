@@ -183,7 +183,7 @@ impl Launch {
 }
 
 pub(super) fn validate(state: &Store) -> Result<()> {
-    if state.schema != 6
+    if state.schema != 7
         || state.launches.len() != state.view.runs.len()
         || state.workflows.len() > 16
     {

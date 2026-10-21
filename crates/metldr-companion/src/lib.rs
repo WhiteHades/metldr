@@ -4,7 +4,7 @@ const FRAME_MAX: usize = 65_536;
 const STORE_MAX: usize = 49_152;
 const TEXT_MAX: usize = 8_192;
 const CONFIG_MAX: usize = 4_096;
-const WIRE_VERSION: u8 = 7;
+const WIRE_VERSION: u8 = 8;
 
 mod agent;
 mod agent_model;

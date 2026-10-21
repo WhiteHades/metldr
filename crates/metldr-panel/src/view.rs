@@ -337,7 +337,11 @@ fn render_browser_actions(panel: &Panel) -> Result<(), JsValue> {
         let (parent, position) = if action.phase == BrowserActionPhase::Settled
             && matches!(
                 action.outcome,
-                Some(BrowserActionOutcome::Verified | BrowserActionOutcome::ClickObserved)
+                Some(
+                    BrowserActionOutcome::Verified
+                        | BrowserActionOutcome::ClickObserved
+                        | BrowserActionOutcome::SelectionObserved
+                )
             ) {
             (&receipt_rows, &mut receipt_position)
         } else {
@@ -436,6 +440,10 @@ fn update_action_card(
         }
         BrowserActionIntent::ActivateButton { .. } => "Button action",
         BrowserActionIntent::Field { .. } => "Browser action",
+        BrowserActionIntent::SelectOption { .. } if action.phase == BrowserActionPhase::Pending => {
+            "Approve option selection"
+        }
+        BrowserActionIntent::SelectOption { .. } => "Option selection",
     }));
     match &action.intent {
         BrowserActionIntent::Field {
@@ -467,11 +475,39 @@ fn update_action_card(
             update_detail(card, "button", button_label)?;
             show_rows(card, &["destination", "button", "status"])?;
         }
+        BrowserActionIntent::SelectOption { selection } => {
+            update_detail(card, "destination", &action.url)?;
+            update_row_label(card, "field", "Control")?;
+            update_detail(card, "field", &selection.control_label)?;
+            update_row_label(card, "previous-value", "Previous selection")?;
+            update_detail(
+                card,
+                "previous-value",
+                &selection.previous.as_ref().map_or_else(
+                    || "No selection".to_owned(),
+                    |choice| format!("{} (option {})", choice.label, choice.index + 1),
+                ),
+            )?;
+            update_row_label(card, "value", "Chosen option")?;
+            update_detail(
+                card,
+                "value",
+                &format!(
+                    "{} (option {})",
+                    selection.selected.label,
+                    selection.selected.index + 1
+                ),
+            )?;
+            show_rows(
+                card,
+                &["destination", "field", "previous-value", "value", "status"],
+            )?;
+        }
     }
-    let status = if action.outcome == Some(BrowserActionOutcome::ClickObserved) {
-        "Button click observed".to_owned()
-    } else {
-        format!(
+    let status = match action.outcome {
+        Some(BrowserActionOutcome::ClickObserved) => "Button click observed".to_owned(),
+        Some(BrowserActionOutcome::SelectionObserved) => "Selection observed".to_owned(),
+        _ => format!(
             "{}{}{}",
             action.phase,
             action
@@ -483,7 +519,7 @@ fn update_action_card(
                 .as_ref()
                 .map(|reason| format!(": {reason}"))
                 .unwrap_or_default()
-        )
+        ),
     };
     update_detail(card, "status", &status)?;
     let controls = card.query_selector("[data-part='controls']")?;

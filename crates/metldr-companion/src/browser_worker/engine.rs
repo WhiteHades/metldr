@@ -45,6 +45,12 @@ enum Kind {
         value: String,
     },
     Change(Action),
+    PrepareSelection {
+        tool: String,
+        handle: String,
+        option: String,
+    },
+    SelectOption(Action),
     PrepareButton {
         tool: String,
         handle: String,
@@ -202,6 +208,19 @@ impl Engine {
         })
         .await
     }
+    pub(super) async fn prepare_selection(
+        &self,
+        tool: &str,
+        handle: &str,
+        option: &str,
+    ) -> Result<Proposal> {
+        self.request(Kind::PrepareSelection {
+            tool: tool.into(),
+            handle: handle.into(),
+            option: option.into(),
+        })
+        .await
+    }
     async fn effect(&self, kind: Kind, lost_reason: &str) -> Outcome {
         let guard = admission::CancelOnDrop::default();
         match self.request_with(kind, Some(guard.0.clone())).await {
@@ -218,6 +237,13 @@ impl Engine {
         self.effect(
             Kind::Change(action.clone()),
             "field dispatch result was lost",
+        )
+        .await
+    }
+    pub(super) async fn select_option(&self, action: &Action) -> Outcome {
+        self.effect(
+            Kind::SelectOption(action.clone()),
+            "selection dispatch result was lost",
         )
         .await
     }

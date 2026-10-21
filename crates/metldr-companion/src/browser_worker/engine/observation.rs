@@ -1,5 +1,6 @@
 use super::runtime::FrameContext;
 use crate::Result;
+use crate::browser_action::Choice;
 use chromiumoxide::cdp::js_protocol::runtime::RemoteObjectId;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -15,6 +16,55 @@ struct Census {
     fields: Vec<CensusField>,
     buttons_truncated: bool,
     buttons: Vec<CensusField>,
+    selects_truncated: bool,
+    selects: Vec<CensusSelect>,
+}
+
+#[derive(Deserialize)]
+struct CensusSelect {
+    slot: usize,
+    label: String,
+    selected: Option<usize>,
+    options: Vec<CensusOption>,
+}
+
+#[derive(Deserialize)]
+struct CensusOption {
+    slot: usize,
+    label: String,
+    enabled: bool,
+}
+
+pub(super) struct SelectControl {
+    pub(super) slot: usize,
+    pub(super) label: String,
+    options: Vec<SelectOption>,
+}
+
+struct SelectOption {
+    choice: Choice,
+    enabled: bool,
+}
+
+impl SelectControl {
+    pub(super) fn option(&self, id: &str) -> Result<&Choice> {
+        self.options
+            .iter()
+            .find(|option| option.enabled && option.choice.id == id)
+            .map(|option| &option.choice)
+            .ok_or_else(|| "invalid, disabled or expired browser option handle".into())
+    }
+
+    pub(super) fn selected(&self, index: Option<usize>) -> Result<Option<Choice>> {
+        index
+            .map(|index| {
+                self.options
+                    .get(index)
+                    .map(|option| option.choice.clone())
+                    .ok_or_else(|| "selected browser option is unavailable".into())
+            })
+            .transpose()
+    }
 }
 
 #[derive(Deserialize)]
@@ -35,6 +85,7 @@ pub(super) struct Snapshot {
     pub(super) root: RemoteObjectId,
     pub(super) fields: BTreeMap<String, Field>,
     pub(super) buttons: BTreeMap<String, Field>,
+    pub(super) selects: BTreeMap<String, SelectControl>,
 }
 
 impl Snapshot {
@@ -76,6 +127,41 @@ impl Snapshot {
             );
             observed_buttons.push(json!({"handle":handle,"label":button.label}));
         }
+        let mut selects = BTreeMap::new();
+        let mut observed_selects = Vec::with_capacity(census.selects.len());
+        for control in &census.selects {
+            let identity = format!("{}-{generation:x}-{:x}", &run_identity[..32], control.slot);
+            let handle = format!("s{identity}");
+            let options: Vec<_> = control
+                .options
+                .iter()
+                .map(|option| SelectOption {
+                    choice: Choice {
+                        id: format!("o{identity}-{:x}", option.slot),
+                        label: option.label.clone(),
+                        index: option.slot,
+                    },
+                    enabled: option.enabled,
+                })
+                .collect();
+            let selected = control
+                .selected
+                .map(|index| public_choice(&options[index].choice));
+            let choices: Vec<_> = options
+                .iter()
+                .filter(|option| option.enabled)
+                .map(|option| public_choice(&option.choice))
+                .collect();
+            observed_selects.push(json!({"handle":handle,"label":control.label,"selected":selected,"options":choices}));
+            selects.insert(
+                handle,
+                SelectControl {
+                    slot: control.slot,
+                    label: control.label.clone(),
+                    options,
+                },
+            );
+        }
         let result = json!({
             "kind": "page_observation",
             "untrusted": true,
@@ -87,6 +173,8 @@ impl Snapshot {
             "fields": observed_fields,
             "buttons_truncated": census.buttons_truncated,
             "buttons": observed_buttons,
+            "selects_truncated": census.selects_truncated,
+            "selects": observed_selects,
         });
         Ok((
             Self {
@@ -94,6 +182,7 @@ impl Snapshot {
                 root,
                 fields,
                 buttons,
+                selects,
             },
             result,
         ))
@@ -109,6 +198,16 @@ impl Snapshot {
             .get(handle)
             .ok_or_else(|| "invalid or expired browser button handle".into())
     }
+
+    pub(super) fn select(&self, handle: &str) -> Result<&SelectControl> {
+        self.selects
+            .get(handle)
+            .ok_or_else(|| "invalid or expired browser selection handle".into())
+    }
+}
+
+fn public_choice(choice: &Choice) -> Value {
+    json!({"handle":choice.id,"label":choice.label,"index":choice.index})
 }
 
 impl Census {
@@ -132,8 +231,33 @@ impl Census {
         {
             return Err("invalid or oversized browser observation".into());
         }
+        let mut slots = BTreeSet::new();
+        if self.selects.len() > 32
+            || self.selects.iter().map(|s| s.options.len()).sum::<usize>() > 64
+            || self.selects.iter().any(|control| {
+                control.slot >= 32
+                    || !slots.insert(control.slot)
+                    || !valid_label(&control.label)
+                    || control.options.is_empty()
+                    || control.options.len() > 32
+                    || control
+                        .selected
+                        .is_some_and(|index| index >= control.options.len())
+                    || control
+                        .options
+                        .iter()
+                        .enumerate()
+                        .any(|(index, option)| option.slot != index || !valid_label(&option.label))
+            })
+        {
+            return Err("invalid or oversized browser selection observation".into());
+        }
         Ok(())
     }
+}
+
+fn valid_label(label: &str) -> bool {
+    !label.is_empty() && label.len() <= 128 && !label.chars().any(char::is_control)
 }
 
 #[cfg(test)]
@@ -146,6 +270,7 @@ mod checks {
             "url":"https://example.test/", "title":"Example", "text":"Live text",
             "text_truncated":false, "fields_truncated":false,
             "buttons_truncated":false,"buttons":[],
+            "selects_truncated":false,"selects":[],
             "fields":[{"slot":0,"label":"Report title","check_label":"Report title"}]
         }))
         .unwrap();

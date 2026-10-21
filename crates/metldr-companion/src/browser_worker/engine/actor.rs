@@ -29,6 +29,7 @@ mod initialization;
 mod navigation;
 mod requests;
 mod results;
+mod selects;
 
 struct Initialization {
     session: Option<String>,
@@ -67,6 +68,20 @@ enum Work {
     ReadButton {
         tool: String,
         handle: String,
+        job: Job,
+    },
+    ReadSelection {
+        tool: String,
+        handle: String,
+        option: String,
+        job: Job,
+    },
+    WriteSelection {
+        action: Action,
+        job: Job,
+    },
+    VerifySelection {
+        action: Action,
         job: Job,
     },
     ArmButton {
@@ -322,6 +337,7 @@ impl Actor {
             }
             match &pending.work {
                 Work::Write { action, .. }
+                | Work::WriteSelection { action, .. }
                 | Work::Navigate { action, .. }
                 | Work::ArmButton { action, .. }
                 | Work::Gesture { action, .. } => self.validate_action(
@@ -372,7 +388,10 @@ impl Actor {
             },
         };
         let reply = match &pending.work {
-            Work::Write { job, .. } | Work::Navigate { job, .. } | Work::Gesture { job, .. } => job
+            Work::Write { job, .. }
+            | Work::WriteSelection { job, .. }
+            | Work::Navigate { job, .. }
+            | Work::Gesture { job, .. } => job
                 .admission
                 .as_ref()
                 .ok_or("browser action admission absent")?
@@ -434,6 +453,9 @@ impl Work {
             | Self::Census { job, .. }
             | Self::ReadField { job, .. }
             | Self::ReadButton { job, .. }
+            | Self::ReadSelection { job, .. }
+            | Self::WriteSelection { job, .. }
+            | Self::VerifySelection { job, .. }
             | Self::ArmButton { job, .. }
             | Self::Gesture { job, .. }
             | Self::ButtonReceipt { job }

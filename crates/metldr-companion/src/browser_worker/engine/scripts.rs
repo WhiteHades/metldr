@@ -1,4 +1,5 @@
 mod buttons;
+pub(super) mod selects;
 pub(super) use buttons::{arm_button, button_receipt, check_button};
 
 const HELPERS: &str = r#"
@@ -49,8 +50,7 @@ const labelText = root => {
   }
   return text;
 };
-const eligible = element => {
-  if (!(element instanceof HTMLInputElement) || element.type !== 'text' || element.disabled || element.readOnly || !visible(element)) return null;
+const safeLabel = element => {
   const accessible = label(element);
   if (accessible === null) return null;
   const metadataValues = [element.autocomplete, element.name, element.id, accessible, element.placeholder];
@@ -58,6 +58,10 @@ const eligible = element => {
   const metadata = metadataValues.join(' ').toLowerCase();
   if (/password|passcode|one[ -]?time[ -]?code|\botp\b|token|secret|api[ _-]?key|payment[ _-]?card|credit[ _-]?card|card[ _-]?(number|cvc|cvv)|cc[ _-]?(number|name|exp|csc|cvc|cvv)|\b(cvc|cvv)\b|social[ _-]?security|\bssn\b/.test(metadata)) return null;
   return accessible;
+};
+const eligible = element => {
+  if (!(element instanceof HTMLInputElement) || element.type !== 'text' || element.disabled || element.readOnly || !visible(element)) return null;
+  return safeLabel(element);
 };
 const eligibleButton = element => {
   const native = element instanceof HTMLButtonElement || element instanceof HTMLInputElement && ['button','submit','reset'].includes(element.type);
@@ -76,19 +80,33 @@ fn function(body: &str) -> String {
 }
 
 pub(super) fn capture() -> String {
-    function(
+    function(&format!(
+        "{}\n{}",
+        selects::HELPERS,
         r#"
 const snapshot = [];
 const buttons = [];
+const selects = [];
+let optionCount = 0;
 Object.defineProperty(snapshot, '__metldr_buttons', { value: buttons });
-const summary = { url: bounded(location.href, 2048)[0], title: bounded(document.title, 128)[0], text: '', text_truncated: false, fields_truncated: false, fields: [], buttons_truncated: false, buttons: [] };
+Object.defineProperty(snapshot, '__metldr_selects', { value: selects });
+const summary = { url: bounded(location.href, 2048)[0], title: bounded(document.title, 128)[0], text: '', text_truncated: false, fields_truncated: false, fields: [], buttons_truncated: false, buttons: [], selects_truncated: false, selects: [] };
 let bytes = 0, nodes = 0;
 const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
 while (walker.nextNode()) {
   nodes++;
-  if (nodes > 4096) { summary.text_truncated = true; summary.fields_truncated = true; summary.buttons_truncated = true; break; }
+  if (nodes > 4096) { summary.text_truncated = true; summary.fields_truncated = true; summary.buttons_truncated = true; summary.selects_truncated = true; break; }
   const node = walker.currentNode;
   if (node.nodeType === Node.ELEMENT_NODE) {
+    const select = captureSelect(node);
+    if (select) {
+      if (select.oversized || selects.length === 32 || optionCount + select.options.length > 64) summary.selects_truncated = true;
+      else {
+        const slot = selects.push(select) - 1;
+        optionCount += select.options.length;
+        summary.selects.push({ slot, label: select.label, selected: node.selectedIndex < 0 ? null : node.selectedIndex, options: select.options.map(option => ({ slot: option.index, label: option.label, enabled: option.enabled })) });
+      }
+    }
     const buttonLabel = eligibleButton(node);
     if (buttonLabel !== null) {
       if (buttons.length === 32) summary.buttons_truncated = true;
@@ -124,7 +142,7 @@ while (walker.nextNode()) {
 Object.defineProperty(snapshot, '__metldr_summary', { value: summary });
 return snapshot;
 "#,
-    )
+    ))
 }
 
 pub(super) fn read_summary() -> String {

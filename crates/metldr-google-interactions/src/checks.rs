@@ -186,6 +186,12 @@ async fn encodes_native_request_and_enforces_conversation_order() {
         request["tools"][0]["parameters"],
         json!({"type":"object","properties":{},"additionalProperties":false})
     );
+    assert_eq!(request["tools"].as_array().unwrap().len(), 5);
+    assert_eq!(request["tools"][4]["name"], "select_option");
+    assert_eq!(
+        request["tools"][4]["parameters"],
+        metldr_browser_tools::definitions()[4].input_schema
+    );
     assert!(request.get("previous_interaction_id").is_none());
     assert!(
         request["system_instruction"]

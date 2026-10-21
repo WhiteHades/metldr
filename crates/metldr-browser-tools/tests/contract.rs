@@ -1,4 +1,4 @@
-use metldr_browser_tools::{ACTIVATE_TOOL, Call, decode_call, definitions};
+use metldr_browser_tools::{ACTIVATE_TOOL, Call, SELECT_TOOL, decode_call, definitions};
 use serde_json::json;
 
 #[test]
@@ -12,6 +12,24 @@ fn decodes_the_shared_browser_calls_and_bounds_untrusted_arguments() {
         Call::ActivateButton {
             handle: "button_1-A".into()
         }
+    );
+    assert_eq!(
+        decode_call(
+            SELECT_TOOL,
+            json!({"handle":"select_1-A","option":"option_2-B"})
+        )
+        .unwrap(),
+        Call::SelectOption {
+            handle: "select_1-A".into(),
+            option: "option_2-B".into()
+        }
+    );
+    assert!(
+        decode_call(
+            SELECT_TOOL,
+            json!({"handle":"a".repeat(64),"option":"b".repeat(64)})
+        )
+        .is_ok()
     );
     assert_eq!(
         decode_call("navigate_page", json!({"url":"https://example.com/report"})).unwrap(),
@@ -46,6 +64,29 @@ fn decodes_the_shared_browser_calls_and_bounds_untrusted_arguments() {
         ),
         (ACTIVATE_TOOL, json!({"handle":"#submit"})),
         (ACTIVATE_TOOL, json!({"handle":"é"})),
+        (SELECT_TOOL, json!({})),
+        (SELECT_TOOL, json!({"handle":"select_1"})),
+        (SELECT_TOOL, json!({"option":"option_1"})),
+        (SELECT_TOOL, json!({"handle":"select_1","option":null})),
+        (SELECT_TOOL, json!({"handle":"#select","option":"option_1"})),
+        (
+            SELECT_TOOL,
+            json!({"handle":"select_1","option":"[value=x]"}),
+        ),
+        (SELECT_TOOL, json!({"handle":"é","option":"option_1"})),
+        (SELECT_TOOL, json!({"handle":"select_1","option":"é"})),
+        (
+            SELECT_TOOL,
+            json!({"handle":"a".repeat(65),"option":"option_1"}),
+        ),
+        (
+            SELECT_TOOL,
+            json!({"handle":"select_1","option":"a".repeat(65)}),
+        ),
+        (
+            SELECT_TOOL,
+            json!({"handle":"select_1","option":"option_1","approve":true}),
+        ),
         ("navigate_page", json!({})),
         ("navigate_page", json!({"url":""})),
         ("navigate_page", json!({"url":12})),
@@ -92,7 +133,8 @@ fn decodes_the_shared_browser_calls_and_bounds_untrusted_arguments() {
             "observe_page",
             "set_field_value",
             "navigate_page",
-            ACTIVATE_TOOL
+            ACTIVATE_TOOL,
+            SELECT_TOOL
         ]
     );
     assert_eq!(tools[3].input_schema["required"], json!(["handle"]));
@@ -102,6 +144,18 @@ fn decodes_the_shared_browser_calls_and_bounds_untrusted_arguments() {
             .unwrap()
             .len(),
         1
+    );
+    assert_eq!(
+        tools[4].input_schema,
+        json!({
+            "type":"object",
+            "properties":{
+                "handle":{"type":"string","minLength":1,"maxLength":64,"pattern":"^[A-Za-z0-9_-]+$"},
+                "option":{"type":"string","minLength":1,"maxLength":64,"pattern":"^[A-Za-z0-9_-]+$"}
+            },
+            "required":["handle","option"],
+            "additionalProperties":false
+        })
     );
     for tool in definitions() {
         assert_eq!(tool.input_schema["additionalProperties"], false);

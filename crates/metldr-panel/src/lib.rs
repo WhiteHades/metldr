@@ -1,4 +1,4 @@
-const WIRE_VERSION: u8 = 7;
+const WIRE_VERSION: u8 = 8;
 
 use std::{cell::RefCell, rc::Rc};
 

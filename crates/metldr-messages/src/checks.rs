@@ -198,11 +198,16 @@ fn constructs_native_request_and_enforces_conversation_order() {
     assert_eq!(q["max_tokens"], 2048);
     assert_eq!(q["system"], BROWSER_POLICY);
     assert_eq!(q.as_object().unwrap().len(), 6);
-    assert_eq!(q["tools"].as_array().unwrap().len(), 4);
+    assert_eq!(q["tools"].as_array().unwrap().len(), 5);
     assert!(!q.to_string().contains("dummy-key"));
     assert_eq!(
         q["tools"][0]["input_schema"],
         metldr_browser_tools::definitions()[0].input_schema
+    );
+    assert_eq!(q["tools"][4]["name"], "select_option");
+    assert_eq!(
+        q["tools"][4]["input_schema"],
+        metldr_browser_tools::definitions()[4].input_schema
     );
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()

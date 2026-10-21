@@ -5,8 +5,10 @@ use crate::{
 use serde::{Deserialize, Serialize};
 
 mod intent;
+mod selection;
 mod target;
 pub(super) use intent::{Intent, valid_destination};
+pub(crate) use selection::{Choice, Selection};
 pub(super) use target::Target;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -43,6 +45,9 @@ pub(super) enum Outcome {
         loader: String,
     },
     ButtonClickObserved,
+    SelectionObserved {
+        selected: Choice,
+    },
     Prevented {
         reason: String,
     },
@@ -353,6 +358,10 @@ pub(super) fn validate(state: &Store, valid_id: impl Fn(&str) -> bool) -> Result
                     Outcome::Verified { .. }
                     | Outcome::Navigated { .. }
                     | Outcome::Uncertain { .. } => action.revision == 4,
+                    Outcome::SelectionObserved { .. } => {
+                        action.revision == 4
+                            && matches!(&action.proposal.intent, Intent::SelectOption { .. })
+                    }
                     Outcome::ButtonClickObserved => {
                         action.revision == 4
                             && matches!(&action.proposal.intent, Intent::ActivateButton { .. })
@@ -389,6 +398,11 @@ fn validate_outcome(outcome: &Outcome, proposal: &Proposal) -> Result<()> {
             Ok(())
         }
         (Outcome::ButtonClickObserved, Intent::ActivateButton { .. }) => Ok(()),
+        (Outcome::SelectionObserved { selected }, Intent::SelectOption { selection })
+            if selected == &selection.selected =>
+        {
+            Ok(())
+        }
         (
             Outcome::Navigated {
                 binding,
@@ -434,4 +448,78 @@ pub(super) fn reject_button_actions(
         return Err("legacy browser store contains button action data".into());
     }
     Ok(())
+}
+
+pub(super) fn reject_selection_actions(
+    actions: &std::collections::BTreeMap<String, Action>,
+) -> Result<()> {
+    if actions.values().any(|action| {
+        matches!(&action.proposal.intent, Intent::SelectOption { .. })
+            || matches!(
+                &action.state,
+                Phase::Settled {
+                    outcome: Outcome::SelectionObserved { .. }
+                }
+            )
+    }) {
+        return Err("legacy browser store contains selection action data".into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod selection_checks {
+    use super::*;
+
+    #[test]
+    fn selection_receipt_must_match_the_approved_choice() {
+        let selected = Choice {
+            id: "option_2".into(),
+            label: "North".into(),
+            index: 1,
+        };
+        let proposal = Proposal {
+            run: "store:1".into(),
+            tool_use_id: "call-1".into(),
+            binding: Binding {
+                tab: 1,
+                document: "document".into(),
+                target: "target".into(),
+                frame: "frame".into(),
+                session: "session".into(),
+                unique_context: "context".into(),
+                grant_revision: 1,
+            },
+            url: "http://127.0.0.1:8000/article".into(),
+            intent: Intent::SelectOption {
+                selection: Selection {
+                    control_id: "select_1".into(),
+                    control_label: "Region".into(),
+                    previous: None,
+                    selected: selected.clone(),
+                },
+            },
+        };
+        assert!(
+            validate_outcome(
+                &Outcome::SelectionObserved {
+                    selected: selected.clone(),
+                },
+                &proposal,
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_outcome(
+                &Outcome::SelectionObserved {
+                    selected: Choice {
+                        id: "option_3".into(),
+                        ..selected
+                    },
+                },
+                &proposal,
+            )
+            .is_err()
+        );
+    }
 }

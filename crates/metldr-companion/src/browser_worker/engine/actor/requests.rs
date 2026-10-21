@@ -10,6 +10,12 @@ impl Actor {
         }
         self.busy = true;
         match kind {
+            Kind::PrepareSelection {
+                tool,
+                handle,
+                option,
+            } => self.prepare_selection(tool, handle, option, job),
+            Kind::SelectOption(action) => self.select_option(action, job),
             Kind::PrepareButton { tool, handle } => self.prepare_button(tool, handle, job),
             Kind::ActivateButton(action) => self.arm_button(action, job),
             Kind::Observe { generation } => {

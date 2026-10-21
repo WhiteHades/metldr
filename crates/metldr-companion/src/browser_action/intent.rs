@@ -1,4 +1,4 @@
-use super::{Binding, Proposal, bounded};
+use super::{Binding, Proposal, Selection, bounded};
 use crate::Result;
 use serde::{Deserialize, Serialize};
 
@@ -17,6 +17,9 @@ pub(crate) enum Intent {
     ActivateButton {
         button_id: String,
         button_label: String,
+    },
+    SelectOption {
+        selection: Selection,
     },
 }
 
@@ -92,6 +95,7 @@ impl Intent {
             {
                 Ok(())
             }
+            Self::SelectOption { selection } if selection.valid() => Ok(()),
             _ => Err("invalid browser action intent".into()),
         }
     }

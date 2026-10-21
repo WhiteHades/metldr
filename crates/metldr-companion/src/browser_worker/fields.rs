@@ -90,6 +90,15 @@ impl Tools {
                     .await?;
                 self.perform(proposal, stop, budget).await?
             }
+            Call::SelectOption { handle, option } => {
+                let proposal = self
+                    .engine
+                    .as_ref()
+                    .ok_or("browser is not attached")?
+                    .prepare_selection(call_id, handle, option)
+                    .await?;
+                self.perform(proposal, stop, budget).await?
+            }
         };
         self.completed
             .insert(call_id.to_owned(), (call, result.clone()));
@@ -172,6 +181,7 @@ impl Tools {
                 let outcome = match &dispatched.proposal.intent {
                     Intent::Field { .. } => engine.change(&dispatched).await,
                     Intent::ActivateButton { .. } => engine.activate_button(&dispatched).await,
+                    Intent::SelectOption { .. } => engine.select_option(&dispatched).await,
                     Intent::Navigate { .. } => {
                         return Err("navigation requires its own result owner".into());
                     }
@@ -238,6 +248,18 @@ fn validate_call(call_id: &str, call: &Call) -> Result<()> {
             Ok(())
         }
         Call::ActivateButton { .. } => Err("invalid browser button handle".into()),
+        Call::SelectOption { handle, option }
+            if [handle, option].into_iter().all(|id| {
+                !id.is_empty()
+                    && id.len() <= 64
+                    && id
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+            }) =>
+        {
+            Ok(())
+        }
+        Call::SelectOption { .. } => Err("invalid browser selection handle".into()),
     }
 }
 

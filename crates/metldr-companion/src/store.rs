@@ -104,15 +104,25 @@ impl Disk {
                 }
                 let header: SchemaHeader = serde_json::from_slice(&bytes)?;
                 match header.schema {
-                    Some(6) => {
+                    Some(7) => {
                         let state: Store = serde_json::from_slice(&bytes)?;
                         state.validate()?;
+                        state
+                    }
+                    Some(6) => {
+                        let mut state: Store = serde_json::from_slice(&bytes)?;
+                        crate::browser_action::reject_selection_actions(&state.browser_actions)?;
+                        state.schema = 7;
+                        state.validate()?;
+                        disk.backup_versioned(&bytes, 6)?;
+                        disk.save(&state)?;
                         state
                     }
                     Some(5) => {
                         let mut state: Store = serde_json::from_slice(&bytes)?;
                         crate::browser_action::reject_button_actions(&state.browser_actions)?;
-                        state.schema = 6;
+                        crate::browser_action::reject_selection_actions(&state.browser_actions)?;
+                        state.schema = 7;
                         state.validate()?;
                         disk.backup_versioned(&bytes, 5)?;
                         disk.save(&state)?;
@@ -121,10 +131,11 @@ impl Disk {
                     Some(4) => {
                         let mut state: Store = serde_json::from_slice(&bytes)?;
                         crate::browser_action::reject_button_actions(&state.browser_actions)?;
+                        crate::browser_action::reject_selection_actions(&state.browser_actions)?;
                         if state.view.runs.iter().any(|run| run.output.is_native()) {
                             return Err("schema 4 store contains native output".into());
                         }
-                        state.schema = 6;
+                        state.schema = 7;
                         state.validate()?;
                         disk.backup_versioned(&bytes, 4)?;
                         disk.save(&state)?;
@@ -137,8 +148,9 @@ impl Disk {
                         }
                         require_flat_outputs(&legacy.view)?;
                         crate::browser_action::reject_button_actions(&legacy.browser_actions)?;
+                        crate::browser_action::reject_selection_actions(&legacy.browser_actions)?;
                         let state = Store {
-                            schema: 6,
+                            schema: 7,
                             view: legacy.view,
                             next: legacy.next,
                             starts: legacy.starts,
@@ -162,8 +174,9 @@ impl Disk {
                         }
                         require_flat_outputs(&legacy.view)?;
                         crate::browser_action::reject_button_actions(&legacy.browser_actions)?;
+                        crate::browser_action::reject_selection_actions(&legacy.browser_actions)?;
                         let state = Store {
-                            schema: 6,
+                            schema: 7,
                             view: legacy.view,
                             next: legacy.next,
                             starts: legacy.starts,
@@ -187,7 +200,7 @@ impl Disk {
                         let legacy: LegacyStore = serde_json::from_slice(&bytes)?;
                         require_flat_outputs(&legacy.view)?;
                         let mut state = Store {
-                            schema: 6,
+                            schema: 7,
                             view: legacy.view,
                             next: legacy.next,
                             starts: legacy.starts,
@@ -217,7 +230,7 @@ impl Disk {
                     rng.hash_one((now, std::process::id(), 1))
                 );
                 Store {
-                    schema: 6,
+                    schema: 7,
                     view: View {
                         sequence: 0,
                         store: identity,
@@ -343,7 +356,7 @@ mod checks {
         fs::write(disk.directory.join("snapshot.json"), &bytes).unwrap();
         drop(disk);
         let (disk, migrated) = Disk::open(root.join("legacy")).unwrap();
-        assert_eq!(migrated.schema, 6);
+        assert_eq!(migrated.schema, 7);
         assert_eq!(
             serde_json::to_value(&migrated.view).unwrap(),
             legacy["view"]
@@ -397,7 +410,7 @@ mod checks {
         fs::write(disk.directory.join("snapshot.json"), &bytes).unwrap();
         drop(disk);
         let (disk, migrated) = Disk::open(root.join("state")).unwrap();
-        assert_eq!(migrated.schema, 6);
+        assert_eq!(migrated.schema, 7);
         assert_eq!(
             migrated.agent_settings,
             crate::agent_settings::Settings::default()
@@ -472,7 +485,7 @@ mod checks {
         fs::write(disk.directory.join("snapshot.json"), &bytes).unwrap();
         drop(disk);
         let (disk, migrated) = Disk::open(root.join("state")).unwrap();
-        assert_eq!(migrated.schema, 6);
+        assert_eq!(migrated.schema, 7);
         assert_eq!(
             fs::read(disk.directory.join("snapshot.v5.json")).unwrap(),
             bytes
@@ -504,7 +517,93 @@ mod checks {
     }
 
     #[test]
-    fn schema4_migration_keeps_exact_backup_and_reopens_as_schema6() {
+    fn schema6_migration_backs_up_exact_bytes_and_older_schemas_reject_selection_data() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(".tmp")
+            .join(format!(
+                "schema6-selection-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+        fs::create_dir_all(&root).unwrap();
+
+        let current = root.join("valid-schema6");
+        let (disk, mut state) = Disk::open(current.clone()).unwrap();
+        state.schema = 6;
+        disk.save(&state).unwrap();
+        let bytes = fs::read(disk.directory.join("snapshot.json")).unwrap();
+        drop(disk);
+        let (disk, migrated) = Disk::open(current).unwrap();
+        assert_eq!(migrated.schema, 7);
+        assert_eq!(
+            fs::read(disk.directory.join("snapshot.v6.json")).unwrap(),
+            bytes
+        );
+        drop(disk);
+
+        for version in 2..=6 {
+            for (label, second_action) in [
+                (
+                    "intent",
+                    serde_json::json!({
+                        "id":format!("0123456789abcdef0123456789abcdef:4"),
+                        "revision":1,
+                        "proposal":{"run":"0123456789abcdef0123456789abcdef:2","tool_use_id":"select-call",
+                            "binding":{"tab":1,"document":"doc","target":"target","frame":"frame",
+                                "session":"session","unique_context":"context","grant_revision":1},
+                            "url":"http://127.0.0.1:8000/article","intent":{"kind":"select_option","selection":{
+                                "control_id":"select_1","control_label":"Region","previous":null,
+                                "selected":{"id":"option_2","label":"North","index":1}}}},
+                        "state":{"phase":"pending"}
+                    }),
+                ),
+                (
+                    "outcome",
+                    serde_json::json!({
+                        "id":"0123456789abcdef0123456789abcdef:5", "revision":4,
+                        "proposal":{"run":"0123456789abcdef0123456789abcdef:2","tool_use_id":"field-call",
+                            "binding":{"tab":1,"document":"doc","target":"target","frame":"frame",
+                                "session":"session","unique_context":"context","grant_revision":1},
+                            "url":"http://127.0.0.1:8000/article","intent":{"kind":"field","field_id":"field_1",
+                                "field_label":"Name","previous_value":"old","value":"new"}},
+                        "state":{"phase":"settled","outcome":{"kind":"selection_observed",
+                            "selected":{"id":"option_2","label":"North","index":1}}}
+                    }),
+                ),
+            ] {
+                let directory = root.join(format!("v{version}-{label}"));
+                fs::create_dir_all(&directory).unwrap();
+                let (_, state) = Disk::open(directory.clone()).unwrap();
+                let mut invalid = serde_json::to_value(state).unwrap();
+                invalid["schema"] = serde_json::json!(version);
+                invalid["browser_actions"] = serde_json::json!({
+                    (second_action["id"].as_str().unwrap()): second_action
+                });
+                if version == 2 {
+                    invalid.as_object_mut().unwrap().remove("providers");
+                    invalid.as_object_mut().unwrap().remove("agent_settings");
+                } else if version == 3 {
+                    invalid.as_object_mut().unwrap().remove("agent_settings");
+                }
+                let bytes = serde_json::to_vec(&invalid).unwrap();
+                fs::write(directory.join("snapshot.json"), &bytes).unwrap();
+                let error = Disk::open(directory.clone()).err().unwrap().to_string();
+                assert_eq!(
+                    error, "legacy browser store contains selection action data",
+                    "schema {version} {label}"
+                );
+                assert_eq!(fs::read(directory.join("snapshot.json")).unwrap(), bytes);
+                assert!(!directory.join(format!("snapshot.v{version}.json")).exists());
+            }
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn schema4_migration_keeps_exact_backup_and_reopens_as_schema7() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join(".tmp")
             .join(format!(
@@ -536,7 +635,7 @@ mod checks {
         drop(disk);
 
         let (disk, migrated) = Disk::open(root.join("state")).unwrap();
-        assert_eq!(migrated.schema, 6);
+        assert_eq!(migrated.schema, 7);
         assert_eq!(migrated.view.runs[0].output.text(), "héllo, 🌱");
         assert_eq!(
             fs::read(disk.directory.join("snapshot.v4.json")).unwrap(),
@@ -544,7 +643,7 @@ mod checks {
         );
         drop(disk);
         let (_, reopened) = Disk::open(root.join("state")).unwrap();
-        assert_eq!(reopened.schema, 6);
+        assert_eq!(reopened.schema, 7);
         assert_eq!(reopened.view.runs[0].output.text(), "héllo, 🌱");
 
         let invalid_directory = root.join("native-v4");
