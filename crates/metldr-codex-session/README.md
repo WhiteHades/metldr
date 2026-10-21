@@ -47,6 +47,8 @@ async fn main() -> metldr_codex_session::Result<()> {
 
 Save the thread identity from `info()` in the native task owner before dispatching a prompt. Reopen it with `Thread::Resume` and `ThreadId::saved`. Native identities and configuration should stay outside page contexts.
 
+Resume requests metadata without returning prior turns. Codex restores the saved context for subsequent turns.
+
 Each completed `Event::Message` carries its item ID and full text. Use it to reconcile streamed deltas for that item. An interrupt reply reports acknowledgement or rejection; `Event::Finished` determines the final turn outcome.
 
 Cancelling an event wait preserves its partial frame. Cancelling an RPC or pipe write kills the process and makes the connection unusable. Frames, queued events, tool requests and RPC deadlines are bounded. Tool replies belong to their originating connection and turn.

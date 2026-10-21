@@ -128,7 +128,10 @@ impl CodexSession {
                     json!({"cwd":workspace,"dynamicTools":definitions}),
                 )
             }
-            Thread::Resume(id) => ("thread/resume", json!({"threadId":id.0,"cwd":workspace})),
+            Thread::Resume(id) => (
+                "thread/resume",
+                json!({"threadId":id.0,"cwd":workspace,"excludeTurns":true}),
+            ),
         };
         let response = rpc.call(method, params).await?;
         let info = ThreadInfo {
