@@ -167,6 +167,7 @@ pub(crate) struct PageView {
     pub(crate) opencode_sessions: Vec<AgentSessionView>,
     pub(crate) native_permissions: Vec<NativePermissionView>,
     pub(crate) pi_ui: Option<PiUiView>,
+    pub(crate) codex_input: Option<CodexInputView>,
     pub(crate) browser_actions: Vec<BrowserActionView>,
     pub(crate) browser_route: Option<BrowserRouteView>,
     pub(crate) chat_route: Option<ChatRouteView>,
@@ -718,6 +719,149 @@ pub(crate) struct PiUiNotice {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CodexInputView {
+    pub(crate) run: RunId,
+    pub(crate) pending: Vec<CodexInputPending>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CodexInputPending {
+    pub(crate) request: RunId,
+    pub(crate) prompt: CodexInputPrompt,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum CodexInputPrompt {
+    Questions {
+        item: String,
+        is_blocking: bool,
+        questions: Vec<CodexQuestion>,
+    },
+    McpForm {
+        server: String,
+        message: String,
+        fields: Vec<CodexFormField>,
+    },
+    McpToolApproval {
+        server: String,
+        message: String,
+        review: String,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CodexQuestion {
+    pub(crate) id: String,
+    pub(crate) header: String,
+    pub(crate) text: String,
+    pub(crate) other: bool,
+    pub(crate) options: Vec<CodexQuestionOption>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CodexQuestionOption {
+    pub(crate) label: String,
+    pub(crate) description: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CodexFormField {
+    pub(crate) name: String,
+    pub(crate) title: String,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub(crate) description: Option<String>,
+    pub(crate) min_chars: u32,
+    pub(crate) max_chars: u32,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub(crate) choices: Option<Vec<String>>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub(crate) default: Option<String>,
+}
+
+fn valid_codex_prompt(prompt: &CodexInputPrompt) -> bool {
+    fn bounded(value: &str, max: usize) -> bool {
+        value.len() <= max
+    }
+    fn label(value: &str, max: usize) -> bool {
+        bounded(value, max) && !value.is_empty() && !value.chars().any(char::is_control)
+    }
+    fn id(value: &str, max: usize) -> bool {
+        label(value, max)
+    }
+    match prompt {
+        CodexInputPrompt::Questions {
+            item, questions, ..
+        } => {
+            let mut ids = std::collections::BTreeSet::new();
+            id(item, 256)
+                && (1..=4).contains(&questions.len())
+                && questions.iter().all(|q| {
+                    id(&q.id, 128)
+                        && ids.insert(&q.id)
+                        && bounded(&q.header, 256)
+                        && bounded(&q.text, 4096)
+                        && (1..=16).contains(&q.options.len())
+                        && {
+                            let mut options = std::collections::BTreeSet::new();
+                            q.options.iter().all(|o| {
+                                label(&o.label, 1024)
+                                    && options.insert(&o.label)
+                                    && bounded(&o.description, 2048)
+                            })
+                        }
+                })
+        }
+        CodexInputPrompt::McpForm {
+            server,
+            message,
+            fields,
+        } => {
+            let mut names = std::collections::BTreeSet::new();
+            label(server, 256)
+                && bounded(message, 4096)
+                && fields.len() <= 8
+                && fields.iter().all(|f| {
+                    label(&f.name, 128)
+                        && names.insert(&f.name)
+                        && bounded(&f.title, 256)
+                        && f.description.as_ref().is_none_or(|s| bounded(s, 2048))
+                        && f.min_chars <= f.max_chars
+                        && f.max_chars <= 4096
+                        && f.choices.as_ref().is_none_or(|choices| {
+                            (1..=16).contains(&choices.len()) && {
+                                let mut values = std::collections::BTreeSet::new();
+                                choices.iter().all(|s| bounded(s, 1024) && values.insert(s))
+                            }
+                        })
+                        && f.default.as_ref().is_none_or(|s| {
+                            bounded(s, 4096)
+                                && s.chars().count() >= f.min_chars as usize
+                                && s.chars().count() <= f.max_chars as usize
+                                && f.choices.as_ref().is_none_or(|choices| choices.contains(s))
+                        })
+                })
+        }
+        CodexInputPrompt::McpToolApproval {
+            server,
+            message,
+            review,
+        } => {
+            label(server, 256)
+                && bounded(message, 4096)
+                && bounded(review, 16384)
+                && serde_json::from_str::<serde_json::Value>(review)
+                    .is_ok_and(|value| value.is_object())
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum BrowserRouteView {
     Messages {
@@ -881,6 +1025,8 @@ struct WireView {
     native_permissions: Vec<NativePermissionView>,
     #[serde(default, deserialize_with = "Option::deserialize")]
     pi_ui: Option<PiUiView>,
+    #[serde(default, deserialize_with = "Option::deserialize")]
+    codex_input: Option<CodexInputView>,
     #[serde(default)]
     browser_actions: Vec<BrowserActionView>,
     #[serde(default, deserialize_with = "Option::deserialize")]
@@ -1008,6 +1154,13 @@ impl PageView {
                 "Pi UI projection exceeds 32768 bytes".into(),
             ));
         }
+        if value.get("codex_input").is_some_and(|input| {
+            serde_json::to_vec(input).map_or(true, |encoded| encoded.len() > 32_768)
+        }) {
+            return Err(FlowError::Protocol(
+                "Codex input projection exceeds 32768 bytes".into(),
+            ));
+        }
         let wire: WireView = serde_json::from_value(value)
             .map_err(|error| FlowError::Protocol(error.to_string()))?;
         if wire.store.len() != 32
@@ -1023,6 +1176,10 @@ impl PageView {
                     || ui.widgets.len() > 8
                     || ui.notices.len() > 32
             })
+            || wire
+                .codex_input
+                .as_ref()
+                .is_some_and(|ui| ui.pending.len() > 8)
             || wire.browser_actions.len() > MAX_BROWSER_ACTIONS
         {
             return Err(FlowError::Protocol(
@@ -1255,6 +1412,29 @@ impl PageView {
                 || ui.notices.iter().any(|notice| notice.level.is_empty())
             {
                 return Err(FlowError::Protocol("invalid Pi UI projection".into()));
+            }
+        }
+        if let Some(ui) = &wire.codex_input {
+            let mut requests = std::collections::BTreeSet::new();
+            if !valid_id(ui.run.as_str())
+                || !runs
+                    .iter()
+                    .any(|run| run.id == ui.run && matches!(&run.route, RunRoute::Codex { .. }))
+                || runs
+                    .iter()
+                    .any(|run| run.id == ui.run && run.status.is_terminal())
+                    && !ui.pending.is_empty()
+                || ui.pending.iter().any(|pending| {
+                    !valid_id(pending.request.as_str())
+                        || !requests.insert(pending.request.as_str())
+                        || !valid_codex_prompt(&pending.prompt)
+                })
+                || wire
+                    .native_permissions
+                    .iter()
+                    .any(|permission| requests.contains(permission.request.as_str()))
+            {
+                return Err(FlowError::Protocol("invalid Codex input projection".into()));
             }
         }
         let mut permission_ids = std::collections::BTreeSet::new();
@@ -1526,6 +1706,7 @@ impl PageView {
             opencode_sessions: wire.opencode_sessions,
             native_permissions: wire.native_permissions,
             pi_ui: wire.pi_ui,
+            codex_input: wire.codex_input,
             browser_actions: wire.browser_actions,
             browser_route: wire.browser_route,
             chat_route: wire.chat_route,
@@ -1750,6 +1931,36 @@ mod tests {
         frame["pi_ui"]["pending"] = serde_json::json!([]);
         frame["runs"][0]["status"] = serde_json::json!("complete");
         assert!(PageView::decode(&serde_json::to_vec(&frame).unwrap()).is_ok());
+    }
+
+    #[test]
+    fn decodes_bounded_codex_input_and_rejects_foreign_or_malformed_requests() {
+        let mut frame: serde_json::Value = serde_json::from_str(VALID).unwrap();
+        let run = format!("{STORE}:2");
+        frame["runs"][0]["kind"] = serde_json::json!("agent");
+        frame["runs"][0]["status"] = serde_json::json!("running");
+        frame["runs"][0]["route"] =
+            serde_json::json!({"kind":"codex","workflow":run.clone(),"provider":null,"model":null});
+        frame["codex_input"] = serde_json::json!({"run":run.clone(),"pending":[{"request":format!("{STORE}:3"),"prompt":{"kind":"questions","item":"setup","is_blocking":true,"questions":[{"id":"choice","header":"","text":"Pick one\nexactly","other":false,"options":[{"label":" A ","description":"Exact\nvalue"}]}]}}]});
+        let decoded = PageView::decode(&serde_json::to_vec(&frame).unwrap()).unwrap();
+        let CodexInputPrompt::Questions { questions, .. } =
+            &decoded.codex_input.as_ref().unwrap().pending[0].prompt
+        else {
+            panic!("questions prompt expected")
+        };
+        assert_eq!(questions[0].options[0].label, " A ");
+        assert_eq!(questions[0].header, "");
+        assert_eq!(questions[0].text, "Pick one\nexactly");
+        assert_eq!(questions[0].options[0].description, "Exact\nvalue");
+
+        frame["codex_input"]["run"] = serde_json::json!(format!("{STORE}:99"));
+        assert!(PageView::decode(&serde_json::to_vec(&frame).unwrap()).is_err());
+        frame["codex_input"]["run"] = serde_json::json!(run);
+        frame["codex_input"]["pending"][0]["prompt"]["unexpected"] = serde_json::json!(true);
+        assert!(PageView::decode(&serde_json::to_vec(&frame).unwrap()).is_err());
+        frame["codex_input"] =
+            serde_json::json!({"run":run.clone(),"pending":[],"padding":"x".repeat(32_769)});
+        assert!(PageView::decode(&serde_json::to_vec(&frame).unwrap()).is_err());
     }
 
     #[test]

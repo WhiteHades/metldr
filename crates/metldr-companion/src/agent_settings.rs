@@ -455,6 +455,7 @@ mod checks {
             opencode_profile: None,
             native_permissions: Default::default(),
             pi_ui: None,
+            codex_input: None,
             browser_approval: None,
             browser_io: None,
             browser_route: None,

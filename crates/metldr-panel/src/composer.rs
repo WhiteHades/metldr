@@ -83,6 +83,22 @@ enum Destination {
     ContinueOpenCode { workflow: RunId, revision: u64 },
 }
 
+fn codex_mode(panel: &Rc<RefCell<Panel>>) -> &'static str {
+    panel
+        .borrow()
+        .document
+        .get_element_by_id("codex-mode")
+        .and_then(|node| node.dyn_into::<HtmlSelectElement>().ok())
+        .map(|select| {
+            if select.value() == "plan" {
+                "plan"
+            } else {
+                "configured"
+            }
+        })
+        .unwrap_or("configured")
+}
+
 fn ready(view: &PageView, session: &AgentSessionView) -> bool {
     session.ready
         && view
@@ -269,6 +285,7 @@ fn submit(panel: &Rc<RefCell<Panel>>) -> Result<(), FlowError> {
         .clone();
     let flow = state.flow.clone();
     let generation = state.connection_generation;
+    let codex_mode = codex_mode(panel);
     drop(state);
     begin_start(panel);
     let panel = Rc::clone(panel);
@@ -286,13 +303,14 @@ fn submit(panel: &Rc<RefCell<Panel>>) -> Result<(), FlowError> {
                 flow.google_task(source, text, fingerprint).await
             }
             Destination::Pi => flow.pi_prompt(source, text).await,
-            Destination::Codex => flow.codex_prompt(source, text).await,
+            Destination::Codex => flow.codex_prompt(source, text, codex_mode).await,
             Destination::OpenCode => flow.opencode_prompt(source, text).await,
             Destination::Continue { workflow, revision } => {
                 flow.pi_follow_up(workflow, revision, text).await
             }
             Destination::ContinueCodex { workflow, revision } => {
-                flow.codex_follow_up(workflow, revision, text).await
+                flow.codex_follow_up(workflow, revision, text, codex_mode)
+                    .await
             }
             Destination::ContinueOpenCode { workflow, revision } => {
                 flow.opencode_follow_up(workflow, revision, text).await
@@ -499,6 +517,13 @@ pub(super) fn render(panel: &Panel) -> Result<(), JsValue> {
         option.set_disabled(view.is_none_or(|view| view.google_route.is_none()));
     }
     select.set_value(&value);
+    if let Some(mode) = panel.document.get_element_by_id("codex-mode-wrap") {
+        if value == "codex" || value.starts_with("codex:") {
+            mode.remove_attribute("hidden")?;
+        } else {
+            mode.set_attribute("hidden", "")?;
+        }
+    }
     let destination = selected(panel);
     if destination.is_ok() || value.is_empty() {
         crate::composer_ui::remember_choice(panel, &value);

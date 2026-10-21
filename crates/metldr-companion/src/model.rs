@@ -109,6 +109,12 @@ pub(super) enum Command {
         answer: crate::agent::ui::Answer,
     },
     #[serde(skip_serializing)]
+    CodexInputReply {
+        run: String,
+        request: String,
+        answer: crate::codex_input::Answer,
+    },
+    #[serde(skip_serializing)]
     ProviderSave {
         protocol: crate::provider_settings::Protocol,
         expected_revision: u64,
@@ -199,11 +205,13 @@ pub(super) enum Command {
     CodexPrompt {
         source: String,
         text: String,
+        mode: crate::codex_input::TurnMode,
     },
     CodexFollowUp {
         workflow: String,
         revision: u64,
         text: String,
+        mode: crate::codex_input::TurnMode,
     },
     #[serde(rename = "opencode_prompt")]
     OpenCodePrompt {

@@ -331,6 +331,7 @@ impl Owner {
         }
         self.cancel_browser_approval(run);
         self.clear_pi_ui(run);
+        self.clear_codex_input(run);
         let permissions = self.take_native_permissions(run);
         let record = next
             .view

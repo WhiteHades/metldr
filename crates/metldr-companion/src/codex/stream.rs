@@ -32,34 +32,72 @@ pub(super) async fn run(
     }
     let prompt = agent::message(&job.text, &job.source)?;
     session
-        .prompt(&format!("{prompt}\n\n{BROWSER_POLICY}"))
+        .prompt(&format!("{prompt}\n\n{BROWSER_POLICY}"), job.mode.native())
         .await?;
     let mut stop_wait = agent::StopWait::default();
     let mut interrupted = None;
     let mut review = super::approval::Review::default();
     let mut events = Events::default();
+    let mut inputs = super::input::Inputs::default();
+    let mut terminal = None;
+    let mut drain_until = Instant::now();
     loop {
-        let stopping = stop.load(Ordering::Acquire) || review.cancelled;
-        stop_wait.check(stopping, Instant::now())?;
-        if stopping {
-            review.poll(session, true).await?;
+        if terminal.is_some() && (inputs.is_empty() || Instant::now() >= drain_until) {
+            return outcome(terminal.take().unwrap(), &interrupted, review.cancelled);
         }
-        if interrupted.is_none() && stopping && !review.cancelled {
+        let stopping = stop.load(Ordering::Acquire) || review.cancelled;
+        if terminal.is_none() {
+            stop_wait.check(stopping, Instant::now())?;
+        }
+        if terminal.is_none() && stopping {
+            review.poll(session, true).await?;
+            inputs.poll(session, job, tx, true, stop).await?;
+        }
+        if terminal.is_none() && interrupted.is_none() && stopping && !review.cancelled {
             interrupted = Some(session.interrupt().await?);
         }
         if events.queued == 256 {
-            if review.has_answer()? {
+            if review.has_answer()? || inputs.has_answer(stop)? {
                 return Err("Codex event backlog prevented a safe approval reply".into());
             }
             events.queued = 1;
             tokio::task::yield_now().await;
         }
-        let Some(event) = events.next(session.next_event()).await? else {
+        let next = if terminal.is_some() {
+            match tokio::time::timeout(
+                drain_until.saturating_duration_since(Instant::now()),
+                events.next(session.next_event()),
+            )
+            .await
+            {
+                Ok(next) => next,
+                Err(_) => return outcome(terminal.take().unwrap(), &interrupted, review.cancelled),
+            }
+        } else {
+            events.next(session.next_event()).await
+        };
+        let event = match next {
+            Ok(event) => event,
+            Err(_) if terminal.is_some() => {
+                return outcome(terminal.take().unwrap(), &interrupted, review.cancelled);
+            }
+            Err(error) => return Err(error),
+        };
+        let Some(event) = event else {
             // Drain ready revocations and patch updates before applying a human choice.
-            review.poll(session, stop.load(Ordering::Acquire)).await?;
+            if terminal.is_none() {
+                review.poll(session, stop.load(Ordering::Acquire)).await?;
+                inputs
+                    .poll(session, job, tx, review.cancelled, stop)
+                    .await?;
+            }
             continue;
         };
         match event {
+            NativeEvent::Input(input) => {
+                inputs.request(input, job, tx, stopping || terminal.is_some())?
+            }
+            NativeEvent::InputResolved(id) => inputs.resolved(&id, job, tx)?,
             NativeEvent::Approval(request) => {
                 if !review.cancelled {
                     review.request(request, session, job, tx, stopping).await?
@@ -171,20 +209,26 @@ pub(super) async fn run(
             }
             NativeEvent::Finished { status, .. } => {
                 review.finish(job, tx, status == TurnStatus::Completed)?;
-                return match status {
-                    TurnStatus::Completed => Ok(Outcome::Complete),
-                    TurnStatus::Interrupted
-                        if interrupted == Some(Interrupt::Acknowledged) || review.cancelled =>
-                    {
-                        Ok(Outcome::Cancelled)
-                    }
-                    TurnStatus::Interrupted => {
-                        Err("Codex interrupted without acknowledged Stop".into())
-                    }
-                    TurnStatus::Failed => Err("Codex reported a failed turn".into()),
-                };
+                inputs.withdraw(job, tx)?;
+                terminal = Some(status);
+                drain_until = Instant::now() + Duration::from_secs(3);
             }
         }
+    }
+}
+
+fn outcome(
+    status: TurnStatus,
+    interrupted: &Option<Interrupt>,
+    cancelled: bool,
+) -> Result<Outcome> {
+    match status {
+        TurnStatus::Completed => Ok(Outcome::Complete),
+        TurnStatus::Interrupted if interrupted == &Some(Interrupt::Acknowledged) || cancelled => {
+            Ok(Outcome::Cancelled)
+        }
+        TurnStatus::Interrupted => Err("Codex interrupted without acknowledged Stop".into()),
+        TurnStatus::Failed => Err("Codex reported a failed turn".into()),
     }
 }
 

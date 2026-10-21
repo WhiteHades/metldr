@@ -12,6 +12,35 @@ mod tests {
     };
 
     #[test]
+    fn codex_input_answers_are_closed_and_prompt_validated() {
+        let prompt = metldr_codex_session::InputPrompt::McpForm {
+            server: "fixture".into(),
+            message: "Choose a value".into(),
+            fields: vec![metldr_codex_session::FormField {
+                name: "choice".into(),
+                title: "Choice".into(),
+                description: None,
+                min_chars: 0,
+                max_chars: 8,
+                choices: Some(vec!["one".into(), "two".into()]),
+                default: None,
+            }],
+        };
+        let answer: crate::codex_input::Answer =
+            serde_json::from_value(json!({"kind":"accept","value":{"choice":"one"}})).unwrap();
+        assert!(prompt.accepts(&answer.native()));
+        let invalid: crate::codex_input::Answer =
+            serde_json::from_value(json!({"kind":"accept","value":{"choice":"three"}})).unwrap();
+        assert!(!prompt.accepts(&invalid.native()));
+        assert!(
+            serde_json::from_value::<crate::codex_input::Answer>(json!({
+                "kind":"accept","value":{"choice":"one"},"extra":true
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
     fn queued_output_can_finish_stopping_but_cannot_change_cancelled_run() {
         let output = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join(".tmp")
@@ -94,6 +123,7 @@ mod tests {
             opencode_profile: None,
             native_permissions: BTreeMap::new(),
             pi_ui: None,
+            codex_input: None,
             browser_approval: None,
             browser_io: None,
             browser_route: None,
@@ -191,6 +221,7 @@ mod tests {
             opencode_profile: None,
             native_permissions: BTreeMap::new(),
             pi_ui: None,
+            codex_input: None,
             browser_approval: None,
             browser_io: None,
             browser_route: None,
@@ -362,6 +393,7 @@ mod tests {
             opencode_profile: None,
             native_permissions: BTreeMap::new(),
             pi_ui: None,
+            codex_input: None,
             browser_approval: None,
             browser_io: None,
             browser_route: None,
@@ -384,10 +416,15 @@ mod tests {
         let snapshot = fs::read_to_string(owner.disk.directory.join("snapshot.json")).unwrap();
         let saved: serde_json::Value = serde_json::from_str(&snapshot).unwrap();
         assert_eq!(saved["next"], nonce + 1);
-        assert!(
-            String::from_utf8(frames.lock().unwrap().clone())
-                .unwrap()
-                .contains(&request)
+        let output_frames = frames.lock().unwrap().clone();
+        let mut reader = output_frames.as_slice();
+        let mut replies = Vec::new();
+        while let Some(frame) = crate::wire::read_raw(&mut reader, FRAME_MAX).unwrap() {
+            replies.push(serde_json::from_slice::<serde_json::Value>(&frame).unwrap());
+        }
+        assert_eq!(
+            replies.last().unwrap()["view"]["pi_ui"]["pending"][0]["request"],
+            request
         );
         assert!(
             owner
@@ -528,7 +565,7 @@ mod tests {
                 .err()
                 .unwrap()
                 .to_string(),
-            "unsupported native wire version 4; expected 6"
+            "unsupported native wire version 4; expected 7"
         );
         let mut framed = (bytes.len() as u32).to_ne_bytes().to_vec();
         framed.extend_from_slice(&bytes);

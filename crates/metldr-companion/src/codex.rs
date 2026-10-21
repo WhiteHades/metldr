@@ -15,6 +15,7 @@ use std::sync::{
 };
 
 mod approval;
+mod input;
 mod review;
 mod stream;
 
@@ -26,6 +27,7 @@ pub(super) struct Job {
     pub source: Source,
     pub target: crate::browser_action::Target,
     pub text: String,
+    pub mode: crate::codex_input::TurnMode,
 }
 
 pub(super) fn execute(

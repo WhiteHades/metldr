@@ -2,11 +2,13 @@
 
 mod approval;
 mod event;
+mod input;
 mod report;
 mod rpc;
 
 pub use approval::{Approval, ApprovalChoice, ApprovalId, ApprovalKind};
 pub use event::{Event, ToolCall, TurnStatus};
+pub use input::{FormField, Input, InputAnswer, InputId, InputPrompt, Question, QuestionOption};
 pub use report::{Preview, ToolOutcome, ToolReport, ToolState};
 pub use rpc::ProcessExit;
 use serde_json::{Value, json};
@@ -81,6 +83,12 @@ pub enum Interrupt {
     Rejected { code: i64 },
 }
 
+#[derive(Clone, Copy)]
+pub enum TurnMode {
+    Configured,
+    Plan,
+}
+
 pub struct CodexSession {
     rpc: rpc::Rpc,
     info: ThreadInfo,
@@ -89,6 +97,7 @@ pub struct CodexSession {
     pending_tools: Vec<Value>,
     reports: report::Reports,
     approvals: approval::Approvals,
+    inputs: input::Inputs,
     failed: bool,
 }
 
@@ -155,6 +164,7 @@ impl CodexSession {
             pending_tools: Vec::new(),
             reports: report::Reports::default(),
             approvals: approval::Approvals::default(),
+            inputs: input::Inputs::default(),
             failed: false,
         })
     }
@@ -163,17 +173,23 @@ impl CodexSession {
         &self.info
     }
 
-    pub async fn prompt(&mut self, text: &str) -> Result<TurnId> {
-        if self.failed || self.turn.is_some() || text.is_empty() || text.len() > 32 * 1024 {
+    pub async fn prompt(&mut self, text: &str, mode: TurnMode) -> Result<TurnId> {
+        if self.failed
+            || self.turn.is_some()
+            || self.inputs.turn_pending()
+            || text.is_empty()
+            || text.len() > 32 * 1024
+        {
             return Err(invalid("Codex prompt is invalid or session is busy"));
         }
-        let response = self
-            .rpc
-            .call(
-                "turn/start",
-                json!({"threadId":self.info.id.0,"input":[{"type":"text","text":text}]}),
-            )
-            .await?;
+        let mut params = json!({"threadId":self.info.id.0,"input":[{"type":"text","text":text}]});
+        if let TurnMode::Plan = mode {
+            if self.info.model.trim().is_empty() {
+                return Err(invalid("Codex did not identify its model for Plan mode"));
+            }
+            params["collaborationMode"] = json!({"mode":"plan","settings":{"model":self.info.model,"developer_instructions":null}});
+        }
+        let response = self.rpc.call("turn/start", params).await?;
         let turn = TurnId(field(&response["turn"], "id")?);
         self.turn = Some(turn.clone());
         self.reports.clear();
@@ -181,11 +197,20 @@ impl CodexSession {
     }
 
     pub async fn next_event(&mut self) -> Result<Event> {
-        if self.failed || self.turn.is_none() {
-            return Err(invalid("No active Codex turn"));
+        if self.failed {
+            return Err(invalid("Codex session has failed"));
         }
         loop {
-            let value = self.rpc.next().await?;
+            let value = match self.rpc.next().await {
+                Ok(value) => value,
+                Err(error) => {
+                    self.failed = true;
+                    if self.turn.is_some() || !rpc::clean_eof(error.as_ref()) {
+                        self.rpc.abort();
+                    }
+                    return Err(error);
+                }
+            };
             match self.event(value).await {
                 Ok(Some(event)) => return Ok(event),
                 Ok(None) => (),

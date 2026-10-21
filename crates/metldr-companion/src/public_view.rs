@@ -12,6 +12,7 @@ pub(super) fn render(
     opencode_profile: Option<&crate::opencode_model::Profile>,
     native_permissions: &std::collections::BTreeMap<String, crate::flow::PendingPermission>,
     pi_ui: Option<&crate::pi_ui::State>,
+    codex_input: Option<&crate::codex_input::State>,
     browser_route: Option<&crate::https_profile::Profile>,
     responses_route: Option<&crate::https_profile::Profile>,
     google_route: Option<&crate::https_profile::Profile>,
@@ -22,6 +23,11 @@ pub(super) fn render(
     view["pi_ui"] = pi_ui
         .filter(|ui| state.view.runs.iter().any(|r| r.id == ui.run))
         .map(crate::pi_ui::State::public)
+        .transpose()?
+        .unwrap_or(Value::Null);
+    view["codex_input"] = codex_input
+        .filter(|input| state.view.runs.iter().any(|r| r.id == input.run))
+        .map(crate::codex_input::State::public)
         .transpose()?
         .unwrap_or(Value::Null);
     view["fixture_available"] = json!(fixture_available);

@@ -1,4 +1,4 @@
-const WIRE_VERSION: u8 = 6;
+const WIRE_VERSION: u8 = 7;
 
 use std::{cell::RefCell, rc::Rc};
 
@@ -11,6 +11,7 @@ use web_sys::{Document, Element, Event};
 mod agent_settings;
 mod appearance;
 mod browser_background;
+mod codex_input;
 mod composer;
 mod composer_ui;
 mod flow;
@@ -56,6 +57,8 @@ struct Panel {
     native_permission_pending: Option<(RunId, RunId)>,
     pi_ui_pending: Option<(RunId, RunId)>,
     pi_ui_stopping: Option<RunId>,
+    codex_input_pending: Option<(RunId, RunId)>,
+    codex_input_stopping: Option<RunId>,
     stale_generation: u64,
     connection_generation: u64,
 }
@@ -154,6 +157,8 @@ async fn panel_start() -> Result<(), JsValue> {
         native_permission_pending: None,
         pi_ui_pending: None,
         pi_ui_stopping: None,
+        codex_input_pending: None,
+        codex_input_stopping: None,
         stale_generation: 0,
         connection_generation: 0,
     }));
@@ -169,6 +174,7 @@ async fn panel_start() -> Result<(), JsValue> {
     listener.forget();
 
     pi_ui::install(&document, &panel)?;
+    codex_input::install(&document, &panel)?;
 
     composer::install(&panel)?;
     composer_ui::install(&panel)?;
@@ -438,8 +444,14 @@ fn handle_click(panel: &Rc<RefCell<Panel>>, event: Event) -> Result<(), FlowErro
                     .is_some_and(|view| view.pi_ui.as_ref().is_some_and(|ui| ui.run == run))
                 {
                     p.pi_ui_stopping = Some(run.clone());
-                    render(&p);
                 }
+                if p.snapshot
+                    .as_ref()
+                    .is_some_and(|view| view.codex_input.as_ref().is_some_and(|ui| ui.run == run))
+                {
+                    p.codex_input_stopping = Some(run.clone());
+                }
+                render(&p);
             }
             let panel = Rc::clone(panel);
             spawn_local(async move {
@@ -477,6 +489,9 @@ fn handle_click(panel: &Rc<RefCell<Panel>>, event: Event) -> Result<(), FlowErro
                             let mut p = panel.borrow_mut();
                             if p.pi_ui_stopping.as_ref() == Some(&run) {
                                 p.pi_ui_stopping = None;
+                            }
+                            if p.codex_input_stopping.as_ref() == Some(&run) {
+                                p.codex_input_stopping = None;
                             }
                             render(&p);
                         }
@@ -539,8 +554,11 @@ fn install_flow(panel: &Rc<RefCell<Panel>>) -> Result<(), FlowError> {
                     let mut p = panel.borrow_mut();
                     p.connected = false;
                     p.status_message = error.to_string();
+                    p.codex_input_pending = None;
+                    p.codex_input_stopping = None;
                     if let Some(view) = &mut p.snapshot {
                         view.source_status = SourceStatus::Checking;
+                        view.codex_input = None;
                     }
                     render(&p);
                 }
@@ -565,12 +583,15 @@ fn reconnect(panel: Rc<RefCell<Panel>>) {
                         p.native_permission_pending = None;
                         p.pi_ui_pending = None;
                         p.pi_ui_stopping = None;
+                        p.codex_input_pending = None;
+                        p.codex_input_stopping = None;
                         p.connection_generation = p.connection_generation.wrapping_add(1);
                         p.stale_generation = p.stale_generation.wrapping_add(1);
                         if let Some(view) = &mut p.snapshot {
                             view.source_status = SourceStatus::Checking;
                             view.source_epoch = 0;
                             view.pi_ui = None;
+                            view.codex_input = None;
                         }
                         render(&p);
                     }
@@ -675,6 +696,25 @@ fn apply_view(panel: &Rc<RefCell<Panel>>, view: PageView, generation: u64) {
         .is_some_and(|run| active_run(&p.snapshot) != Some(run))
     {
         p.pi_ui_stopping = None;
+    }
+    if p.codex_input_pending
+        .as_ref()
+        .is_some_and(|(run, request)| {
+            !p.snapshot
+                .as_ref()
+                .and_then(|view| view.codex_input.as_ref())
+                .is_some_and(|ui| {
+                    &ui.run == run && ui.pending.iter().any(|item| &item.request == request)
+                })
+        })
+    {
+        p.codex_input_pending = None;
+    }
+    if p.codex_input_stopping
+        .as_ref()
+        .is_some_and(|run| active_run(&p.snapshot) != Some(run))
+    {
+        p.codex_input_stopping = None;
     }
     p.connected = p.flow.is_connected();
     p.status_message = if p.snapshot.as_ref().and_then(PageView::active_run).is_some() {

@@ -46,6 +46,16 @@ pub(super) enum Event {
         run: String,
         change: crate::agent::ui::Change,
     },
+    CodexInput {
+        run: String,
+        key: metldr_codex_session::InputId,
+        prompt: metldr_codex_session::InputPrompt,
+        answer: SyncSender<metldr_codex_session::InputAnswer>,
+    },
+    CodexInputWithdraw {
+        run: String,
+        key: metldr_codex_session::InputId,
+    },
     PiSettled {
         run: String,
         result: crate::agent::Outcome,
@@ -119,6 +129,7 @@ pub(super) struct Owner {
     pub(super) opencode_profile: Option<crate::opencode_model::Profile>,
     pub(super) native_permissions: BTreeMap<String, PendingPermission>,
     pub(super) pi_ui: Option<crate::pi_ui::State>,
+    pub(super) codex_input: Option<crate::codex_input::State>,
     pub(super) browser_approval: Option<crate::browser_owner::PendingApproval>,
     pub(super) browser_io: Option<crate::browser_io::Slot>,
     pub(super) browser_route: Option<crate::https_profile::Profile>,
@@ -154,6 +165,7 @@ impl Owner {
             self.opencode_profile.as_ref(),
             &self.native_permissions,
             self.pi_ui.as_ref(),
+            self.codex_input.as_ref(),
             self.browser_route.as_ref(),
             self.responses_route.as_ref(),
             self.google_route.as_ref(),
@@ -313,6 +325,11 @@ impl Owner {
                 request,
                 answer,
             } => self.pi_ui_reply(id, &run, &request, answer),
+            Command::CodexInputReply {
+                run,
+                request,
+                answer,
+            } => self.codex_input_reply(id, &run, &request, answer),
             Command::View => self.reply_view(Some(id), "view", true),
             Command::Capture {
                 expected_store,
@@ -385,10 +402,13 @@ impl Owner {
                 next.prevent_browser(&run, "user stopped before dispatch")?;
                 let permissions = self.take_native_permissions(&run);
                 let pi_ui = self.pi_ui.clone();
+                let codex_input = self.codex_input.clone();
                 self.clear_pi_ui(&run);
+                self.clear_codex_input(&run);
                 if let Err(error) = self.commit(next) {
                     self.native_permissions.extend(permissions);
                     self.pi_ui = pi_ui;
+                    self.codex_input = codex_input;
                     return Err(error);
                 }
                 if let Some(operation) = &self.operation {
@@ -398,6 +418,7 @@ impl Owner {
                 }
                 self.cancel_browser_approval(&run);
                 drop(pi_ui);
+                drop(codex_input);
                 for (_, permission) in permissions {
                     let _ = permission.ack.send(None);
                 }

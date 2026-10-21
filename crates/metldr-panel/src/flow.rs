@@ -374,7 +374,12 @@ impl FlowClient {
             .await
     }
 
-    pub(crate) async fn codex_prompt(&self, source: SourceId, text: UserText) -> Result<RunId> {
+    pub(crate) async fn codex_prompt(
+        &self,
+        source: SourceId,
+        text: UserText,
+        mode: &str,
+    ) -> Result<RunId> {
         let latest = self.inner.protocol.borrow();
         if latest.latest.as_ref().and_then(PageView::source) != Some(&source) {
             return Err(FlowError::NoSource);
@@ -390,7 +395,7 @@ impl FlowClient {
             ));
         }
         drop(latest);
-        self.start(json!({"op":"codex_prompt","source":source,"text":text.as_str()}))
+        self.start(json!({"op":"codex_prompt","source":source,"text":text.as_str(),"mode":mode}))
             .await
     }
 
@@ -451,6 +456,7 @@ impl FlowClient {
         workflow: RunId,
         revision: u64,
         text: UserText,
+        mode: &str,
     ) -> Result<RunId> {
         let available = self
             .inner
@@ -474,7 +480,7 @@ impl FlowClient {
                 "The selected Codex session is unavailable.".into(),
             ));
         }
-        self.start(json!({"op":"codex_follow_up","workflow":workflow,"revision":revision,"text":text.as_str()})).await
+        self.start(json!({"op":"codex_follow_up","workflow":workflow,"revision":revision,"text":text.as_str(),"mode":mode})).await
     }
 
     pub(crate) async fn opencode_follow_up(
@@ -579,6 +585,26 @@ impl FlowClient {
         {
             Reply::Page(view) => Ok(self.check_source(view).await),
             _ => Err(FlowError::Protocol("Expected a Pi UI reply view.".into())),
+        }
+    }
+
+    pub(crate) async fn codex_input_reply(
+        &self,
+        run: RunId,
+        request: RunId,
+        answer: Value,
+    ) -> Result<PageView> {
+        match self
+            .request(
+                json!({"op":"codex_input_reply","run":run,"request":request,"answer":answer}),
+                ReplyKind::Page,
+            )
+            .await?
+        {
+            Reply::Page(view) => Ok(self.check_source(view).await),
+            _ => Err(FlowError::Protocol(
+                "Expected a Codex input reply view.".into(),
+            )),
         }
     }
 

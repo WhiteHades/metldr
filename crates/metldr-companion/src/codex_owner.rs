@@ -62,7 +62,7 @@ impl Owner {
             .ok_or("no trusted Codex profile configured")?;
         let (text, source) =
             match &command {
-                Command::CodexPrompt { source, text } => {
+                Command::CodexPrompt { source, text, .. } => {
                     let prior = self.state.starts.get(id).and_then(|run| {
                         match self.state.launches.get(run) {
                             Some(Launch::Codex { workflow, .. }) => {
@@ -102,8 +102,8 @@ impl Owner {
             return Err("invalid Codex prompt".into());
         }
         let mut next = self.state.clone();
-        let (workflow, text) = match command {
-            Command::CodexPrompt { source, text } => {
+        let (workflow, text, mode) = match command {
+            Command::CodexPrompt { source, text, mode } => {
                 let source = next
                     .view
                     .source
@@ -123,12 +123,13 @@ impl Owner {
                         binding: Binding::Pending,
                     },
                 );
-                (workflow, text)
+                (workflow, text, mode)
             }
             Command::CodexFollowUp {
                 workflow,
                 revision,
                 text,
+                mode,
             } => {
                 let w = next
                     .codex_workflows
@@ -148,7 +149,7 @@ impl Owner {
                 {
                     return Err("Codex workflow still has active work".into());
                 }
-                (workflow, text)
+                (workflow, text, mode)
             }
             _ => return Err("invalid Codex command".into()),
         };
@@ -193,6 +194,7 @@ impl Owner {
             source: w.source.clone(),
             target: next.native_browser_target(&run)?,
             text,
+            mode,
         };
         self.commit(next)?;
         let (slot, events) = crate::browser_io::Slot::new(run.clone(), job.target.tab);

@@ -11,6 +11,12 @@ const FRAME_LIMIT: usize = 1024 * 1024;
 const QUEUE_LIMIT: usize = 2 * FRAME_LIMIT;
 const RPC_TIMEOUT: Duration = Duration::from_secs(15);
 
+pub(crate) fn clean_eof(error: &(dyn std::error::Error + Send + Sync + 'static)) -> bool {
+    error
+        .downcast_ref::<std::io::Error>()
+        .is_some_and(|e| e.kind() == std::io::ErrorKind::UnexpectedEof)
+}
+
 pub(crate) struct Rpc {
     child: Child,
     wire: Wire,
@@ -20,6 +26,36 @@ pub(crate) struct Rpc {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn clean_stdout_eof_allows_normal_process_close() {
+        let mut child = Command::new("sh")
+            .args(["-c", "exec 1>&-; read -r ignored || :"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let wire = Wire {
+            stdin: child.stdin.take(),
+            stdout: BufReader::new(child.stdout.take().unwrap()),
+            frame: Vec::new(),
+            queue: VecDeque::new(),
+            queued_bytes: 0,
+            sequence: 0,
+        };
+        let mut rpc = Rpc {
+            child,
+            wire,
+            healthy: true,
+        };
+        let error = rpc.next().await.unwrap_err();
+        assert!(clean_eof(error.as_ref()));
+        let exit = rpc.close().await.unwrap();
+        assert_eq!(exit.code, Some(0));
+        assert!(!exit.forced && exit.drained);
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn cancelled_rpc_and_blocked_write_kill_child_and_poison_connection() {
@@ -191,6 +227,7 @@ impl Rpc {
         }
         match self.wire.read().await {
             Ok((value, _)) => Ok(value),
+            Err(error) if clean_eof(error.as_ref()) => Err(error),
             Err(error) => {
                 self.abort();
                 Err(error)
@@ -250,7 +287,12 @@ impl Wire {
         loop {
             let bytes = self.stdout.fill_buf().await?;
             if bytes.is_empty() {
-                return Err(invalid("Codex stdout closed"));
+                return Err(if self.frame.is_empty() {
+                    std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "Codex stdout closed")
+                        .into()
+                } else {
+                    invalid("Codex stdout closed during a frame")
+                });
             }
             let end = bytes.iter().position(|b| *b == b'\n').map(|i| i + 1);
             let count = end.unwrap_or(bytes.len());

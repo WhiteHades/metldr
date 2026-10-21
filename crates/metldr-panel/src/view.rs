@@ -121,6 +121,7 @@ pub(super) fn render(panel: &Panel) -> Result<(), JsValue> {
         .and_then(|()| render_browser_actions(panel))
         .and_then(|()| render_native_permissions(panel))
         .and_then(|()| crate::pi_ui::render(panel))
+        .and_then(|()| crate::codex_input::render(panel))
 }
 
 fn render_native_permissions(panel: &Panel) -> Result<(), JsValue> {

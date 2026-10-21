@@ -5,7 +5,7 @@ This Rust crate runs an installed Codex app server over stdio. It uses the calle
 The adapter supports saved threads, streamed messages, client tool replies, turn interruption and process shutdown. Codex 0.163.0 is verified on Linux. Native Windows and macOS execution still need verification. The app server's dynamic tool API is experimental.
 
 ```no_run
-use metldr_codex_session::{CodexSession, Event, Thread};
+use metldr_codex_session::{CodexSession, Event, InputAnswer, InputPrompt, Thread, TurnMode};
 use std::path::Path;
 
 #[tokio::main(flavor = "current_thread")]
@@ -17,7 +17,7 @@ async fn main() -> metldr_codex_session::Result<()> {
         Thread::New { tools: vec![] },
     ).await?;
 
-    session.prompt("Describe this workspace.").await?;
+    session.prompt("Describe this workspace.", TurnMode::Configured).await?;
     loop {
         match session.next_event().await? {
             Event::TextDelta { text, .. } => print!("{text}"),
@@ -30,6 +30,14 @@ async fn main() -> metldr_codex_session::Result<()> {
                 session.reply_approval(&request, None).await?;
             }
             Event::ApprovalResolved(_) => (),
+            Event::Input(input) => {
+                let answer = match input.prompt() {
+                    InputPrompt::Questions { .. } => InputAnswer::Questions(Default::default()),
+                    _ => InputAnswer::Cancel,
+                };
+                session.reply_input(&input, answer).await?;
+            }
+            Event::InputResolved(_) => (),
             Event::ApprovalsUpdated(requests) => {
                 for (_, request) in requests {
                     session.reply_approval(&request, None).await?;
@@ -50,6 +58,16 @@ Save the thread identity from `info()` in the native task owner before dispatchi
 Resume requests metadata without returning prior turns. Codex restores the saved context for subsequent turns.
 
 Each completed `Event::Message` carries its item ID and full text. Use it to reconcile streamed deltas for that item. An interrupt reply reports acknowledgement or rejection; `Event::Finished` determines the final turn outcome.
+
+`TurnMode::Configured` leaves the native collaboration settings unchanged. `TurnMode::Plan` explicitly requests Plan mode using the effective native model. The caller chooses the mode for each prompt.
+
+`Event::Input` carries a native question, an MCP form or a separate MCP tool approval. The supported question format has nonsecret choices and optional free text. Supported forms contain required string fields with bounded lengths and optional string choices. Other form types, secret questions, URL requests and verification requests return an unsupported input error.
+
+Reply with `reply_input` and the original handle. An empty question answer map means Skip. MCP Accept, Decline and Cancel remain separate replies. Tool approval accepts only an empty content map, and the adapter does not request a persistent grant. Native policy still determines the approval behavior.
+
+Input handles belong to their connection and request generation. Duplicate and resolved replies fail. Keep reading `Event::InputResolved` after the terminal when requests remain pending. Native resolution does not confirm that an MCP server has recorded the result. The caller owns the observation deadline and process shutdown.
+
+Answers have no logging or serialization interface. Model and tool output can repeat an answer, so callers must apply their normal output storage policy to those events.
 
 Cancelling an event wait preserves its partial frame. Cancelling an RPC or pipe write kills the process and makes the connection unusable. Frames, queued events, tool requests and RPC deadlines are bounded. Tool replies belong to their originating connection and turn.
 

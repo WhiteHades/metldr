@@ -134,6 +134,7 @@ pub(super) fn run() -> Result<()> {
         opencode_profile: fixture_profiles.2,
         native_permissions: BTreeMap::new(),
         pi_ui: None,
+        codex_input: None,
         browser_approval: None,
         browser_io: None,
         browser_route,
@@ -192,6 +193,7 @@ pub(super) fn run() -> Result<()> {
                 Action::Detached => {
                     owner.subscribers.clear();
                     owner.disconnect_pi_ui()?;
+                    owner.disconnect_codex_input()?;
                     if let Some(run) = owner.browser_io.as_ref().map(|s| s.run.clone()) {
                         owner.browser_io_finish(&run);
                         owner.cancel_browser_approval(&run);
@@ -200,6 +202,7 @@ pub(super) fn run() -> Result<()> {
                 }
                 Action::Shutdown(error) => {
                     owner.disconnect_pi_ui()?;
+                    owner.disconnect_codex_input()?;
                     if let Some(run) = owner.browser_io.as_ref().map(|s| s.run.clone()) {
                         owner.browser_io_finish(&run);
                     }
@@ -226,6 +229,13 @@ pub(super) fn run() -> Result<()> {
             Event::ToolProgress { run, call } => owner.tool_progress(&run, call)?,
             Event::PiActivity { run, activity } => owner.pi_activity(&run, activity)?,
             Event::PiUi { run, change } => owner.pi_ui_change(&run, change)?,
+            Event::CodexInput {
+                run,
+                key,
+                prompt,
+                answer,
+            } => owner.codex_input_offer(&run, key, prompt, answer)?,
+            Event::CodexInputWithdraw { run, key } => owner.codex_input_withdraw(&run, &key)?,
             Event::PiSettled {
                 run,
                 result,

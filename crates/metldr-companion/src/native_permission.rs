@@ -111,6 +111,7 @@ impl Owner {
             self.opencode_profile.as_ref(),
             &self.native_permissions,
             self.pi_ui.as_ref(),
+            self.codex_input.as_ref(),
             self.browser_route.as_ref(),
             self.responses_route.as_ref(),
             self.google_route.as_ref(),
