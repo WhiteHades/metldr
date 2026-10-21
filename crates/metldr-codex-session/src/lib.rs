@@ -1,9 +1,11 @@
 #![doc = include_str!("../README.md")]
 
+mod approval;
 mod event;
 mod report;
 mod rpc;
 
+pub use approval::{Approval, ApprovalChoice, ApprovalId, ApprovalKind};
 pub use event::{Event, ToolCall, TurnStatus};
 pub use report::{Preview, ToolOutcome, ToolReport, ToolState};
 pub use rpc::ProcessExit;
@@ -86,6 +88,7 @@ pub struct CodexSession {
     connection: u64,
     pending_tools: Vec<Value>,
     reports: report::Reports,
+    approvals: approval::Approvals,
     failed: bool,
 }
 
@@ -148,6 +151,7 @@ impl CodexSession {
             connection: CONNECTION.fetch_add(1, Ordering::Relaxed),
             pending_tools: Vec::new(),
             reports: report::Reports::default(),
+            approvals: approval::Approvals::default(),
             failed: false,
         })
     }

@@ -119,18 +119,18 @@ pub(super) fn render(panel: &Panel) -> Result<(), JsValue> {
     status(doc, &panel.status_message);
     results::render(doc, snapshot.as_ref())
         .and_then(|()| render_browser_actions(panel))
-        .and_then(|()| render_opencode_permissions(panel))
+        .and_then(|()| render_native_permissions(panel))
 }
 
-fn render_opencode_permissions(panel: &Panel) -> Result<(), JsValue> {
+fn render_native_permissions(panel: &Panel) -> Result<(), JsValue> {
     let section = panel
         .document
-        .get_element_by_id("opencode-permissions")
-        .ok_or_else(|| err("OpenCode permission list is missing."))?;
+        .get_element_by_id("native-permissions")
+        .ok_or_else(|| err("native permission list is missing."))?;
     let permissions = panel
         .snapshot
         .as_ref()
-        .map(|view| view.opencode_permissions.as_slice())
+        .map(|view| view.native_permissions.as_slice())
         .unwrap_or(&[]);
     let cards: Vec<_> = (0..section.children().length())
         .filter_map(|i| section.children().item(i))
@@ -191,7 +191,7 @@ fn render_opencode_permissions(panel: &Panel) -> Result<(), JsValue> {
 
 fn create_native_permission_card(
     doc: &Document,
-    permission: &crate::model::OpenCodePermissionView,
+    permission: &crate::model::NativePermissionView,
 ) -> Result<Element, JsValue> {
     let card = doc.create_element("article")?;
     card.set_attribute("data-native-run", permission.run.as_str())?;
@@ -199,7 +199,7 @@ fn create_native_permission_card(
     let heading = doc.create_element("h2")?;
     heading.set_attribute("data-part", "title")?;
     card.append_child(&heading)?;
-    for (part, label) in [("tool", "Tool"), ("input", "Input")] {
+    for (part, label) in [("agent", "Agent"), ("tool", "Tool"), ("input", "Input")] {
         let name = doc.create_element("strong")?;
         name.set_text_content(Some(&format!("{label}: ")));
         if part == "input" {
@@ -223,14 +223,14 @@ fn create_native_permission_card(
     for option in &permission.options {
         let button = doc.create_element("button")?;
         button.set_attribute("type", "button")?;
-        button.set_attribute("data-action", "opencode-permission")?;
+        button.set_attribute("data-action", "native-permission")?;
         button.set_attribute("data-native-option", &option.id)?;
         button.set_text_content(Some(&option.name));
         controls.append_child(&button)?;
     }
     let cancel = doc.create_element("button")?;
     cancel.set_attribute("type", "button")?;
-    cancel.set_attribute("data-action", "opencode-permission")?;
+    cancel.set_attribute("data-action", "native-permission")?;
     cancel.set_text_content(Some("Cancel"));
     controls.append_child(&cancel)?;
     card.append_child(&controls)?;
@@ -240,23 +240,24 @@ fn create_native_permission_card(
 fn update_native_permission_card(
     panel: &Panel,
     card: &Element,
-    permission: &crate::model::OpenCodePermissionView,
+    permission: &crate::model::NativePermissionView,
 ) -> Result<(), JsValue> {
     card.set_attribute("data-native-run", permission.run.as_str())?;
     card.set_attribute("data-native-request", permission.request.as_str())?;
     for (part, value) in [
+        ("agent", permission.agent.label()),
         ("title", permission.title.as_str()),
         ("tool", permission.tool.as_str()),
         ("input", permission.input.as_str()),
     ] {
         card.query_selector(&format!("[data-part='{part}']"))?
-            .ok_or_else(|| err("OpenCode permission detail is missing."))?
+            .ok_or_else(|| err("native permission detail is missing."))?
             .set_text_content(Some(value));
     }
     let disabled = !panel.connected
         || active_run(&panel.snapshot) != Some(&permission.run)
-        || panel.opencode_permission_pending.is_some();
-    let buttons = card.query_selector_all("[data-action='opencode-permission']")?;
+        || panel.native_permission_pending.is_some();
+    let buttons = card.query_selector_all("[data-action='native-permission']")?;
     for index in 0..buttons.length() {
         if let Some(button) = buttons
             .item(index)

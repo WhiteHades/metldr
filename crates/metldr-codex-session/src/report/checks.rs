@@ -21,10 +21,20 @@ fn native_tool_details_and_outcomes_are_observations() {
     assert_eq!(completed.item_id, started.item_id);
     assert_eq!(completed.state, ToolState::Finished(ToolOutcome::Succeeded));
     assert!(completed.output.unwrap().text.contains("NATIVE_NOTE_29"));
-    let patch = json!({"item":{"type":"fileChange","id":"patch-31","status":"completed","changes":[{"path":"/owned/created-note.txt","kind":{"type":"update","move_path":"/owned/moved.txt"},"diff":"CREATED_NATIVE_31\n"}]}});
+    let mut patch = json!({"item":{"type":"fileChange","id":"patch-31","status":"inProgress","changes":[{"path":"/owned/created-note.txt","kind":{"type":"update","move_path":"/owned/moved.txt"},"diff":"CREATED_NATIVE_31\n"}]}});
+    reports.decode(&patch, true, &turn).unwrap();
+    assert_eq!(
+        reports.changes("patch-31").unwrap(),
+        patch["item"]["changes"]
+    );
+    let update = json!({"itemId":"patch-31","changes":[{"path":"/owned/updated.txt","kind":{"type":"add"},"diff":"UPDATED_NATIVE_32\n"}]});
+    reports.patch(&update).unwrap();
+    assert_eq!(reports.changes("patch-31").unwrap(), update["changes"]);
+    patch["item"]["status"] = json!("completed");
     let patch = reports.decode(&patch, false, &turn).unwrap().unwrap();
     assert!(patch.input.text.contains("/owned/moved.txt"));
     assert!(patch.output.unwrap().text.contains("CREATED_NATIVE_31"));
+    assert!(reports.changes("patch-31").is_err());
     for (index, success, outcome) in [
         (0, json!(true), ToolOutcome::Succeeded),
         (1, json!(false), ToolOutcome::Failed),

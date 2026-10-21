@@ -41,9 +41,41 @@ struct SavedReport {
     kind: String,
     report: ToolReport,
     progress: Option<Preview>,
+    changes: Option<Value>,
 }
 
 impl Reports {
+    pub(crate) fn changes(&self, item: &str) -> Result<Value> {
+        self.0
+            .get(item)
+            .filter(|p| p.kind == "fileChange" && p.report.state == ToolState::Started)
+            .and_then(|p| p.changes.clone())
+            .ok_or_else(|| invalid("Complete Codex file changes unavailable"))
+    }
+
+    pub(crate) fn patch(&mut self, params: &Value) -> Result<String> {
+        let item = identity(params, "itemId")?;
+        let saved = self
+            .0
+            .get_mut(item)
+            .filter(|p| p.kind == "fileChange" && p.report.state == ToolState::Started)
+            .ok_or_else(|| invalid("Codex patch update has no active file item"))?;
+        let changes = &params["changes"];
+        for change in changes
+            .as_array()
+            .ok_or_else(|| invalid("Codex patch changes missing"))?
+        {
+            text(change, "path")?;
+            text(change, "diff")?;
+            if !matches!(text(&change["kind"], "type")?, "add" | "delete" | "update") {
+                return Err(invalid("Codex patch kind invalid"));
+            }
+            optional_text(&change["kind"], "move_path")?;
+        }
+        saved.changes = (serde_json::to_vec(changes)?.len() <= 32 * 1024).then(|| changes.clone());
+        Ok(item.into())
+    }
+
     pub(crate) fn clear(&mut self) {
         self.0.clear();
     }
@@ -233,6 +265,14 @@ impl Reports {
             SavedReport {
                 kind: kind.into(),
                 progress: None,
+                changes: if kind == "fileChange"
+                    && started
+                    && serde_json::to_vec(&item["changes"])?.len() <= 32 * 1024
+                {
+                    Some(item["changes"].clone())
+                } else {
+                    None
+                },
                 report: report.clone(),
             },
         );

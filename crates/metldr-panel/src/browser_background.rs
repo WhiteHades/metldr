@@ -134,7 +134,10 @@ pub(super) fn receive(message: &JsValue) -> bool {
     let Ok(envelope) = serde_json::from_str::<Envelope>(&raw) else {
         return true;
     };
-    if envelope.v != 4 || envelope.kind != "browser_rpc" || !valid_run(&envelope.run) {
+    if envelope.v != crate::WIRE_VERSION
+        || envelope.kind != "browser_rpc"
+        || !valid_run(&envelope.run)
+    {
         return true;
     }
     let connection = STATE.with(|state| state.borrow().connection);
@@ -962,7 +965,7 @@ fn post_native(connection: u64, request: String, command: Value) {
     let Some(native) = native else {
         return;
     };
-    let message = json!({"v":4,"request":request,"command":command});
+    let message = json!({"v":crate::WIRE_VERSION,"request":request,"command":command});
     if !bounded_json(&message, MAX_FRAME) {
         invalidate_all();
         return;

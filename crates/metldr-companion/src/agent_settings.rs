@@ -453,7 +453,7 @@ mod checks {
             pi_profile: None,
             codex_profile: None,
             opencode_profile: None,
-            opencode_permissions: Default::default(),
+            native_permissions: Default::default(),
             browser_approval: None,
             browser_io: None,
             browser_route: None,

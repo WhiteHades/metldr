@@ -132,7 +132,7 @@ pub(super) fn run() -> Result<()> {
         pi_profile: fixture_profiles.0,
         codex_profile: fixture_profiles.1,
         opencode_profile: fixture_profiles.2,
-        opencode_permissions: BTreeMap::new(),
+        native_permissions: BTreeMap::new(),
         browser_approval: None,
         browser_io: None,
         browser_route,
@@ -193,7 +193,7 @@ pub(super) fn run() -> Result<()> {
                     if let Some(run) = owner.browser_io.as_ref().map(|s| s.run.clone()) {
                         owner.browser_io_finish(&run);
                         owner.cancel_browser_approval(&run);
-                        owner.cancel_opencode_permissions(&run);
+                        owner.cancel_native_permissions(&run);
                     }
                 }
                 Action::Shutdown(error) => {
@@ -207,7 +207,7 @@ pub(super) fn run() -> Result<()> {
                     }
                     if let Some(run) = owner.operation.as_ref().map(|op| op.run.clone()) {
                         owner.cancel_browser_approval(&run);
-                        owner.cancel_opencode_permissions(&run);
+                        owner.cancel_native_permissions(&run);
                     }
                 }
                 _ => (),
@@ -246,8 +246,14 @@ pub(super) fn run() -> Result<()> {
                 identity,
                 ack,
             } => owner.opencode_bound(&run, &workflow, identity, ack)?,
-            Event::OpenCodePermission { run, details, ack } => {
-                owner.opencode_permission(&run, details, ack)?
+            Event::NativePermission {
+                run,
+                key,
+                details,
+                ack,
+            } => owner.native_permission(&run, key, details, ack)?,
+            Event::NativePermissionResolved { run, key } => {
+                owner.native_permission_resolved(&run, key)?
             }
             Event::OpenCodeActivity { run, activity } => owner.opencode_activity(&run, activity)?,
             Event::OpenCodeSettled {

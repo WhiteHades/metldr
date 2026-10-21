@@ -64,9 +64,9 @@ details[open]::details-content { block-size: auto; }
 #workspace:has(#history article) #empty-history { display: none; }
 #history { display: flex; flex-direction: column; }
 #history:empty { display: none; }
-#opencode-permissions > article { display: flex; flex-direction: column; gap: 0.5rem; }
-#opencode-permissions [data-part="controls"] { display: flex; flex-wrap: wrap; gap: 0.5rem; }
-#opencode-permissions [data-part="input"] { font: inherit; font-size: var(--text-secondary); white-space: pre-wrap; }
+#native-permissions > article { display: flex; flex-direction: column; gap: 0.5rem; }
+#native-permissions [data-part="controls"] { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+#native-permissions [data-part="input"] { font: inherit; font-size: var(--text-secondary); white-space: pre-wrap; }
 #agent-details { margin-block-start: auto; border-block-start: 1px solid var(--line); }
 .agent-body { display: flex; flex-direction: column; gap: 0.5rem; padding-block-end: 0.5rem; }
 footer { display: flex; flex-direction: column; gap: 0.5rem; padding-block-start: 0.75rem; border-block-start: 1px solid var(--line); }

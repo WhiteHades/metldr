@@ -69,10 +69,15 @@ pub(super) enum Event {
         identity: crate::opencode_model::Identity,
         ack: std::sync::mpsc::SyncSender<std::result::Result<bool, String>>,
     },
-    OpenCodePermission {
+    NativePermission {
         run: String,
+        key: u64,
         details: serde_json::Value,
         ack: std::sync::mpsc::SyncSender<Option<String>>,
+    },
+    NativePermissionResolved {
+        run: String,
+        key: u64,
     },
     OpenCodeActivity {
         run: String,
@@ -86,6 +91,7 @@ pub(super) enum Event {
 }
 pub(super) struct PendingPermission {
     pub run: String,
+    pub key: u64,
     pub details: serde_json::Value,
     pub ack: std::sync::mpsc::SyncSender<Option<String>>,
 }
@@ -107,7 +113,7 @@ pub(super) struct Owner {
     pub(super) pi_profile: Option<crate::agent_model::Profile>,
     pub(super) codex_profile: Option<crate::codex_model::Profile>,
     pub(super) opencode_profile: Option<crate::opencode_model::Profile>,
-    pub(super) opencode_permissions: BTreeMap<String, PendingPermission>,
+    pub(super) native_permissions: BTreeMap<String, PendingPermission>,
     pub(super) browser_approval: Option<crate::browser_owner::PendingApproval>,
     pub(super) browser_io: Option<crate::browser_io::Slot>,
     pub(super) browser_route: Option<crate::https_profile::Profile>,
@@ -141,7 +147,7 @@ impl Owner {
             self.pi_profile.as_ref(),
             self.codex_profile.as_ref(),
             self.opencode_profile.as_ref(),
-            &self.opencode_permissions,
+            &self.native_permissions,
             self.browser_route.as_ref(),
             self.responses_route.as_ref(),
             self.google_route.as_ref(),
@@ -291,11 +297,11 @@ impl Owner {
             command @ (Command::OpenCodePrompt { .. } | Command::OpenCodeFollowUp { .. }) => {
                 self.opencode_start(id, command)
             }
-            Command::OpenCodePermission {
+            Command::NativePermission {
                 run,
                 request,
                 option,
-            } => self.opencode_decide(id, &run, &request, option.as_deref()),
+            } => self.native_decide(id, &run, &request, option.as_deref()),
             Command::View => self.reply_view(Some(id), "view", true),
             Command::Capture {
                 expected_store,
@@ -366,9 +372,9 @@ impl Owner {
                 let mut next = self.state.clone();
                 next.view.runs[position].status = Status::StopRequested;
                 next.prevent_browser(&run, "user stopped before dispatch")?;
-                let permissions = self.take_opencode_permissions(&run);
+                let permissions = self.take_native_permissions(&run);
                 if let Err(error) = self.commit(next) {
-                    self.opencode_permissions.extend(permissions);
+                    self.native_permissions.extend(permissions);
                     return Err(error);
                 }
                 if let Some(operation) = &self.operation {

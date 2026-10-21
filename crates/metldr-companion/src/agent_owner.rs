@@ -330,7 +330,7 @@ impl Owner {
             }
         }
         self.cancel_browser_approval(run);
-        let permissions = self.take_opencode_permissions(run);
+        let permissions = self.take_native_permissions(run);
         let record = next
             .view
             .runs

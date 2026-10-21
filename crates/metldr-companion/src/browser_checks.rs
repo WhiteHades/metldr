@@ -77,7 +77,7 @@ fn with_owner(check: impl FnOnce(&mut Owner, Proposal)) {
         pi_profile: None,
         codex_profile: None,
         opencode_profile: None,
-        opencode_permissions: BTreeMap::new(),
+        native_permissions: BTreeMap::new(),
         browser_approval: None,
         browser_io: None,
         browser_route: None,
@@ -154,6 +154,53 @@ fn bind_codex(owner: &mut Owner, run: &str) -> String {
     );
     owner.state.view.runs[0].kind = "agent".into();
     workflow
+}
+
+#[test]
+fn native_reviews_keep_distinct_durable_nonces_and_revoke_exact_requests() {
+    with_owner(|owner, proposal| {
+        bind_codex(owner, &proposal.run);
+        let details = serde_json::json!({"agent":"codex","tool":"Command","title":"Run owned command","input":"owned command","options":[{"id":"0","name":"Allow once"}]});
+        let (ack, first) = mpsc::sync_channel(1);
+        owner
+            .native_permission(&proposal.run, 1, details.clone(), ack)
+            .unwrap();
+        let first_nonce = owner.native_permissions.keys().next().unwrap().clone();
+        assert_eq!(saved(owner).next, owner.state.next);
+        let (ack, second) = mpsc::sync_channel(1);
+        owner
+            .native_permission(&proposal.run, 2, details, ack)
+            .unwrap();
+        assert_eq!(owner.native_permissions.len(), 2);
+        let second_nonce = owner
+            .native_permissions
+            .keys()
+            .find(|id| **id != first_nonce)
+            .unwrap()
+            .clone();
+        assert!(
+            owner
+                .native_decide("invalid-choice", &proposal.run, &first_nonce, Some("other"))
+                .is_err()
+        );
+        assert!(matches!(first.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        owner.native_permission_resolved(&proposal.run, 1).unwrap();
+        assert!(matches!(
+            first.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
+        assert!(
+            owner
+                .native_decide("stale-choice", &proposal.run, &first_nonce, Some("0"))
+                .is_err()
+        );
+        assert!(owner.native_permissions.contains_key(&second_nonce));
+        owner
+            .native_decide("valid-choice", &proposal.run, &second_nonce, Some("0"))
+            .unwrap();
+        assert_eq!(second.try_recv().unwrap(), Some("0".into()));
+        assert!(owner.native_permissions.is_empty());
+    });
 }
 
 #[test]
@@ -516,7 +563,7 @@ fn saved_fixture_start_replays_but_cannot_retarget_https() {
             None,
             None,
             None,
-            &owner.opencode_permissions,
+            &owner.native_permissions,
             owner.browser_route.as_ref(),
             None,
             None,
@@ -573,7 +620,7 @@ fn saved_fixture_start_replays_but_cannot_retarget_https() {
             None,
             None,
             None,
-            &owner.opencode_permissions,
+            &owner.native_permissions,
             owner.browser_route.as_ref(),
             None,
             None,
@@ -628,7 +675,7 @@ fn saved_fixture_start_replays_but_cannot_retarget_https() {
             None,
             None,
             None,
-            &owner.opencode_permissions,
+            &owner.native_permissions,
             owner.browser_route.as_ref(),
             None,
             None,
@@ -850,7 +897,7 @@ fn browser_owner_saves_approval_dispatch_and_observation_before_acknowledging() 
             None,
             None,
             None,
-            &owner.opencode_permissions,
+            &owner.native_permissions,
             None,
             None,
             None,

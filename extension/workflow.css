@@ -1,5 +1,5 @@
 /* Source tool rows and decision cards, projected from actual native state. */
-:is(#browser-actions, #opencode-permissions, .run-activity, .report-history, .tool-group, .tool-calls) {
+:is(#browser-actions, #native-permissions, .run-activity, .report-history, .tool-group, .tool-calls) {
   --workflow-ink: light-dark(oklch(0.247 0.006 258.361), oklch(0.964 0.002 247.839));
   --workflow-muted: light-dark(oklch(0.506 0.01 264.477), oklch(0.731 0.008 260.731));
   --workflow-surface: light-dark(oklch(1 0 none), oklch(0.26 0.006 271.191));
@@ -16,13 +16,13 @@
   letter-spacing: -0.01em;
   line-height: 1.5;
 }
-:is(#browser-actions, #browser-current, #browser-receipt-rows, #opencode-permissions):not([hidden]) {
+:is(#browser-actions, #browser-current, #browser-receipt-rows, #native-permissions):not([hidden]) {
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
-:is(#browser-current, #opencode-permissions):empty { display: none; }
-:is(#browser-actions, #opencode-permissions) article {
+:is(#browser-current, #native-permissions):empty { display: none; }
+:is(#browser-actions, #native-permissions) article {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -40,18 +40,18 @@
     0 1px 2px color-mix(in oklch, var(--workflow-dark-shadow) 20%, transparent),
     0 2px 6px color-mix(in oklch, var(--workflow-dark-shadow) 20%, transparent);
 }
-:is(#browser-actions, #opencode-permissions) h2 {
+:is(#browser-actions, #native-permissions) h2 {
   font-size: inherit;
   font-weight: 500;
   text-wrap: wrap;
 }
-:is(#browser-actions, #opencode-permissions) :is(p, pre) {
+:is(#browser-actions, #native-permissions) :is(p, pre) {
   overflow-wrap: break-word;
   white-space: pre-wrap;
 }
-#opencode-permissions [data-part="input"] { font-size: inherit; }
-:is(#browser-actions, #opencode-permissions) strong { font-weight: 500; }
-:is(#browser-actions, #opencode-permissions) [data-part="controls"] {
+#native-permissions [data-part="input"] { font-size: inherit; }
+:is(#browser-actions, #native-permissions) strong { font-weight: 500; }
+:is(#browser-actions, #native-permissions) [data-part="controls"] {
   display: flex;
   flex-wrap: wrap;
   justify-content: end;
@@ -59,7 +59,7 @@
   padding-block-start: 10px;
   border-block-start: 1px solid var(--workflow-line);
 }
-:is(#browser-actions, #opencode-permissions) button {
+:is(#browser-actions, #native-permissions) button {
   min-block-size: 44px;
   padding-block: 9px;
   padding-inline: 12px;
@@ -79,15 +79,15 @@
   color: var(--workflow-canvas);
   box-shadow: inset 0 1px 0 color-mix(in oklch, oklch(1 0 none) 14%, transparent);
 }
-:is(#browser-actions, #opencode-permissions) button:disabled {
+:is(#browser-actions, #native-permissions) button:disabled {
   cursor: default;
   opacity: 0.5;
 }
-:is(#browser-actions, #opencode-permissions) button:not(:disabled):active {
+:is(#browser-actions, #native-permissions) button:not(:disabled):active {
   background: var(--workflow-hover);
   color: var(--workflow-ink);
 }
-:is(#browser-actions, #opencode-permissions) button:focus-visible,
+:is(#browser-actions, #native-permissions) button:focus-visible,
 :is(#browser-receipts, .run-activity, .report-history, .tool-group, .tool-call) > summary:focus-visible {
   outline: 2px solid var(--workflow-ink);
   outline-offset: 3px;
@@ -275,7 +275,7 @@
   font-size: calc(12.5em / 14);
 }
 @media (hover: hover) and (pointer: fine) {
-  :is(#browser-actions, #opencode-permissions) button:not(:disabled):hover { background: var(--workflow-hover); color: var(--workflow-ink); }
+  :is(#browser-actions, #native-permissions) button:not(:disabled):hover { background: var(--workflow-hover); color: var(--workflow-ink); }
   :is(#browser-receipts, .run-activity, .report-history, .tool-group, .tool-call) > summary:hover { background: var(--workflow-hover); }
 }
 @media (prefers-reduced-motion: no-preference) {

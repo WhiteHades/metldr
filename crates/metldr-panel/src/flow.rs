@@ -508,7 +508,7 @@ impl FlowClient {
         self.start(json!({"op":"opencode_follow_up","workflow":workflow,"revision":revision,"text":text.as_str()})).await
     }
 
-    pub(crate) async fn opencode_permission(
+    pub(crate) async fn native_permission(
         &self,
         run: RunId,
         request: RunId,
@@ -521,7 +521,7 @@ impl FlowClient {
             .latest
             .as_ref()
             .is_some_and(|view| {
-                view.opencode_permissions.iter().any(|permission| {
+                view.native_permissions.iter().any(|permission| {
                     permission.run == run
                         && permission.request == request
                         && option.as_ref().is_none_or(|selected| {
@@ -531,19 +531,19 @@ impl FlowClient {
             });
         if !self.is_connected() || !offered {
             return Err(FlowError::InvalidInput(
-                "This OpenCode permission is no longer pending.".into(),
+                "This native permission is no longer pending.".into(),
             ));
         }
         match self
             .request(
-                json!({"op":"opencode_permission","run":run,"request":request,"option":option}),
+                json!({"op":"native_permission","run":run,"request":request,"option":option}),
                 ReplyKind::Page,
             )
             .await?
         {
             Reply::Page(view) => Ok(self.check_source(view).await),
             _ => Err(FlowError::Protocol(
-                "Expected the updated OpenCode permission view.".into(),
+                "Expected the updated native permission view.".into(),
             )),
         }
     }
@@ -798,7 +798,7 @@ impl Connection {
         if self.protocol.borrow().closed {
             return Err(FlowError::Disconnected);
         }
-        let value = json_js(&json!({"v":4,"request":id,"command":command}))?;
+        let value = json_js(&json!({"v":crate::WIRE_VERSION,"request":id,"command":command}))?;
         call(&self.port, "postMessage", &[value]).map_err(js_error)?;
         Ok(())
     }

@@ -10,7 +10,7 @@ pub(super) fn render(
     profile: Option<&Profile>,
     codex_profile: Option<&crate::codex_model::Profile>,
     opencode_profile: Option<&crate::opencode_model::Profile>,
-    opencode_permissions: &std::collections::BTreeMap<String, crate::flow::PendingPermission>,
+    native_permissions: &std::collections::BTreeMap<String, crate::flow::PendingPermission>,
     browser_route: Option<&crate::https_profile::Profile>,
     responses_route: Option<&crate::https_profile::Profile>,
     google_route: Option<&crate::https_profile::Profile>,
@@ -171,10 +171,9 @@ pub(super) fn render(
         let ready=fingerprint.as_deref()==Some(&w.fingerprint) && state.view.runs.iter().any(|r|r.id==w.last_run && r.status.terminal()) && w.binding.resume().is_ok_and(|id|id.is_some());
         json!({"workflow":id,"source":w.source.id,"profile":w.fingerprint,"revision":w.revision,"ready":ready})
     }).collect());
-    view["opencode_permissions"] = Value::Array(opencode_permissions.iter().map(|(request,pending)| {
+    view["native_permissions"] = Value::Array(native_permissions.iter().map(|(request,pending)| {
         let details=&pending.details;
-        let options=details["options"].as_array().expect("validated OpenCode options");
-        json!({"run":pending.run,"request":request,"tool":details["toolCall"]["name"].as_str().filter(|name|!name.is_empty()).unwrap_or("OpenCode tool"),"title":details["toolCall"]["title"],"input":details["toolCall"]["rawInput"].to_string(),"options":options.iter().map(|o|json!({"id":o["optionId"],"kind":o["kind"],"name":o["name"]})).collect::<Vec<_>>()})
+        json!({"run":pending.run,"request":request,"agent":details["agent"],"tool":details["tool"],"title":details["title"],"input":details["input"],"options":details["options"]})
     }).collect());
     Ok(view)
 }

@@ -164,7 +164,7 @@ pub(crate) struct PageView {
     pub(crate) codex_sessions: Vec<AgentSessionView>,
     pub(crate) opencode_profile: Option<CodexProfileView>,
     pub(crate) opencode_sessions: Vec<AgentSessionView>,
-    pub(crate) opencode_permissions: Vec<OpenCodePermissionView>,
+    pub(crate) native_permissions: Vec<NativePermissionView>,
     pub(crate) browser_actions: Vec<BrowserActionView>,
     pub(crate) browser_route: Option<BrowserRouteView>,
     pub(crate) chat_route: Option<ChatRouteView>,
@@ -606,22 +606,38 @@ pub(crate) enum RunRoute {
     },
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct OpenCodePermissionView {
-    pub(crate) run: RunId,
-    pub(crate) request: RunId,
-    pub(crate) tool: String,
-    pub(crate) title: String,
-    pub(crate) input: String,
-    pub(crate) options: Vec<OpenCodePermissionOption>,
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum NativePermissionAgent {
+    Codex,
+    Opencode,
+}
+
+impl NativePermissionAgent {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Codex => "Codex",
+            Self::Opencode => "OpenCode",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct OpenCodePermissionOption {
+pub(crate) struct NativePermissionView {
+    pub(crate) run: RunId,
+    pub(crate) request: RunId,
+    pub(crate) agent: NativePermissionAgent,
+    pub(crate) tool: String,
+    pub(crate) title: String,
+    pub(crate) input: String,
+    pub(crate) options: Vec<NativePermissionOption>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NativePermissionOption {
     pub(crate) id: String,
-    pub(crate) kind: String,
     pub(crate) name: String,
 }
 
@@ -786,7 +802,7 @@ struct WireView {
     #[serde(default)]
     opencode_sessions: Vec<AgentSessionView>,
     #[serde(default)]
-    opencode_permissions: Vec<OpenCodePermissionView>,
+    native_permissions: Vec<NativePermissionView>,
     #[serde(default)]
     browser_actions: Vec<BrowserActionView>,
     #[serde(default, deserialize_with = "Option::deserialize")]
@@ -913,7 +929,7 @@ impl PageView {
             || wire.agent_sessions.len() > MAX_RUNS
             || wire.codex_sessions.len() > MAX_RUNS
             || wire.opencode_sessions.len() > MAX_RUNS
-            || wire.opencode_permissions.len() > 8
+            || wire.native_permissions.len() > 8
             || wire.browser_actions.len() > MAX_BROWSER_ACTIONS
         {
             return Err(FlowError::Protocol(
@@ -1120,7 +1136,7 @@ impl PageView {
         let run_ids: std::collections::BTreeSet<_> =
             runs.iter().map(|run| run.id.as_str()).collect();
         let mut permission_ids = std::collections::BTreeSet::new();
-        for permission in &wire.opencode_permissions {
+        for permission in &wire.native_permissions {
             let mut option_ids = std::collections::BTreeSet::new();
             if !run_ids.contains(permission.run.as_str())
                 || !valid_id(permission.request.as_str())
@@ -1128,7 +1144,11 @@ impl PageView {
                 || !runs.iter().any(|run| {
                     run.id == permission.run
                         && !run.status.is_terminal()
-                        && matches!(&run.route, RunRoute::OpenCode { .. })
+                        && matches!(
+                            (&permission.agent, &run.route),
+                            (NativePermissionAgent::Codex, RunRoute::Codex { .. })
+                                | (NativePermissionAgent::Opencode, RunRoute::OpenCode { .. })
+                        )
                 })
                 || !valid_label(&permission.tool, 128)
                 || !valid_label(&permission.title, 256)
@@ -1137,15 +1157,11 @@ impl PageView {
                 || permission.options.len() > 16
                 || permission.options.iter().any(|option| {
                     !valid_ascii_label(&option.id, 128)
-                        || !matches!(
-                            option.kind.as_str(),
-                            "allow_once" | "allow_always" | "reject_once" | "reject_always"
-                        )
                         || !valid_label(&option.name, 256)
                         || !option_ids.insert(option.id.as_str())
                 })
             {
-                return Err(FlowError::Protocol("invalid OpenCode permission".into()));
+                return Err(FlowError::Protocol("invalid native permission".into()));
             }
         }
         let mut action_ids = std::collections::BTreeSet::new();
@@ -1386,7 +1402,7 @@ impl PageView {
             codex_sessions: wire.codex_sessions,
             opencode_profile: wire.opencode_profile,
             opencode_sessions: wire.opencode_sessions,
-            opencode_permissions: wire.opencode_permissions,
+            native_permissions: wire.native_permissions,
             browser_actions: wire.browser_actions,
             browser_route: wire.browser_route,
             chat_route: wire.chat_route,
@@ -1719,7 +1735,7 @@ mod tests {
     }
 
     #[test]
-    fn decodes_bounded_opencode_route_and_permission_choices() {
+    fn decodes_bounded_native_permission_choices_for_matching_agents() {
         let mut view: serde_json::Value = serde_json::from_str(VALID).unwrap();
         view["runs"][0]["kind"] = serde_json::json!("agent");
         view["runs"][0]["status"] = serde_json::json!("running");
@@ -1731,10 +1747,11 @@ mod tests {
             "workflow":format!("{STORE}:3"), "source":format!("{STORE}:1"),
             "profile":"a".repeat(64), "revision":1, "ready":true
         }]);
-        view["opencode_permissions"] = serde_json::json!([{
+        view["native_permissions"] = serde_json::json!([{
+            "agent":"opencode",
             "run":format!("{STORE}:2"), "request":format!("{STORE}:4"),
             "tool":"browser.read", "title":"Read page", "input":"{\"url\":\"https://example.test\"}",
-            "options":[{"id":"allow_once","kind":"allow_once","name":"Allow once"}]
+            "options":[{"id":"allow_once","name":"Allow once"}]
         }]);
         view["runs"][0]["activity"] = serde_json::json!(vec![
             serde_json::json!({"tool":"execute","phase":"completed"});
@@ -1743,16 +1760,24 @@ mod tests {
         let decoded = PageView::decode(&serde_json::to_vec(&view).unwrap()).unwrap();
         assert_eq!(decoded.runs[0].activity.len(), 64);
         assert!(matches!(decoded.runs[0].route, RunRoute::OpenCode { .. }));
-        assert_eq!(
-            decoded.opencode_permissions[0].options[0].name,
-            "Allow once"
-        );
+        assert_eq!(decoded.native_permissions[0].options[0].name, "Allow once");
 
-        view["opencode_permissions"][0]["options"] = serde_json::json!([
-            {"id":"same","kind":"allow_once","name":"Allow once"},
-            {"id":"same","kind":"allow_always","name":"Always"}
+        view["native_permissions"][0]["options"] = serde_json::json!([
+            {"id":"same","name":"Allow once"},
+            {"id":"same","name":"Always"}
         ]);
         assert!(PageView::decode(&serde_json::to_vec(&view).unwrap()).is_err());
+
+        view["native_permissions"][0]["agent"] = serde_json::json!("codex");
+        assert!(PageView::decode(&serde_json::to_vec(&view).unwrap()).is_err());
+
+        view["native_permissions"][0]["options"] = serde_json::json!([
+            {"id":"allow_once","name":"Allow once"}
+        ]);
+        view["runs"][0]["route"] = serde_json::json!({
+            "kind":"codex", "workflow":format!("{STORE}:3"), "provider":null, "model":null
+        });
+        assert!(PageView::decode(&serde_json::to_vec(&view).unwrap()).is_ok());
     }
 
     #[test]

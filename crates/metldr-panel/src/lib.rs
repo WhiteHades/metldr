@@ -1,3 +1,5 @@
+const WIRE_VERSION: u8 = 5;
+
 use std::{cell::RefCell, rc::Rc};
 
 use js_sys::{Array, Function, Object, Promise, Reflect};
@@ -48,7 +50,7 @@ struct Panel {
     start_pending: bool,
     status_message: String,
     browser_decision_pending: Option<(BrowserActionId, u64)>,
-    opencode_permission_pending: Option<(RunId, RunId)>,
+    native_permission_pending: Option<(RunId, RunId)>,
     stale_generation: u64,
     connection_generation: u64,
 }
@@ -85,7 +87,7 @@ pub fn accept_panel(port: JsValue) {
                 if let Some(request) = request {
                     let message: String = js_message(&error).chars().take(64).collect();
                     if let Ok(raw) = serde_json::to_string(
-                        &json!({"v":4,"request":request,"kind":"error","message":message}),
+                        &json!({"v":crate::WIRE_VERSION,"request":request,"kind":"error","message":message}),
                     ) {
                         if let Ok(value) = js_sys::JSON::parse(&raw) {
                             let _ = call(&reply_port, "postMessage", &[value]);
@@ -144,7 +146,7 @@ async fn panel_start() -> Result<(), JsValue> {
         start_pending: false,
         status_message: "Reconnect loads the saved view without starting work.".into(),
         browser_decision_pending: None,
-        opencode_permission_pending: None,
+        native_permission_pending: None,
         stale_generation: 0,
         connection_generation: 0,
     }));
@@ -229,26 +231,26 @@ fn handle_click(panel: &Rc<RefCell<Panel>>, event: Event) -> Result<(), FlowErro
         }
     }
     match action.as_deref() {
-        Some("opencode-permission") if event.is_trusted() => {
+        Some("native-permission") if event.is_trusted() => {
             let run: RunId =
                 serde_json::from_value(json!(button.get_attribute("data-native-run").ok_or_else(
-                    || FlowError::InvalidInput("OpenCode run identity is missing.".into())
+                    || FlowError::InvalidInput("Native run identity is missing.".into())
                 )?))
-                .map_err(|_| FlowError::InvalidInput("OpenCode run identity is invalid.".into()))?;
+                .map_err(|_| FlowError::InvalidInput("Native run identity is invalid.".into()))?;
             let request: RunId = serde_json::from_value(json!(
                 button.get_attribute("data-native-request").ok_or_else(|| {
-                    FlowError::InvalidInput("OpenCode request identity is missing.".into())
+                    FlowError::InvalidInput("Native request identity is missing.".into())
                 })?
             ))
-            .map_err(|_| FlowError::InvalidInput("OpenCode request identity is invalid.".into()))?;
+            .map_err(|_| FlowError::InvalidInput("Native request identity is invalid.".into()))?;
             let option = button.get_attribute("data-native-option");
             let (flow, generation) = {
                 let mut p = panel.borrow_mut();
                 let pending = p.connected
-                    && p.opencode_permission_pending.is_none()
+                    && p.native_permission_pending.is_none()
                     && active_run(&p.snapshot) == Some(&run)
                     && p.snapshot.as_ref().is_some_and(|view| {
-                        view.opencode_permissions.iter().any(|item| {
+                        view.native_permissions.iter().any(|item| {
                             item.run == run
                                 && item.request == request
                                 && option.as_ref().is_none_or(|id| {
@@ -259,30 +261,30 @@ fn handle_click(panel: &Rc<RefCell<Panel>>, event: Event) -> Result<(), FlowErro
                 if !pending {
                     return Ok(());
                 }
-                p.opencode_permission_pending = Some((run.clone(), request.clone()));
+                p.native_permission_pending = Some((run.clone(), request.clone()));
                 (p.flow.clone(), p.connection_generation)
             };
             disable_native_permission_buttons(panel);
             set_panel_status(
                 panel,
-                "Sending OpenCode permission decision to the local host.",
+                "Sending native permission decision to the local host.",
             );
             let panel = Rc::clone(panel);
             spawn_local(async move {
-                let result = flow.opencode_permission(run, request, option).await;
+                let result = flow.native_permission(run, request, option).await;
                 let mut p = panel.borrow_mut();
                 if p.connection_generation != generation {
                     return;
                 }
                 match result {
                     Ok(view) => {
-                        p.opencode_permission_pending = None;
+                        p.native_permission_pending = None;
                         drop(p);
                         apply_view(&panel, view, generation);
                     }
                     Err(error) => {
                         if !matches!(&error, FlowError::Timeout | FlowError::Disconnected) {
-                            p.opencode_permission_pending = None;
+                            p.native_permission_pending = None;
                         }
                         p.status_message = if matches!(
                             &error,
@@ -503,7 +505,7 @@ fn reconnect(panel: Rc<RefCell<Panel>>) {
                         let mut p = panel.borrow_mut();
                         p.flow = flow.clone();
                         p.start_pending = false;
-                        p.opencode_permission_pending = None;
+                        p.native_permission_pending = None;
                         p.connection_generation = p.connection_generation.wrapping_add(1);
                         p.stale_generation = p.stale_generation.wrapping_add(1);
                         if let Some(view) = &mut p.snapshot {
@@ -585,17 +587,17 @@ fn apply_view(panel: &Rc<RefCell<Panel>>, view: PageView, generation: u64) {
         return;
     }
     p.snapshot = Some(view);
-    if p.opencode_permission_pending
+    if p.native_permission_pending
         .as_ref()
         .is_some_and(|(run, request)| {
             !p.snapshot.as_ref().is_some_and(|view| {
-                view.opencode_permissions
+                view.native_permissions
                     .iter()
                     .any(|item| &item.run == run && &item.request == request)
             })
         })
     {
-        p.opencode_permission_pending = None;
+        p.native_permission_pending = None;
     }
     p.connected = p.flow.is_connected();
     p.status_message = if p.snapshot.as_ref().and_then(PageView::active_run).is_some() {
@@ -655,7 +657,7 @@ fn render(panel: &Panel) {
 
 fn disable_native_permission_buttons(panel: &Rc<RefCell<Panel>>) {
     let document = panel.borrow().document.clone();
-    if let Ok(buttons) = document.query_selector_all("[data-action='opencode-permission']") {
+    if let Ok(buttons) = document.query_selector_all("[data-action='native-permission']") {
         for index in 0..buttons.length() {
             if let Some(button) = buttons
                 .item(index)
@@ -769,7 +771,7 @@ fn connect_native() -> Result<(), JsValue> {
             return;
         }
         browser_background::disconnect();
-        forward_panel(&json!({"v":4,"request":null,"kind":"disconnected"}));
+        forward_panel(&json!({"v":crate::WIRE_VERSION,"request":null,"kind":"disconnected"}));
         set_background_native(JsValue::NULL);
     })?;
     Ok(())

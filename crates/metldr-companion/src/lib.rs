@@ -4,7 +4,7 @@ const FRAME_MAX: usize = 65_536;
 const STORE_MAX: usize = 49_152;
 const TEXT_MAX: usize = 8_192;
 const CONFIG_MAX: usize = 4_096;
-const WIRE_VERSION: u8 = 4;
+const WIRE_VERSION: u8 = 5;
 
 mod agent;
 mod agent_model;
@@ -22,6 +22,7 @@ mod flow;
 mod https_profile;
 mod model;
 mod native;
+mod native_permission;
 mod opencode;
 mod opencode_model;
 mod opencode_owner;

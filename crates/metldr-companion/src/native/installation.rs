@@ -141,7 +141,7 @@ mod tests {
     use std::os::unix::fs::{PermissionsExt, symlink};
 
     fn greeting(key: &str) -> Vec<u8> {
-        serde_json::to_vec(&json!({"v":4,"kind":"profile","key":key})).unwrap()
+        serde_json::to_vec(&json!({"v":crate::WIRE_VERSION,"kind":"profile","key":key})).unwrap()
     }
 
     #[test]
@@ -185,9 +185,9 @@ mod tests {
             assert!(ProfileKey::decode(&greeting(&key)).is_err());
         }
         for bytes in [
-            br#"{"v":4,"command":{"op":"view"},"request":"early"}"#.as_slice(),
-            br#"{"v":4,"kind":"profile","key":"bad"}"#.as_slice(),
-            br#"{"v":4,"kind":"profile","key":"bad","path":"/elsewhere"}"#.as_slice(),
+            br#"{"v":5,"command":{"op":"view"},"request":"early"}"#.as_slice(),
+            br#"{"v":5,"kind":"profile","key":"bad"}"#.as_slice(),
+            br#"{"v":5,"kind":"profile","key":"bad","path":"/elsewhere"}"#.as_slice(),
         ] {
             assert!(ProfileKey::decode(bytes).is_err());
         }

@@ -268,9 +268,10 @@ impl Owner {
         }
         // Install the waiter before exposing the command to the extension.
         slot.pending.insert(id, call.ack);
-        if let Err(error) = self.emit(json!({"v":4,"kind":"browser_rpc","call":id,
-            "run":call.run,"operation":call.operation}))
-        {
+        if let Err(error) = self.emit(
+            json!({"v":crate::WIRE_VERSION,"kind":"browser_rpc","call":id,
+            "run":call.run,"operation":call.operation}),
+        ) {
             self.browser_io_finish(&call.run);
             return Err(error);
         }

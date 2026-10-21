@@ -57,7 +57,10 @@ impl Host {
     }
     fn send(&mut self, request: &str, command: Value) {
         let bytes = zeroize::Zeroizing::new(
-            serde_json::to_vec(&json!({"v":4,"request":request,"command":command})).unwrap(),
+            serde_json::to_vec(
+                &json!({"v":crate::WIRE_VERSION,"request":request,"command":command}),
+            )
+            .unwrap(),
         );
         crate::wire::write_raw(self.child.stdin.as_mut().unwrap(), &bytes).unwrap();
     }

@@ -9,6 +9,7 @@ use std::{
 };
 
 struct Pending {
+    key: u64,
     request: Permission,
     answer: mpsc::Receiver<Option<String>>,
 }
@@ -31,6 +32,7 @@ pub(super) async fn run(
     let (mut tools, mut seen_tools): (BTreeMap<String, ActiveTool>, BTreeSet<String>) =
         (BTreeMap::new(), BTreeSet::new());
     let (mut cancelled, mut bytes, mut activities) = (false, 0usize, 0usize);
+    let mut next_permission_key = 1u64;
     loop {
         let stopping = stop.load(Ordering::Acquire) || failed.load(Ordering::Acquire);
         stop_wait.check(stopping, Instant::now())?;
@@ -56,6 +58,10 @@ pub(super) async fn run(
                 session
                     .reply_permission(&request.request, answer.as_deref())
                     .await?;
+                let _ = tx.send(Event::NativePermissionResolved {
+                    run: job.run.clone(),
+                    key: request.key,
+                });
             } else {
                 index += 1;
             }
@@ -75,14 +81,38 @@ pub(super) async fn run(
                     session.reply_permission(&request, None).await?;
                     return Err("OpenCode permission exceeds the application bound".into());
                 }
+                let key = next_permission_key;
+                next_permission_key = next_permission_key
+                    .checked_add(1)
+                    .ok_or("OpenCode permission key exhausted")?;
+                let native = request.details();
+                let options = native["options"]
+                    .as_array()
+                    .ok_or("OpenCode permission options missing")?;
+                let tool = native["toolCall"]["name"]
+                    .as_str()
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or("OpenCode tool");
+                let details = serde_json::json!({
+                    "agent":"opencode",
+                    "tool":tool,
+                    "title":native["toolCall"]["title"],
+                    "input":serde_json::to_string(&native["toolCall"]["rawInput"] )?,
+                    "options":options.iter().map(|option| serde_json::json!({"id":option["optionId"],"name":option["name"]})).collect::<Vec<_>>(),
+                });
                 let (ack, answer) = mpsc::sync_channel(1);
-                tx.send(Event::OpenCodePermission {
+                tx.send(Event::NativePermission {
                     run: job.run.clone(),
-                    details: request.details().clone(),
+                    key,
+                    details,
                     ack,
                 })
                 .map_err(|_| "OpenCode permission owner is unavailable")?;
-                pending.push(Pending { request, answer });
+                pending.push(Pending {
+                    key,
+                    request,
+                    answer,
+                });
             }
             NativeEvent::Update(update) => match update["sessionUpdate"].as_str() {
                 Some("agent_message_chunk") => {

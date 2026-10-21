@@ -27,6 +27,9 @@ pub enum Event {
         text: String,
     },
     ToolCall(ToolCall),
+    Approval(crate::Approval),
+    ApprovalResolved(crate::ApprovalId),
+    ApprovalsUpdated(Vec<(crate::ApprovalId, crate::Approval)>),
     ToolReport(crate::ToolReport),
     ToolProgress {
         turn: TurnId,
@@ -47,9 +50,51 @@ impl CodexSession {
             .turn
             .as_ref()
             .ok_or_else(|| invalid("No active Codex turn"))?;
-        if value.get("id").is_some() && method != "item/tool/call" {
+        let approval = matches!(
+            method.as_str(),
+            "item/commandExecution/requestApproval"
+                | "item/fileChange/requestApproval"
+                | "item/permissions/requestApproval"
+        );
+        if value.get("id").is_some() && method != "item/tool/call" && !approval {
             self.rpc.send(json!({"id":value["id"],"error":{"code":-32601,"message":"This client does not support this server request"}})).await?;
             return Err(invalid("Unsupported Codex server request"));
+        }
+        if method == "serverRequest/resolved" {
+            if params["threadId"] != self.info.id.as_str() {
+                return Err(invalid("Codex resolution thread mismatch"));
+            }
+            let request = params
+                .get("requestId")
+                .filter(|id| id.is_string() || id.is_i64() || id.is_u64())
+                .ok_or_else(|| invalid("Codex resolution request identity missing"))?;
+            return Ok(self
+                .approvals
+                .resolved(request)
+                .map(Event::ApprovalResolved));
+        }
+        if approval {
+            scope(params, self.info.id.as_str(), active.as_str(), false)?;
+            let request = value
+                .get("id")
+                .cloned()
+                .ok_or_else(|| invalid("Codex approval request identity missing"))?;
+            if self.pending_tools.contains(&request) {
+                return Err(invalid("Codex server request identity repeated"));
+            }
+            let changes = if method == "item/fileChange/requestApproval" {
+                Some(self.reports.changes(&field(params, "itemId")?)?)
+            } else {
+                None
+            };
+            return Ok(Some(Event::Approval(self.approvals.insert(
+                self.connection,
+                active,
+                request,
+                &method,
+                params,
+                changes,
+            )?)));
         }
         if !matches!(
             method.as_str(),
@@ -58,6 +103,7 @@ impl CodexSession {
                 | "item/started"
                 | "item/completed"
                 | "item/commandExecution/outputDelta"
+                | "item/fileChange/patchUpdated"
                 | "turn/completed"
         ) {
             return Ok(None);
@@ -71,7 +117,10 @@ impl CodexSession {
                     .filter(|id| id.is_string() || id.is_u64())
                     .cloned()
                     .ok_or_else(|| invalid("Codex tool request identity missing"))?;
-                if self.pending_tools.len() >= 32 || self.pending_tools.contains(&id) {
+                if self.pending_tools.len() >= 32
+                    || self.pending_tools.contains(&id)
+                    || self.approvals.contains(&id)
+                {
                     return Err(invalid("Codex tool request limit or duplicate identity"));
                 }
                 let call = ToolCall {
@@ -115,6 +164,17 @@ impl CodexSession {
                         output,
                     })
             }
+            "item/fileChange/patchUpdated" => {
+                let item = self.reports.patch(params)?;
+                if self.approvals.file_pending(&item) {
+                    let updated = self
+                        .approvals
+                        .refresh(&item, self.reports.changes(&item)?)?;
+                    (!updated.is_empty()).then_some(Event::ApprovalsUpdated(updated))
+                } else {
+                    None
+                }
+            }
             "turn/completed" => {
                 let status = match params["turn"]["status"].as_str() {
                     Some("completed") => TurnStatus::Completed,
@@ -122,6 +182,10 @@ impl CodexSession {
                     Some("failed") => TurnStatus::Failed,
                     _ => return Err(invalid("Codex terminal status invalid")),
                 };
+                if status == TurnStatus::Completed && !self.approvals.is_empty() {
+                    return Err(invalid("Codex completed with unanswered approvals"));
+                }
+                self.approvals.clear();
                 self.pending_tools.clear();
                 self.reports.clear();
                 Some(Event::Finished {

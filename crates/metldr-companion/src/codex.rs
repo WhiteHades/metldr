@@ -7,18 +7,16 @@ use crate::{
     flow::Event,
     model::Source,
 };
-use metldr_codex_session::{
-    CodexSession, Event as NativeEvent, Interrupt, Thread, ToolSpec, TurnStatus,
+use metldr_codex_session::{CodexSession, Thread, ToolSpec};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+    mpsc,
 };
-use metldr_conversation::{Change, MessageKey};
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-        mpsc,
-    },
-    time::{Duration, Instant},
-};
+
+mod approval;
+mod review;
+mod stream;
 
 pub(super) struct Job {
     pub run: String,
@@ -89,7 +87,7 @@ async fn execute_inner(
         events,
         stop.clone(),
     );
-    let result = run(job, &mut session, &mut tools, stop, tx).await;
+    let result = stream::run(job, &mut session, &mut tools, stop, tx).await;
     let browser_closed = tools.close().await;
     match (browser_closed, session.close().await) {
         (Ok(()), Ok(exit)) if exit.code == Some(0) && !exit.forced && exit.drained => (
@@ -112,165 +110,4 @@ async fn execute_inner(
             false,
         ),
     }
-}
-
-async fn run(
-    job: &Job,
-    session: &mut CodexSession,
-    tools: &mut Tools,
-    stop: &AtomicBool,
-    tx: &mpsc::SyncSender<Event>,
-) -> Result<Outcome> {
-    let info = session.info();
-    let identity = Identity {
-        thread: info.id.as_str().into(),
-        session: info.session_id.clone(),
-    };
-    let selection = Selection {
-        provider: info.provider.clone(),
-        model: info.model.clone(),
-    };
-    let (ack, committed) = mpsc::sync_channel(1);
-    tx.send(Event::CodexBound {
-        run: job.run.clone(),
-        workflow: job.workflow.clone(),
-        identity,
-        selection,
-        ack,
-    })?;
-    if !committed.recv_timeout(Duration::from_secs(5))?? || stop.load(Ordering::Acquire) {
-        return Ok(Outcome::Cancelled);
-    }
-    let prompt = agent::message(&job.text, &job.source)?;
-    session
-        .prompt(&format!("{prompt}\n\n{BROWSER_POLICY}"))
-        .await?;
-    let mut stop_wait = agent::StopWait::default();
-    let mut interrupted = None;
-    loop {
-        let stopping = stop.load(Ordering::Acquire);
-        stop_wait.check(stopping, Instant::now())?;
-        if interrupted.is_none() && stopping {
-            interrupted = Some(session.interrupt().await?);
-        }
-        let event =
-            match tokio::time::timeout(Duration::from_millis(50), session.next_event()).await {
-                Ok(event) => event?,
-                Err(_) => continue,
-            };
-        match event {
-            NativeEvent::TextDelta { item_id, text } => {
-                text_change(
-                    tx,
-                    &job.run,
-                    Change::Append {
-                        key: MessageKey::native(item_id)?,
-                        text,
-                    },
-                )?;
-            }
-            NativeEvent::Message { item_id, text } => {
-                text_change(
-                    tx,
-                    &job.run,
-                    Change::Final {
-                        key: MessageKey::native(item_id)?,
-                        text,
-                    },
-                )?;
-            }
-            NativeEvent::ToolProgress {
-                item_id, output, ..
-            } => {
-                crate::tool_report::send_progress(
-                    tx,
-                    &job.run,
-                    crate::tool_report::Call {
-                        id: item_id,
-                        title: None,
-                        input: None,
-                        output: Some(crate::tool_report::Preview {
-                            text: output.text,
-                            truncated: output.truncated,
-                        }),
-                    },
-                )?;
-            }
-            NativeEvent::ToolReport(report) => {
-                use metldr_codex_session::{ToolOutcome, ToolState};
-                let (phase, outcome) = match report.state {
-                    ToolState::Started => ("started", None),
-                    ToolState::Finished(outcome) => (
-                        if matches!(outcome, ToolOutcome::Failed | ToolOutcome::Declined) {
-                            "failed"
-                        } else {
-                            "completed"
-                        },
-                        Some(
-                            match outcome {
-                                ToolOutcome::Succeeded => "succeeded",
-                                ToolOutcome::Failed => "failed",
-                                ToolOutcome::Declined => "declined",
-                                ToolOutcome::Unspecified => "unspecified",
-                            }
-                            .into(),
-                        ),
-                    ),
-                };
-                let preview = |p: metldr_codex_session::Preview| crate::tool_report::Preview {
-                    text: p.text,
-                    truncated: p.truncated,
-                };
-                tx.send(Event::CodexActivity {
-                    run: job.run.clone(),
-                    activity: crate::agent_model::Activity {
-                        tool: report.tool,
-                        phase: phase.into(),
-                        outcome,
-                        call: Some(crate::tool_report::Call {
-                            id: report.item_id,
-                            title: Some(preview(report.title)),
-                            input: Some(preview(report.input)),
-                            output: report.output.map(preview),
-                        }),
-                    },
-                })?;
-            }
-            NativeEvent::ToolCall(call) => {
-                let decoded = decode_call(&call.name, call.arguments.clone())?;
-                let outcome = tools.dispatch(&call.call_id, decoded, stop, None).await;
-                if stop.load(Ordering::Acquire) {
-                    stop_wait.check(true, Instant::now())?;
-                    if interrupted.is_none() {
-                        interrupted = Some(session.interrupt().await?);
-                    }
-                    continue;
-                }
-                let outcome = outcome?;
-                session
-                    .reply_tool(call, &serde_json::to_string(&outcome)?, true)
-                    .await?;
-            }
-            NativeEvent::Finished { status, .. } => {
-                return match status {
-                    TurnStatus::Completed => Ok(Outcome::Complete),
-                    TurnStatus::Interrupted if interrupted == Some(Interrupt::Acknowledged) => {
-                        Ok(Outcome::Cancelled)
-                    }
-                    TurnStatus::Interrupted => {
-                        Err("Codex interrupted without acknowledged Stop".into())
-                    }
-                    TurnStatus::Failed => Err("Codex reported a failed turn".into()),
-                };
-            }
-        }
-    }
-}
-
-fn text_change(tx: &mpsc::SyncSender<Event>, run: &str, change: Change) -> Result<()> {
-    tx.send(Event::Text {
-        run: run.into(),
-        change,
-    })?;
-    Ok(())
 }

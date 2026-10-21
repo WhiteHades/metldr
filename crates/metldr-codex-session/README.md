@@ -26,6 +26,15 @@ async fn main() -> metldr_codex_session::Result<()> {
             }
             Event::Message { .. } | Event::ToolProgress { .. } => (),
             Event::ToolReport(report) => println!("{}: {:?}", report.tool, report.state),
+            Event::Approval(request) => {
+                session.reply_approval(&request, None).await?;
+            }
+            Event::ApprovalResolved(_) => (),
+            Event::ApprovalsUpdated(requests) => {
+                for (_, request) in requests {
+                    session.reply_approval(&request, None).await?;
+                }
+            }
             Event::Finished { .. } => break,
         }
     }
@@ -42,7 +51,13 @@ Each completed `Event::Message` carries its item ID and full text. Use it to rec
 
 Cancelling an event wait preserves its partial frame. Cancelling an RPC or pipe write kills the process and makes the connection unusable. Frames, queued events, tool requests and RPC deadlines are bounded. Tool replies belong to their originating connection and turn.
 
-Native approval requests are unsupported and fail without approval. Clean direct process exit and drained stdout do not establish cleanup of every possible descendant. Callers still own process supervision and recovery after host loss.
+Native command, file change and additional permission requests produce `Event::Approval`. Display the complete `review()` and each offered choice before calling `reply_approval`. Choice IDs are opaque and belong to that request. Persistent command rules and session grants have separate labels. The example cancels requests because it has no approval interface.
+
+Approval handles belong to their connection, turn and request generation. A resolved request cannot be answered again. `Event::ApprovalResolved` clears its interface. `Event::ApprovalsUpdated` replaces file reviews when their patches change and invalidates the preceding handles. File approval requires a complete current diff, with a limit of 32 KiB. Ordinary tool reports remain truncated observations and cannot substitute for approval review.
+
+An approval reply returns true when it requests native turn cancellation. Wait for an interrupted terminal event before treating the task as cancelled. Empty additional permission grants deny the request and let Codex continue. Callers must keep consuming events while review is pending. Native policy, authentication and configuration remain under Codex control.
+
+Clean direct process exit and drained stdout do not establish cleanup of every possible descendant. Callers still own process supervision and recovery after host loss.
 
 Run `make check-codex` from the repository root.
 

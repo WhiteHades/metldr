@@ -235,7 +235,7 @@ impl Owner {
             stop,
             worker,
         });
-        self.emit(json!({"v":4,"request":id,"kind":"started","run":run}))
+        self.emit(json!({"v":crate::WIRE_VERSION,"request":id,"kind":"started","run":run}))
     }
 }
 

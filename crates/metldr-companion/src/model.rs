@@ -210,8 +210,8 @@ pub(super) enum Command {
         revision: u64,
         text: String,
     },
-    #[serde(rename = "opencode_permission")]
-    OpenCodePermission {
+    #[serde(rename = "native_permission")]
+    NativePermission {
         run: String,
         request: String,
         option: Option<String>,
