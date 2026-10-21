@@ -11,7 +11,6 @@ use std::{
 struct Pending {
     request: Permission,
     answer: mpsc::Receiver<Option<String>>,
-    deadline: Instant,
 }
 
 struct ActiveTool {
@@ -58,9 +57,6 @@ pub(super) async fn run(
                     .reply_permission(&request.request, answer.as_deref())
                     .await?;
             } else {
-                if Instant::now() >= pending[index].deadline {
-                    return Err("OpenCode native permission decision deadline expired".into());
-                }
                 index += 1;
             }
         }
@@ -86,11 +82,7 @@ pub(super) async fn run(
                     ack,
                 })
                 .map_err(|_| "OpenCode permission owner is unavailable")?;
-                pending.push(Pending {
-                    request,
-                    answer,
-                    deadline: Instant::now() + Duration::from_secs(30),
-                });
+                pending.push(Pending { request, answer });
             }
             NativeEvent::Update(update) => match update["sessionUpdate"].as_str() {
                 Some("agent_message_chunk") => {
