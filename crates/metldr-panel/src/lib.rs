@@ -1,4 +1,4 @@
-const WIRE_VERSION: u8 = 8;
+const WIRE_VERSION: u8 = 9;
 
 use std::{cell::RefCell, rc::Rc};
 
@@ -23,6 +23,7 @@ mod provider_settings;
 mod readiness;
 mod results;
 mod site;
+mod summary;
 mod view;
 use flow::{FlowClient, StopReceipt};
 use model::{
@@ -403,27 +404,7 @@ fn handle_click(panel: &Rc<RefCell<Panel>>, event: Event) -> Result<(), FlowErro
         }
         Some("reconnect") => reconnect(Rc::clone(panel)),
         Some("capture") if event.is_trusted() => capture_page(panel),
-        Some("summarize") => {
-            if let Some(select) = panel
-                .borrow()
-                .document
-                .get_element_by_id("execution")
-                .and_then(|element| element.dyn_into::<web_sys::HtmlSelectElement>().ok())
-                .filter(|select| select.value().is_empty())
-            {
-                select.set_value("model");
-            }
-            let (flow, generation) = {
-                let p = panel.borrow();
-                (p.flow.clone(), p.connection_generation)
-            };
-            begin_start(panel);
-            let start = flow.summarize_selected();
-            let panel = Rc::clone(panel);
-            spawn_local(async move {
-                follow_start(panel, flow, generation, start.await, "Capture failed").await;
-            });
-        }
+        Some("summarize") if event.is_trusted() => summary::start(panel)?,
         Some("stop") => {
             let (flow, run, generation) = {
                 let p = panel.borrow();

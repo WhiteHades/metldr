@@ -9,7 +9,7 @@ use web_sys::{
 
 use crate::model::{
     AgentSessionView, BrowserRouteView, ChatRouteView, FlowError, GoogleRouteView, PageView,
-    ResponsesRouteView, RunId, UserText,
+    ProviderProtocol, ResponsesRouteView, RunId, UserText,
 };
 use crate::{Panel, active_run, begin_start, err, follow_start, js_message, set_panel_status};
 
@@ -69,18 +69,39 @@ pub(super) fn install(panel: &Rc<RefCell<Panel>>) -> Result<(), JsValue> {
     Ok(())
 }
 
-enum Destination {
+pub(super) enum Destination {
     Model,
-    Browser { fingerprint: Option<String> },
-    Chat { fingerprint: String },
-    Responses { fingerprint: String },
-    Google { fingerprint: String },
+    Browser {
+        fingerprint: Option<String>,
+    },
+    Chat {
+        fingerprint: String,
+    },
+    Responses {
+        fingerprint: String,
+    },
+    Google {
+        fingerprint: String,
+    },
+    PageText {
+        protocol: ProviderProtocol,
+        fingerprint: String,
+    },
     Pi,
     Codex,
     OpenCode,
-    Continue { workflow: RunId, revision: u64 },
-    ContinueCodex { workflow: RunId, revision: u64 },
-    ContinueOpenCode { workflow: RunId, revision: u64 },
+    Continue {
+        workflow: RunId,
+        revision: u64,
+    },
+    ContinueCodex {
+        workflow: RunId,
+        revision: u64,
+    },
+    ContinueOpenCode {
+        workflow: RunId,
+        revision: u64,
+    },
 }
 
 fn codex_mode(panel: &Rc<RefCell<Panel>>) -> &'static str {
@@ -126,7 +147,54 @@ fn opencode_ready(view: &PageView, session: &AgentSessionView) -> bool {
         && Some(&session.source) == view.source()
 }
 
-fn selected(panel: &Panel) -> Result<Destination, FlowError> {
+fn page_route(view: &PageView, protocol: ProviderProtocol) -> Option<(&str, &str, &str)> {
+    match protocol {
+        ProviderProtocol::Messages => view.browser_route.as_ref().and_then(|route| match route {
+            BrowserRouteView::HttpsMessages {
+                endpoint,
+                model,
+                fingerprint,
+                ..
+            } => Some((endpoint.as_str(), model.as_str(), fingerprint.as_str())),
+            BrowserRouteView::Messages { .. } => None,
+        }),
+        ProviderProtocol::Responses => view.responses_route.as_ref().map(
+            |ResponsesRouteView::HttpsResponses {
+                 endpoint,
+                 model,
+                 fingerprint,
+                 ..
+             }| (endpoint.as_str(), model.as_str(), fingerprint.as_str()),
+        ),
+        ProviderProtocol::ChatCompletions => view.chat_route.as_ref().map(
+            |ChatRouteView::HttpsChatCompletions {
+                 endpoint,
+                 model,
+                 fingerprint,
+                 ..
+             }| (endpoint.as_str(), model.as_str(), fingerprint.as_str()),
+        ),
+        ProviderProtocol::GoogleInteractions => view.google_route.as_ref().map(
+            |GoogleRouteView::HttpsGoogleInteractions {
+                 endpoint,
+                 model,
+                 fingerprint,
+                 ..
+             }| (endpoint.as_str(), model.as_str(), fingerprint.as_str()),
+        ),
+    }
+}
+
+fn provider_name(protocol: ProviderProtocol) -> &'static str {
+    match protocol {
+        ProviderProtocol::Messages => "Messages",
+        ProviderProtocol::Responses => "OpenAI Responses",
+        ProviderProtocol::ChatCompletions => "Chat Completions",
+        ProviderProtocol::GoogleInteractions => "Google Interactions",
+    }
+}
+
+pub(super) fn selected(panel: &Panel) -> Result<Destination, FlowError> {
     let value = select(panel)
         .map_err(|error| FlowError::Host(js_message(&error)))?
         .value();
@@ -202,6 +270,34 @@ fn selected(panel: &Panel) -> Result<Destination, FlowError> {
                 "Google Interactions is unavailable.".into(),
             )),
         },
+        value if value.starts_with("page:") => {
+            let protocol = match value {
+                "page:messages" => ProviderProtocol::Messages,
+                "page:responses" => ProviderProtocol::Responses,
+                "page:chat_completions" => ProviderProtocol::ChatCompletions,
+                "page:google_interactions" => ProviderProtocol::GoogleInteractions,
+                _ => {
+                    return Err(FlowError::InvalidInput(
+                        "The selected page questions provider is unavailable.".into(),
+                    ));
+                }
+            };
+            let fingerprint = panel
+                .snapshot
+                .as_ref()
+                .and_then(|view| page_route(view, protocol))
+                .map(|(_, _, fingerprint)| fingerprint.to_owned())
+                .ok_or_else(|| {
+                    FlowError::InvalidInput(format!(
+                        "{} page questions are unavailable.",
+                        provider_name(protocol)
+                    ))
+                })?;
+            Ok(Destination::PageText {
+                protocol,
+                fingerprint,
+            })
+        }
         "pi" if panel
             .snapshot
             .as_ref()
@@ -301,6 +397,18 @@ fn submit(panel: &Rc<RefCell<Panel>>) -> Result<(), FlowError> {
             Destination::Chat { fingerprint } => flow.chat_task(source, text, fingerprint).await,
             Destination::Google { fingerprint } => {
                 flow.google_task(source, text, fingerprint).await
+            }
+            Destination::PageText {
+                protocol,
+                fingerprint,
+            } => {
+                flow.page_text(
+                    source,
+                    protocol,
+                    fingerprint,
+                    crate::flow::PageTextPrompt::Answer(text),
+                )
+                .await
             }
             Destination::Pi => flow.pi_prompt(source, text).await,
             Destination::Codex => flow.codex_prompt(source, text, codex_mode).await,
@@ -480,17 +588,29 @@ pub(super) fn render(panel: &Panel) -> Result<(), JsValue> {
             .set_disabled(view.is_none_or(|view| !view.fixture_available));
     }
     if let Some(option) = panel.document.get_element_by_id("execution-browser") {
-        option
-            .dyn_into::<HtmlOptionElement>()?
-            .set_disabled(view.is_none_or(|view| view.browser_route.is_none()));
+        let option = option.dyn_into::<HtmlOptionElement>()?;
+        match view.and_then(|view| view.browser_route.as_ref()) {
+            Some(BrowserRouteView::Messages { model }) => {
+                option.set_text_content(Some(&format!("Browser task, Messages, {model}")))
+            }
+            Some(BrowserRouteView::HttpsMessages {
+                endpoint, model, ..
+            }) => option.set_text_content(Some(&format!(
+                "Browser task, Messages, {model}, {endpoint}"
+            ))),
+            None => option.set_text_content(Some("Browser task, Messages")),
+        }
+        option.set_disabled(view.is_none_or(|view| view.browser_route.is_none()));
     }
     if let Some(option) = panel.document.get_element_by_id("execution-responses") {
         let option = option.dyn_into::<HtmlOptionElement>()?;
         match view.and_then(|view| view.responses_route.as_ref()) {
             Some(ResponsesRouteView::HttpsResponses {
                 endpoint, model, ..
-            }) => option.set_text_content(Some(&format!("OpenAI Responses, {model}, {endpoint}"))),
-            None => option.set_text_content(Some("OpenAI Responses")),
+            }) => option.set_text_content(Some(&format!(
+                "Browser task, OpenAI Responses, {model}, {endpoint}"
+            ))),
+            None => option.set_text_content(Some("Browser task, OpenAI Responses")),
         }
         option.set_disabled(view.is_none_or(|view| view.responses_route.is_none()));
     }
@@ -499,8 +619,10 @@ pub(super) fn render(panel: &Panel) -> Result<(), JsValue> {
         match view.and_then(|view| view.chat_route.as_ref()) {
             Some(ChatRouteView::HttpsChatCompletions {
                 endpoint, model, ..
-            }) => option.set_text_content(Some(&format!("Chat Completions, {model}, {endpoint}"))),
-            None => option.set_text_content(Some("Chat Completions")),
+            }) => option.set_text_content(Some(&format!(
+                "Browser task, Chat Completions, {model}, {endpoint}"
+            ))),
+            None => option.set_text_content(Some("Browser task, Chat Completions")),
         }
         option.set_disabled(view.is_none_or(|view| view.chat_route.is_none()));
     }
@@ -509,12 +631,38 @@ pub(super) fn render(panel: &Panel) -> Result<(), JsValue> {
         match view.and_then(|view| view.google_route.as_ref()) {
             Some(GoogleRouteView::HttpsGoogleInteractions {
                 endpoint, model, ..
-            }) => {
-                option.set_text_content(Some(&format!("Google Interactions, {model}, {endpoint}")))
-            }
-            None => option.set_text_content(Some("Google Interactions")),
+            }) => option.set_text_content(Some(&format!(
+                "Browser task, Google Interactions, {model}, {endpoint}"
+            ))),
+            None => option.set_text_content(Some("Browser task, Google Interactions")),
         }
         option.set_disabled(view.is_none_or(|view| view.google_route.is_none()));
+    }
+    for (id, protocol) in [
+        ("execution-page-messages", ProviderProtocol::Messages),
+        ("execution-page-responses", ProviderProtocol::Responses),
+        ("execution-page-chat", ProviderProtocol::ChatCompletions),
+        (
+            "execution-page-google",
+            ProviderProtocol::GoogleInteractions,
+        ),
+    ] {
+        if let Some(option) = panel.document.get_element_by_id(id) {
+            let option = option.dyn_into::<HtmlOptionElement>()?;
+            if let Some((endpoint, model, _)) = view.and_then(|view| page_route(view, protocol)) {
+                option.set_text_content(Some(&format!(
+                    "Page questions, {}, {model}, {endpoint}",
+                    provider_name(protocol)
+                )));
+                option.set_disabled(false);
+            } else {
+                option.set_text_content(Some(&format!(
+                    "Page questions, {}",
+                    provider_name(protocol)
+                )));
+                option.set_disabled(true);
+            }
+        }
     }
     select.set_value(&value);
     if let Some(mode) = panel.document.get_element_by_id("codex-mode-wrap") {
@@ -529,6 +677,7 @@ pub(super) fn render(panel: &Panel) -> Result<(), JsValue> {
         crate::composer_ui::remember_choice(panel, &value);
     }
     let busy = panel.start_pending || active_run(&panel.snapshot).is_some();
+    crate::summary::render(panel)?;
     let button = panel
         .document
         .query_selector("[data-action='ask']")?
@@ -549,18 +698,24 @@ pub(super) fn render(panel: &Panel) -> Result<(), JsValue> {
                 None => "The browser task is unavailable.".into(),
             },
             Ok(Destination::Responses { .. }) => match view.and_then(|view| view.responses_route.as_ref()) {
-                Some(ResponsesRouteView::HttpsResponses { endpoint, model, .. }) => format!("OpenAI Responses uses configured model {model} at {endpoint}."),
+                Some(ResponsesRouteView::HttpsResponses { endpoint, model, .. }) => format!("Browser task uses OpenAI Responses model {model} at {endpoint}."),
                 None => "OpenAI Responses is unavailable.".into(),
             },
             Ok(Destination::Chat { .. }) => match view.and_then(|view| view.chat_route.as_ref()) {
-                Some(ChatRouteView::HttpsChatCompletions { endpoint, model, .. }) => format!("Chat Completions uses configured model {model} at {endpoint}. Changes require your approval."),
+                Some(ChatRouteView::HttpsChatCompletions { endpoint, model, .. }) => format!("Browser task uses Chat Completions model {model} at {endpoint}. Proposed browser actions require your approval."),
                 None => "Chat Completions is unavailable.".into(),
             },
             Ok(Destination::Google { .. }) => match view.and_then(|view| view.google_route.as_ref()) {
-                Some(GoogleRouteView::HttpsGoogleInteractions { endpoint, model, .. }) => format!("Google Interactions uses configured model {model} at {endpoint}."),
+                Some(GoogleRouteView::HttpsGoogleInteractions { endpoint, model, .. }) => format!("Browser task uses Google Interactions model {model} at {endpoint}."),
                 None => "Google Interactions is unavailable.".into(),
             },
-            Ok(Destination::Model) => "The fixture model receives your request and the saved source. Page summaries also use this model.".into(),
+            Ok(Destination::PageText { protocol, .. }) => {
+                view.and_then(|view| page_route(view, protocol)).map_or_else(
+                    || "Page questions are unavailable.".into(),
+                    |(endpoint, model, _)| format!("{} page questions use model {model} at {endpoint}. Sends this saved page and completed answers from this page and provider selection. No browser actions are available.", provider_name(protocol)),
+                )
+            },
+            Ok(Destination::Model) => "The configured test model receives your request and the saved source.".into(),
             Ok(Destination::Pi) => "Pi starts a new native session with the saved source. Pi manages its provider, tools and permissions.".into(),
             Ok(Destination::Codex) => "Codex starts a native session with the saved source. Codex manages its provider, tools and permissions.".into(),
             Ok(Destination::OpenCode) => "OpenCode starts a native session with the saved source. OpenCode manages its provider, tools and permissions.".into(),

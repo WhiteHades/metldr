@@ -136,6 +136,16 @@ pub(super) fn render(
             Launch::ConfiguredResponses { binding, .. } => binding.public_responses(),
             Launch::ConfiguredGoogle { binding, .. } => binding.public_google(),
             Launch::ConfiguredChat { binding, .. } => binding.public_chat_completions(),
+            Launch::Text {
+                protocol, binding, ..
+            } => json!({
+                "kind":"text",
+                "protocol":protocol.name(),
+                "endpoint":binding.endpoint,
+                "model":binding.model,
+                "revision":binding.revision,
+                "fingerprint":binding.fingerprint
+            }),
             Launch::LegacyUnspecified => json!({"kind":"legacy_unspecified"}),
             Launch::Fixture { .. } => json!({"kind":"fixture"}),
             Launch::Pi { workflow, .. } => {

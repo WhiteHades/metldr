@@ -565,7 +565,10 @@ mod tests {
                 .err()
                 .unwrap()
                 .to_string(),
-            "unsupported native wire version 4; expected 8"
+            format!(
+                "unsupported native wire version 4; expected {}",
+                crate::WIRE_VERSION
+            )
         );
         let mut framed = (bytes.len() as u32).to_ne_bytes().to_vec();
         framed.extend_from_slice(&bytes);

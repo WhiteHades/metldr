@@ -47,10 +47,14 @@
   <select id="execution" hidden aria-hidden="true" tabindex="-1" aria-describedby="execution-detail">
     <option value="" selected>Choose a destination</option>
     <option id="execution-model" value="model" disabled>Test model</option>
-    <option id="execution-browser" value="browser" disabled>Browser task</option>
-    <option id="execution-chat" value="chat" disabled>Chat Completions</option>
-    <option id="execution-responses" value="responses" disabled>OpenAI Responses</option>
-    <option id="execution-google" value="google" disabled>Google Interactions</option>
+    <option id="execution-browser" value="browser" disabled>Browser task, Messages</option>
+    <option id="execution-chat" value="chat" disabled>Browser task, Chat Completions</option>
+    <option id="execution-responses" value="responses" disabled>Browser task, OpenAI Responses</option>
+    <option id="execution-google" value="google" disabled>Browser task, Google Interactions</option>
+    <option id="execution-page-messages" value="page:messages" disabled>Page questions, Messages</option>
+    <option id="execution-page-responses" value="page:responses" disabled>Page questions, OpenAI Responses</option>
+    <option id="execution-page-google" value="page:google_interactions" disabled>Page questions, Google Interactions</option>
+    <option id="execution-page-chat" value="page:chat_completions" disabled>Page questions, Chat Completions</option>
     <option id="execution-pi" value="pi" disabled>Pi, new session</option>
     <option id="execution-codex" value="codex" disabled>Codex, new session</option>
     <option id="execution-opencode" value="opencode" disabled>OpenCode, new session</option>

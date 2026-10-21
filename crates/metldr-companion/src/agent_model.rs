@@ -164,6 +164,11 @@ pub(super) enum Launch {
         selection: Option<crate::opencode_model::Selection>,
         activity: Vec<Activity>,
     },
+    Text {
+        input_digest: String,
+        protocol: crate::provider_settings::Protocol,
+        binding: crate::https_profile::Binding,
+    },
 }
 impl Launch {
     pub fn input_digest(&self) -> Option<&str> {
@@ -178,12 +183,13 @@ impl Launch {
             | Self::Pi { input_digest, .. }
             | Self::Codex { input_digest, .. }
             | Self::OpenCode { input_digest, .. } => Some(input_digest),
+            Self::Text { input_digest, .. } => Some(input_digest),
         }
     }
 }
 
 pub(super) fn validate(state: &Store) -> Result<()> {
-    if state.schema != 7
+    if state.schema != crate::STORE_VERSION
         || state.launches.len() != state.view.runs.len()
         || state.workflows.len() > 16
     {
@@ -214,6 +220,10 @@ pub(super) fn validate(state: &Store) -> Result<()> {
             || matches!(launch, Launch::Messages { model, .. } if model != crate::https_profile::FIXTURE_MODEL)
         {
             return Err("invalid Messages route".into());
+        }
+        if let Launch::Text { binding, .. } = launch {
+            binding.validate()?;
+            validate_text_run(run)?;
         }
         if let Launch::ConfiguredMessages { binding, .. }
         | Launch::ConfiguredResponses { binding, .. }
@@ -271,6 +281,57 @@ pub(super) fn validate(state: &Store) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn validate_text_run(run: &crate::model::Run) -> Result<()> {
+    let valid = (run.kind == "summary" && run.question.is_none())
+        || (run.kind == "answer"
+            && run
+                .question
+                .as_ref()
+                .is_some_and(|question| !question.trim().is_empty() && question.len() <= 1024));
+    if !valid {
+        return Err("invalid text task record".into());
+    }
+    if run.output.is_native() {
+        return Err("text task contains native output".into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod text_checks {
+    use super::*;
+
+    fn run(kind: &str, question: Option<&str>, native: bool) -> crate::model::Run {
+        crate::model::Run {
+            id: "store:1".into(),
+            source: "store:1".into(),
+            kind: kind.into(),
+            question: question.map(str::to_owned),
+            status: crate::model::Status::Complete,
+            output: if native {
+                metldr_conversation::Content::native()
+            } else {
+                Default::default()
+            },
+            error: None,
+        }
+    }
+
+    #[test]
+    fn text_launch_accepts_only_flat_summary_or_answer() {
+        assert!(validate_text_run(&run("summary", None, false)).is_ok());
+        assert!(validate_text_run(&run("answer", Some("Question?"), false)).is_ok());
+        for invalid in [
+            run("summary", Some("Question?"), false),
+            run("answer", None, false),
+            run("answer", Some("  "), false),
+            run("answer", Some("Question?"), true),
+        ] {
+            assert!(validate_text_run(&invalid).is_err());
+        }
+    }
 }
 
 pub(super) fn legacy_launches(state: &Store) -> BTreeMap<String, Launch> {

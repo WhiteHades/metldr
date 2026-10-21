@@ -72,6 +72,16 @@ fn require_flat_outputs(view: &View) -> Result<()> {
     Ok(())
 }
 
+fn reject_text_launches(launches: &BTreeMap<String, crate::agent_model::Launch>) -> Result<()> {
+    if launches
+        .values()
+        .any(|launch| matches!(launch, crate::agent_model::Launch::Text { .. }))
+    {
+        return Err("legacy store contains text launch data".into());
+    }
+    Ok(())
+}
+
 pub(super) struct Disk {
     pub(super) directory: PathBuf,
     _lock: std::sync::Arc<File>,
@@ -104,15 +114,25 @@ impl Disk {
                 }
                 let header: SchemaHeader = serde_json::from_slice(&bytes)?;
                 match header.schema {
-                    Some(7) => {
+                    Some(crate::STORE_VERSION) => {
                         let state: Store = serde_json::from_slice(&bytes)?;
                         state.validate()?;
                         state
                     }
+                    Some(7) => {
+                        let mut state: Store = serde_json::from_slice(&bytes)?;
+                        reject_text_launches(&state.launches)?;
+                        state.schema = crate::STORE_VERSION;
+                        state.validate()?;
+                        disk.backup_versioned(&bytes, 7)?;
+                        disk.save(&state)?;
+                        state
+                    }
                     Some(6) => {
                         let mut state: Store = serde_json::from_slice(&bytes)?;
+                        reject_text_launches(&state.launches)?;
                         crate::browser_action::reject_selection_actions(&state.browser_actions)?;
-                        state.schema = 7;
+                        state.schema = crate::STORE_VERSION;
                         state.validate()?;
                         disk.backup_versioned(&bytes, 6)?;
                         disk.save(&state)?;
@@ -120,9 +140,10 @@ impl Disk {
                     }
                     Some(5) => {
                         let mut state: Store = serde_json::from_slice(&bytes)?;
+                        reject_text_launches(&state.launches)?;
                         crate::browser_action::reject_button_actions(&state.browser_actions)?;
                         crate::browser_action::reject_selection_actions(&state.browser_actions)?;
-                        state.schema = 7;
+                        state.schema = crate::STORE_VERSION;
                         state.validate()?;
                         disk.backup_versioned(&bytes, 5)?;
                         disk.save(&state)?;
@@ -130,12 +151,13 @@ impl Disk {
                     }
                     Some(4) => {
                         let mut state: Store = serde_json::from_slice(&bytes)?;
+                        reject_text_launches(&state.launches)?;
                         crate::browser_action::reject_button_actions(&state.browser_actions)?;
                         crate::browser_action::reject_selection_actions(&state.browser_actions)?;
                         if state.view.runs.iter().any(|run| run.output.is_native()) {
                             return Err("schema 4 store contains native output".into());
                         }
-                        state.schema = 7;
+                        state.schema = crate::STORE_VERSION;
                         state.validate()?;
                         disk.backup_versioned(&bytes, 4)?;
                         disk.save(&state)?;
@@ -146,11 +168,12 @@ impl Disk {
                         if legacy.schema != 3 {
                             return Err("invalid schema 3 store".into());
                         }
+                        reject_text_launches(&legacy.launches)?;
                         require_flat_outputs(&legacy.view)?;
                         crate::browser_action::reject_button_actions(&legacy.browser_actions)?;
                         crate::browser_action::reject_selection_actions(&legacy.browser_actions)?;
                         let state = Store {
-                            schema: 7,
+                            schema: crate::STORE_VERSION,
                             view: legacy.view,
                             next: legacy.next,
                             starts: legacy.starts,
@@ -172,11 +195,12 @@ impl Disk {
                         if legacy.schema != 2 {
                             return Err("invalid schema 2 store".into());
                         }
+                        reject_text_launches(&legacy.launches)?;
                         require_flat_outputs(&legacy.view)?;
                         crate::browser_action::reject_button_actions(&legacy.browser_actions)?;
                         crate::browser_action::reject_selection_actions(&legacy.browser_actions)?;
                         let state = Store {
-                            schema: 7,
+                            schema: crate::STORE_VERSION,
                             view: legacy.view,
                             next: legacy.next,
                             starts: legacy.starts,
@@ -200,7 +224,7 @@ impl Disk {
                         let legacy: LegacyStore = serde_json::from_slice(&bytes)?;
                         require_flat_outputs(&legacy.view)?;
                         let mut state = Store {
-                            schema: 7,
+                            schema: crate::STORE_VERSION,
                             view: legacy.view,
                             next: legacy.next,
                             starts: legacy.starts,
@@ -230,7 +254,7 @@ impl Disk {
                     rng.hash_one((now, std::process::id(), 1))
                 );
                 Store {
-                    schema: 7,
+                    schema: crate::STORE_VERSION,
                     view: View {
                         sequence: 0,
                         store: identity,
@@ -356,7 +380,7 @@ mod checks {
         fs::write(disk.directory.join("snapshot.json"), &bytes).unwrap();
         drop(disk);
         let (disk, migrated) = Disk::open(root.join("legacy")).unwrap();
-        assert_eq!(migrated.schema, 7);
+        assert_eq!(migrated.schema, crate::STORE_VERSION);
         assert_eq!(
             serde_json::to_value(&migrated.view).unwrap(),
             legacy["view"]
@@ -410,7 +434,7 @@ mod checks {
         fs::write(disk.directory.join("snapshot.json"), &bytes).unwrap();
         drop(disk);
         let (disk, migrated) = Disk::open(root.join("state")).unwrap();
-        assert_eq!(migrated.schema, 7);
+        assert_eq!(migrated.schema, crate::STORE_VERSION);
         assert_eq!(
             migrated.agent_settings,
             crate::agent_settings::Settings::default()
@@ -485,7 +509,7 @@ mod checks {
         fs::write(disk.directory.join("snapshot.json"), &bytes).unwrap();
         drop(disk);
         let (disk, migrated) = Disk::open(root.join("state")).unwrap();
-        assert_eq!(migrated.schema, 7);
+        assert_eq!(migrated.schema, crate::STORE_VERSION);
         assert_eq!(
             fs::read(disk.directory.join("snapshot.v5.json")).unwrap(),
             bytes
@@ -537,7 +561,7 @@ mod checks {
         let bytes = fs::read(disk.directory.join("snapshot.json")).unwrap();
         drop(disk);
         let (disk, migrated) = Disk::open(current).unwrap();
-        assert_eq!(migrated.schema, 7);
+        assert_eq!(migrated.schema, crate::STORE_VERSION);
         assert_eq!(
             fs::read(disk.directory.join("snapshot.v6.json")).unwrap(),
             bytes
@@ -603,7 +627,7 @@ mod checks {
     }
 
     #[test]
-    fn schema4_migration_keeps_exact_backup_and_reopens_as_schema7() {
+    fn schema4_migration_keeps_exact_backup_and_reopens_as_schema8() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join(".tmp")
             .join(format!(
@@ -635,7 +659,7 @@ mod checks {
         drop(disk);
 
         let (disk, migrated) = Disk::open(root.join("state")).unwrap();
-        assert_eq!(migrated.schema, 7);
+        assert_eq!(migrated.schema, crate::STORE_VERSION);
         assert_eq!(migrated.view.runs[0].output.text(), "héllo, 🌱");
         assert_eq!(
             fs::read(disk.directory.join("snapshot.v4.json")).unwrap(),
@@ -643,7 +667,7 @@ mod checks {
         );
         drop(disk);
         let (_, reopened) = Disk::open(root.join("state")).unwrap();
-        assert_eq!(reopened.schema, 7);
+        assert_eq!(reopened.schema, crate::STORE_VERSION);
         assert_eq!(reopened.view.runs[0].output.text(), "héllo, 🌱");
 
         let invalid_directory = root.join("native-v4");
@@ -658,6 +682,80 @@ mod checks {
             native_bytes
         );
         assert!(!invalid_directory.join("snapshot.v4.json").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn schema7_migrates_with_backup_and_old_versions_reject_text_launches() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(".tmp")
+            .join(format!(
+                "schema7-text-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+        fs::create_dir_all(&root).unwrap();
+
+        let current = root.join("valid-v7");
+        let (disk, mut state) = Disk::open(current.clone()).unwrap();
+        state.schema = 7;
+        disk.save(&state).unwrap();
+        let bytes = fs::read(disk.directory.join("snapshot.json")).unwrap();
+        drop(disk);
+        let (disk, migrated) = Disk::open(current).unwrap();
+        assert_eq!(migrated.schema, crate::STORE_VERSION);
+        assert_eq!(
+            fs::read(disk.directory.join("snapshot.v7.json")).unwrap(),
+            bytes
+        );
+        drop(disk);
+
+        for version in [2, 3, 7] {
+            let directory = root.join(format!("smuggled-v{version}"));
+            let (disk, mut state) = Disk::open(directory.clone()).unwrap();
+            let run_id = format!("{}:1", state.view.store);
+            state.view.runs.push(crate::model::Run {
+                id: run_id.clone(),
+                source: run_id.clone(),
+                kind: "summary".into(),
+                question: None,
+                status: crate::model::Status::Complete,
+                output: Default::default(),
+                error: None,
+            });
+            state.next = 2;
+            state.launches.insert(
+                run_id.clone(),
+                crate::agent_model::Launch::Text {
+                    input_digest: "a".repeat(64),
+                    protocol: crate::provider_settings::Protocol::Messages,
+                    binding: crate::https_profile::Binding {
+                        endpoint: "https://example.com".into(),
+                        model: "model".into(),
+                        revision: 1,
+                        fingerprint: "b".repeat(64),
+                    },
+                },
+            );
+            state.schema = version;
+            let mut forged = serde_json::to_value(&state).unwrap();
+            if version == 2 {
+                forged.as_object_mut().unwrap().remove("providers");
+                forged.as_object_mut().unwrap().remove("agent_settings");
+            } else if version == 3 {
+                forged.as_object_mut().unwrap().remove("agent_settings");
+            }
+            let bytes = serde_json::to_vec(&forged).unwrap();
+            fs::write(disk.directory.join("snapshot.json"), &bytes).unwrap();
+            drop(disk);
+            let error = Disk::open(directory.clone()).err().unwrap().to_string();
+            assert_eq!(error, "legacy store contains text launch data");
+            assert_eq!(fs::read(directory.join("snapshot.json")).unwrap(), bytes);
+            assert!(!directory.join(format!("snapshot.v{version}.json")).exists());
+        }
         fs::remove_dir_all(root).unwrap();
     }
 }

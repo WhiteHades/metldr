@@ -25,6 +25,11 @@ pub(crate) use protocol::StopReceipt;
 use protocol::{Protocol, Reply, ReplyCell, ReplyKind, WatchCell};
 type Result<T> = std::result::Result<T, FlowError>;
 
+pub(crate) enum PageTextPrompt {
+    Summary,
+    Answer(UserText),
+}
+
 pub(crate) fn is_snapshot_frame(value: JsValue, kind: &str) -> bool {
     decode_frame(value).is_ok_and(|value| protocol::validate_snapshot_frame(&value, kind).is_ok())
 }
@@ -353,6 +358,32 @@ impl FlowClient {
         fingerprint: String,
     ) -> Result<RunId> {
         self.start(json!({"op":"google_task","source":source,"text":text.as_str(),"fingerprint":fingerprint}))
+            .await
+    }
+
+    pub(crate) async fn page_text(
+        &self,
+        source: SourceId,
+        protocol: ProviderProtocol,
+        fingerprint: String,
+        prompt: PageTextPrompt,
+    ) -> Result<RunId> {
+        if self
+            .inner
+            .protocol
+            .borrow()
+            .latest
+            .as_ref()
+            .and_then(PageView::source)
+            != Some(&source)
+        {
+            return Err(FlowError::NoSource);
+        }
+        let prompt = match prompt {
+            PageTextPrompt::Summary => json!({"kind":"summary"}),
+            PageTextPrompt::Answer(text) => json!({"kind":"answer","text":text.as_str()}),
+        };
+        self.start(json!({"op":"page_text","source":source,"protocol":protocol.name(),"fingerprint":fingerprint,"prompt":prompt}))
             .await
     }
 

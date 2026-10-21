@@ -667,6 +667,13 @@ pub(crate) enum RunRoute {
         revision: u64,
         fingerprint: String,
     },
+    Text {
+        protocol: ProviderProtocol,
+        endpoint: String,
+        model: String,
+        revision: u64,
+        fingerprint: String,
+    },
     Pi {
         workflow: RunId,
         provider: String,
@@ -1398,6 +1405,13 @@ impl PageView {
                         &run.route,
                         RunRoute::Pi { .. } | RunRoute::Codex { .. } | RunRoute::OpenCode { .. }
                     ))
+                || matches!(&run.route, RunRoute::Text { .. } if !run.activity.is_empty()
+                || !run.conversation.is_empty()
+                || match run.kind {
+                    RunKind::Summary => run.question.is_some(),
+                    RunKind::Answer => run.question.as_ref().is_none_or(|question| question.trim().is_empty()),
+                    _ => true,
+                })
                 || (matches!(run.kind, RunKind::Browser)
                     != matches!(
                         &run.route,
@@ -1415,6 +1429,8 @@ impl PageView {
                 || matches!(&run.route, RunRoute::HttpsResponses { endpoint, model, revision, fingerprint }
                     if !valid_https_endpoint(endpoint) || !valid_ascii_label(model, 128) || *revision == 0 || !valid_fingerprint(fingerprint))
                 || matches!(&run.route, RunRoute::HttpsGoogleInteractions { endpoint, model, revision, fingerprint }
+                    if !valid_https_endpoint(endpoint) || !valid_ascii_label(model, 128) || *revision == 0 || !valid_fingerprint(fingerprint))
+                || matches!(&run.route, RunRoute::Text { endpoint, model, revision, fingerprint, .. }
                     if !valid_https_endpoint(endpoint) || !valid_ascii_label(model, 128) || *revision == 0 || !valid_fingerprint(fingerprint))
                 || (matches!(run.kind, RunKind::Agent)
                     != matches!(
@@ -2652,6 +2668,61 @@ mod tests {
             };
         }
         view["responses_route"]["revision"] = serde_json::json!(0);
+        assert!(PageView::decode(&serde_json::to_vec(&view).unwrap()).is_err());
+    }
+
+    #[test]
+    fn accepts_only_flat_summary_or_question_text_runs_with_strict_routes() {
+        let mut view: serde_json::Value = serde_json::from_str(VALID).unwrap();
+        view["runs"][0]["route"] = serde_json::json!({
+            "kind":"text", "protocol":"responses", "endpoint":"https://api.example/v1",
+            "model":"gpt-model", "revision":1, "fingerprint":"a".repeat(64)
+        });
+        assert!(matches!(
+            PageView::decode(&serde_json::to_vec(&view).unwrap())
+                .unwrap()
+                .runs[0]
+                .route,
+            RunRoute::Text {
+                protocol: ProviderProtocol::Responses,
+                ..
+            }
+        ));
+
+        for (path, value) in [
+            (
+                "runs/0/route/endpoint",
+                serde_json::json!("http://api.example/v1"),
+            ),
+            ("runs/0/route/model", serde_json::json!("bad model")),
+            ("runs/0/route/revision", serde_json::json!(0)),
+            ("runs/0/route/fingerprint", serde_json::json!("short")),
+            ("runs/0/route/protocol", serde_json::json!("unknown")),
+            ("runs/0/question", serde_json::json!("unexpected")),
+            (
+                "runs/0/conversation",
+                serde_json::json!([{"kind":"tool","id":"tool"}]),
+            ),
+            (
+                "runs/0/activity",
+                serde_json::json!([{"tool":"read","phase":"started"}]),
+            ),
+        ] {
+            let mut invalid = view.clone();
+            *invalid.pointer_mut(&format!("/{path}")).unwrap() = value;
+            assert!(
+                PageView::decode(&serde_json::to_vec(&invalid).unwrap()).is_err(),
+                "{path}"
+            );
+        }
+        let mut invalid = view.clone();
+        invalid["runs"][0]["route"]["extra"] = serde_json::json!(true);
+        assert!(PageView::decode(&serde_json::to_vec(&invalid).unwrap()).is_err());
+
+        view["runs"][0]["kind"] = serde_json::json!("answer");
+        view["runs"][0]["question"] = serde_json::json!("What is reported?");
+        assert!(PageView::decode(&serde_json::to_vec(&view).unwrap()).is_ok());
+        view["runs"][0]["question"] = serde_json::json!("   ");
         assert!(PageView::decode(&serde_json::to_vec(&view).unwrap()).is_err());
     }
 

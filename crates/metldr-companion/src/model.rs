@@ -127,6 +127,12 @@ pub(super) enum Command {
         expected_revision: u64,
     },
     ProviderRefresh,
+    PageText {
+        source: String,
+        protocol: crate::provider_settings::Protocol,
+        fingerprint: String,
+        prompt: crate::page_text::Prompt,
+    },
     AgentSave {
         expected_revision: u64,
         profile: crate::agent_settings::Profile,

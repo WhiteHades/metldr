@@ -283,6 +283,27 @@ fn all_native_text_clients_accept_only_complete_tool_free_responses_over_tls() {
             assert_eq!(error.to_string(), empty);
             assert_eq!(server.join().unwrap().len(), 1);
 
+            let oversized = frames(protocol, false, true).replace(OUTPUT, &"x".repeat(8193));
+            let (endpoint, server) = text_server(&oversized, protocol);
+            let mut output = String::new();
+            let error = call(protocol, &endpoint, &AtomicBool::new(false), |part| {
+                output.push_str(&part);
+                Ok(())
+            })
+            .await
+            .unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                match protocol {
+                    Protocol::Messages => "Messages text exceeds bound",
+                    Protocol::Responses => "Responses text exceeds bound",
+                    Protocol::Google => "Google text exceeds bound",
+                    Protocol::Chat => "Chat text exceeds bound",
+                }
+            );
+            assert!(output.is_empty());
+            assert_eq!(server.join().unwrap().len(), 1);
+
             let (endpoint, server) = text_server("", protocol);
             let stop = AtomicBool::new(true);
             let error = call(protocol, &endpoint, &stop, |_| Ok(()))

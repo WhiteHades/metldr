@@ -243,6 +243,12 @@ impl Owner {
     }
     pub(super) fn command(&mut self, id: &str, command: Command) -> Result<()> {
         match command {
+            Command::PageText {
+                source,
+                protocol,
+                fingerprint,
+                prompt,
+            } => self.page_text_start(id, &source, protocol, &fingerprint, prompt),
             Command::ProviderSave {
                 protocol,
                 expected_revision,

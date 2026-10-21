@@ -78,6 +78,12 @@ fn update_card(doc: &Document, card: &Element, run: &RunView) -> Result<(), JsVa
         RunRoute::HttpsChatCompletions { endpoint, model, .. } => format!("Chat Completions, model {model}, HTTPS endpoint {endpoint}"),
         RunRoute::HttpsResponses { endpoint, model, .. } => format!("OpenAI Responses, model {model}, HTTPS endpoint {endpoint}"),
         RunRoute::HttpsGoogleInteractions { endpoint, model, .. } => format!("Google Interactions, model {model}, HTTPS endpoint {endpoint}"),
+        RunRoute::Text { protocol, endpoint, model, .. } => format!("{} page questions, model {model}, HTTPS endpoint {endpoint}. Sends the saved page and completed answers from this page and provider selection.", match protocol {
+            crate::model::ProviderProtocol::Messages => "Messages",
+            crate::model::ProviderProtocol::Responses => "OpenAI Responses",
+            crate::model::ProviderProtocol::GoogleInteractions => "Google Interactions",
+            crate::model::ProviderProtocol::ChatCompletions => "Chat Completions",
+        }),
         RunRoute::Pi {
             provider, model, ..
         } => format!(

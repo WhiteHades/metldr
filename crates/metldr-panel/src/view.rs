@@ -98,7 +98,6 @@ pub(super) fn render(panel: &Panel) -> Result<(), JsValue> {
     let busy = panel.start_pending || active_run(snapshot).is_some();
     for (action, disabled) in [
         ("capture", busy || !panel.connected),
-        ("summarize", busy || !panel.connected),
         ("stop", active_run(snapshot).is_none()),
     ] {
         if let Ok(Some(button)) = doc.query_selector(&format!("[data-action='{action}']")) {
@@ -107,13 +106,6 @@ pub(super) fn render(panel: &Panel) -> Result<(), JsValue> {
             } else {
                 let _ = button.remove_attribute("disabled");
             }
-        }
-    }
-    if let Ok(Some(button)) = doc.query_selector("[data-action='summarize']") {
-        if snapshot.as_ref().is_some_and(|view| view.fixture_available) {
-            button.remove_attribute("hidden")?;
-        } else {
-            button.set_attribute("hidden", "")?;
         }
     }
     status(doc, &panel.status_message);

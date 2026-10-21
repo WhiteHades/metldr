@@ -169,6 +169,14 @@ pub(super) fn render(doc: &Document, card: &Element, run: &RunView) -> Result<bo
 
 fn name(route: &RunRoute) -> &'static str {
     match route {
+        RunRoute::Text { protocol, .. } => match protocol {
+            crate::model::ProviderProtocol::Messages => "Messages page questions",
+            crate::model::ProviderProtocol::Responses => "OpenAI Responses page questions",
+            crate::model::ProviderProtocol::GoogleInteractions => {
+                "Google Interactions page questions"
+            }
+            crate::model::ProviderProtocol::ChatCompletions => "Chat Completions page questions",
+        },
         RunRoute::Codex { .. } => "Codex",
         RunRoute::OpenCode { .. } => "OpenCode",
         RunRoute::Pi { .. } => "Pi",
