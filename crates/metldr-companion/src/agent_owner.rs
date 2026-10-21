@@ -330,6 +330,7 @@ impl Owner {
             }
         }
         self.cancel_browser_approval(run);
+        self.clear_pi_ui(run);
         let permissions = self.take_native_permissions(run);
         let record = next
             .view

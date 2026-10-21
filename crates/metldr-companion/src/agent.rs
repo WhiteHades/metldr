@@ -20,6 +20,7 @@ use std::{
 mod browser;
 mod messages;
 mod stop;
+pub(crate) mod ui;
 
 pub(super) use browser::execute;
 pub(crate) use stop::StopWait;
@@ -73,10 +74,12 @@ fn native(
         offline: job.profile.offline,
         mcp: Some(mcp),
     })?;
-    let result = session(job, &mut pi, stop, failed, ready, tx);
+    let mut ui = ui::Ui::new(&job.run, tx);
+    let result = session(job, &mut pi, &mut ui, stop, failed, ready, tx);
     if result.is_err() {
         let _ = pi.send(json!({"id":"cleanup-abort","type":"abort"}));
     }
+    ui.cancel_pending(&mut pi)?;
     let closed = pi.close()?;
     if closed.code != Some(0) || closed.forced || !closed.drained {
         return Err("Pi did not close cleanly with drained pipes".into());
@@ -90,18 +93,21 @@ fn native(
 fn session(
     job: &Job,
     pi: &mut PiSession,
+    ui: &mut ui::Ui,
     stop: &AtomicBool,
     failed: &AtomicBool,
     ready: &AtomicBool,
     tx: &mpsc::SyncSender<Event>,
 ) -> Result<Outcome> {
     pi.send(json!({"id":"native-state","type":"get_state"}))?;
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut deadline = Instant::now() + Duration::from_secs(10);
     let state = loop {
-        let v = pi.recv(deadline.saturating_duration_since(Instant::now()))?;
-        if v["type"] == "extension_ui_request" {
-            return Err("Pi requested native UI that this prototype cannot answer".into());
+        if stop.load(Ordering::Acquire) {
+            return stop_idle(pi, ui);
         }
+        let Some(v) = setup_event(pi, ui, &mut deadline, false)? else {
+            continue;
+        };
         if v["type"] == "response" && v["id"] == "native-state" {
             if v["command"] != "get_state" || v["success"] != true {
                 return Err("Pi state query failed".into());
@@ -141,65 +147,59 @@ fn session(
         ack,
     })?;
     if !committed.recv_timeout(Duration::from_secs(5))?? {
-        return Ok(Outcome::Cancelled);
+        return stop_idle(pi, ui);
     }
     if stop.load(Ordering::Acquire) {
-        return Ok(Outcome::Cancelled);
+        return stop_idle(pi, ui);
     }
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut deadline = Instant::now() + Duration::from_secs(10);
     while !ready.load(Ordering::Acquire) {
         if stop.load(Ordering::Acquire) {
-            return Ok(Outcome::Cancelled);
+            return stop_idle(pi, ui);
         }
-        if failed.load(Ordering::Acquire) || Instant::now() >= deadline {
+        if failed.load(Ordering::Acquire) {
             return Err("Pi browser tools were not discovered before its prompt".into());
         }
-        match pi.recv(Duration::from_millis(20)) {
-            Ok(event) => {
-                if event["type"] == "extension_ui_request" {
-                    return Err(if event["method"] == "notify" {
-                        "Pi browser tool setup needs attention"
-                    } else {
-                        "Pi requested native UI while browser tools were loading"
-                    }
-                    .into());
-                }
+        match setup_event(pi, ui, &mut deadline, true)? {
+            Some(event) => {
                 if event["type"] == "extension_error" {
                     return Err("Pi extension failed while browser tools were loading".into());
                 }
             }
-            Err(error)
-                if error
-                    .downcast_ref::<io::Error>()
-                    .is_some_and(|error| error.kind() == io::ErrorKind::TimedOut) =>
-            {
-                ()
-            }
-            Err(error) => return Err(error),
+            None => (),
         }
     }
     if failed.load(Ordering::Acquire) {
         return Err("Pi browser service ended before its prompt".into());
     }
-    let message = format!(
-        "{}\n\n{}\nMetLDR browser tools are available through the {} MCP server for this run. Native tool permissions and metldr browser approvals are separate decisions.",
-        message(&job.text, &job.source)?,
-        crate::browser_worker::BROWSER_POLICY,
-        browser::name(&job.run)
-    );
+    let message = prompt_message(&job.text, &job.source, &browser::name(&job.run))?;
     pi.send(json!({"id":"native-prompt","type":"prompt","message":message}))?;
-    stream(job, pi, stop, failed, tx)
+    stream(job, pi, ui, stop, failed, tx)
+}
+
+fn prompt_message(text: &str, source: &Source, server: &str) -> Result<String> {
+    if text.starts_with('/') {
+        return Ok(text.to_owned());
+    }
+    Ok(format!(
+        "{}\n\n{}\nmetldr browser tools are available through the {} MCP server for this run. Native tool permissions and metldr browser approvals are separate decisions.",
+        message(text, source)?,
+        crate::browser_worker::BROWSER_POLICY,
+        server
+    ))
 }
 
 fn stream(
     job: &Job,
     pi: &mut PiSession,
+    ui: &mut ui::Ui,
     stop: &AtomicBool,
     failed: &AtomicBool,
     tx: &mpsc::SyncSender<Event>,
 ) -> Result<Outcome> {
     let (mut prompt_ack, mut abort_sent, mut abort_reply) = (false, false, None);
     let mut settled = None;
+    let (mut handled, mut handled_idle) = (false, false);
     let mut final_reason = None;
     let (mut tools, mut seen_tools) = (BTreeMap::<String, (String, Call)>::new(), BTreeSet::new());
     let mut activities = 0usize;
@@ -215,6 +215,7 @@ fn stream(
             pi.send(json!({"id":"native-abort","type":"abort"}))?;
             abort_sent = true;
         }
+        ui.poll(pi, stopping)?;
         let v = match pi.recv(Duration::from_millis(50)) {
             Ok(v) => v,
             Err(e)
@@ -225,6 +226,9 @@ fn stream(
             }
             Err(e) => return Err(e),
         };
+        if ui.observe(&v, pi, stopping)? {
+            continue;
+        }
         if let Some(change) = messages.event(&v)? {
             tx.send(Event::Text {
                 run: job.run.clone(),
@@ -232,14 +236,26 @@ fn stream(
             })?;
         }
         match v["type"].as_str() {
-            Some("extension_ui_request") => {
-                return Err("Pi requested native UI that this prototype cannot answer".into());
-            }
             Some("response") if v["id"] == "native-prompt" => {
                 if v["command"] != "prompt" || v["success"] != true {
                     return Err("Pi rejected the prompt".into());
                 }
                 prompt_ack = true;
+                match v["data"]["disposition"].as_str() {
+                    Some("handled") => {
+                        handled = true;
+                        pi.send(json!({"id":"native-handled-state","type":"get_state"}))?;
+                    }
+                    Some("started") => (),
+                    _ => return Err("Pi prompt disposition is invalid".into()),
+                }
+            }
+            Some("response") if v["id"] == "native-handled-state" => {
+                if !handled || v["command"] != "get_state" || v["success"] != true {
+                    return Err("Pi handled command state is invalid".into());
+                }
+                handled_idle =
+                    v["data"]["isStreaming"] == false && v["data"]["pendingMessageCount"] == 0;
             }
             Some("response") if v["id"] == "native-abort" => {
                 if !abort_sent || v["command"] != "abort" || abort_reply.is_some() {
@@ -344,6 +360,17 @@ fn stream(
             }
             _ => (),
         }
+        if prompt_ack && handled && handled_idle && (!abort_sent || abort_reply == Some(true)) {
+            if !tools.is_empty() {
+                return Err("Pi handled command has unfinished tools".into());
+            }
+            ui.cancel_pending(pi)?;
+            return Ok(if abort_sent {
+                Outcome::Cancelled
+            } else {
+                Outcome::Complete
+            });
+        }
         if prompt_ack && settled.is_some() && (!abort_sent || abort_reply.is_some()) {
             if !tools.is_empty() {
                 return Err("Pi settled with an unfinished native tool".into());
@@ -369,6 +396,19 @@ fn settlement(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_commands_keep_their_name_and_arguments() {
+        let source: Source = serde_json::from_value(json!({"id":"source","tab":1,"document":"owned-document","url":"https://example.com/","title":"Owned","text":"page data"})).unwrap();
+        for command in ["/check", "/check exact arguments", "/check 雪\nsecond line"] {
+            assert_eq!(
+                prompt_message(command, &source, "owned_mcp").unwrap(),
+                command
+            );
+        }
+        let prompt = prompt_message("Read this page", &source, "owned_mcp").unwrap();
+        assert!(prompt.starts_with("Read this page\n\n<metldr_page_context>"));
+        assert!(prompt.contains("owned_mcp MCP server"));
+    }
     #[test]
     fn native_messages_require_boundaries_and_replace_provisional_text() {
         use metldr_conversation::{Change, MessageKey};
@@ -405,4 +445,87 @@ mod tests {
         assert!(settlement(true, Some("aborted"), Some(false)).is_err());
         assert!(settlement(false, Some("error"), Some(true)).is_err());
     }
+}
+
+fn setup_event(
+    pi: &mut PiSession,
+    ui: &mut ui::Ui,
+    deadline: &mut Instant,
+    state_received: bool,
+) -> Result<Option<serde_json::Value>> {
+    ui.poll(pi, false)?;
+    if ui.has_pending() {
+        *deadline = Instant::now() + Duration::from_secs(10);
+    }
+    if Instant::now() >= *deadline {
+        return Err("Pi setup did not make progress within 10 seconds".into());
+    }
+    let event = match pi.recv(Duration::from_millis(20)) {
+        Ok(event) => event,
+        Err(error)
+            if error
+                .downcast_ref::<io::Error>()
+                .is_some_and(|e| e.kind() == io::ErrorKind::TimedOut) =>
+        {
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
+    };
+    if !state_received
+        && event["type"] == "extension_ui_request"
+        && matches!(
+            event["method"].as_str(),
+            Some("select" | "confirm" | "input" | "editor")
+        )
+    {
+        return Err(
+            "Pi cannot accept dialogs during initial startup; defer the dialog until after startup"
+                .into(),
+        );
+    }
+    if ui.observe(&event, pi, false)? {
+        return Ok(None);
+    }
+    Ok(Some(event))
+}
+
+fn stop_idle(pi: &mut PiSession, ui: &mut ui::Ui) -> Result<Outcome> {
+    pi.send(json!({"id":"native-idle-abort","type":"abort"}))?;
+    ui.cancel_pending(pi)?;
+    pi.send(json!({"id":"native-idle-state","type":"get_state"}))?;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let (mut ack, mut idle) = (false, false);
+    while !(ack && idle) {
+        if Instant::now() >= deadline {
+            return Err("Pi did not confirm idle Stop".into());
+        }
+        let event = match pi.recv(Duration::from_millis(50)) {
+            Ok(event) => event,
+            Err(error)
+                if error
+                    .downcast_ref::<io::Error>()
+                    .is_some_and(|e| e.kind() == io::ErrorKind::TimedOut) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        if ui.observe(&event, pi, true)? {
+            continue;
+        }
+        if event["type"] == "response" && event["id"] == "native-idle-abort" {
+            if event["command"] != "abort" || event["success"] != true {
+                return Err("Pi idle abort failed".into());
+            }
+            ack = true;
+        }
+        if event["type"] == "response" && event["id"] == "native-idle-state" {
+            if event["command"] != "get_state" || event["success"] != true {
+                return Err("Pi idle query failed".into());
+            }
+            idle =
+                event["data"]["isStreaming"] == false && event["data"]["pendingMessageCount"] == 0;
+        }
+    }
+    Ok(Outcome::Cancelled)
 }

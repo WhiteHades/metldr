@@ -133,6 +133,7 @@ pub(super) fn run() -> Result<()> {
         codex_profile: fixture_profiles.1,
         opencode_profile: fixture_profiles.2,
         native_permissions: BTreeMap::new(),
+        pi_ui: None,
         browser_approval: None,
         browser_io: None,
         browser_route,
@@ -190,6 +191,7 @@ pub(super) fn run() -> Result<()> {
                 Action::Request(request) if !closed => owner.request(request)?,
                 Action::Detached => {
                     owner.subscribers.clear();
+                    owner.disconnect_pi_ui()?;
                     if let Some(run) = owner.browser_io.as_ref().map(|s| s.run.clone()) {
                         owner.browser_io_finish(&run);
                         owner.cancel_browser_approval(&run);
@@ -197,6 +199,7 @@ pub(super) fn run() -> Result<()> {
                     }
                 }
                 Action::Shutdown(error) => {
+                    owner.disconnect_pi_ui()?;
                     if let Some(run) = owner.browser_io.as_ref().map(|s| s.run.clone()) {
                         owner.browser_io_finish(&run);
                     }
@@ -222,6 +225,7 @@ pub(super) fn run() -> Result<()> {
             } => owner.pi_bound(&run, &workflow, binding, ack)?,
             Event::ToolProgress { run, call } => owner.tool_progress(&run, call)?,
             Event::PiActivity { run, activity } => owner.pi_activity(&run, activity)?,
+            Event::PiUi { run, change } => owner.pi_ui_change(&run, change)?,
             Event::PiSettled {
                 run,
                 result,

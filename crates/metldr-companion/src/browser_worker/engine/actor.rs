@@ -251,7 +251,7 @@ impl Actor {
         }
     }
     fn notice(&mut self, notice: Notice) -> Result<()> {
-        if notice.method == "MetLDR.detached" {
+        if notice.method == "metldr.detached" {
             return Err("browser attachment ended".into());
         }
         self.transport.event(runtime::RawEvent {

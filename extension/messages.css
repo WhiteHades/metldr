@@ -55,6 +55,7 @@
   text-transform: uppercase;
   text-wrap: wrap;
 }
+#history [data-part="message-label"] { text-transform: none; }
 #history [data-part="route"] { text-transform: none; }
 #history [data-part="output"] { max-inline-size: 620px; color: var(--message-ink); font-size: inherit; line-height: 1.65; white-space: pre-wrap; }
 #history [data-part="error"] { color: var(--accent); white-space: pre-wrap; }

@@ -42,6 +42,10 @@ pub(super) enum Event {
         run: String,
         activity: crate::agent_model::Activity,
     },
+    PiUi {
+        run: String,
+        change: crate::agent::ui::Change,
+    },
     PiSettled {
         run: String,
         result: crate::agent::Outcome,
@@ -114,6 +118,7 @@ pub(super) struct Owner {
     pub(super) codex_profile: Option<crate::codex_model::Profile>,
     pub(super) opencode_profile: Option<crate::opencode_model::Profile>,
     pub(super) native_permissions: BTreeMap<String, PendingPermission>,
+    pub(super) pi_ui: Option<crate::pi_ui::State>,
     pub(super) browser_approval: Option<crate::browser_owner::PendingApproval>,
     pub(super) browser_io: Option<crate::browser_io::Slot>,
     pub(super) browser_route: Option<crate::https_profile::Profile>,
@@ -148,6 +153,7 @@ impl Owner {
             self.codex_profile.as_ref(),
             self.opencode_profile.as_ref(),
             &self.native_permissions,
+            self.pi_ui.as_ref(),
             self.browser_route.as_ref(),
             self.responses_route.as_ref(),
             self.google_route.as_ref(),
@@ -302,6 +308,11 @@ impl Owner {
                 request,
                 option,
             } => self.native_decide(id, &run, &request, option.as_deref()),
+            Command::PiUiReply {
+                run,
+                request,
+                answer,
+            } => self.pi_ui_reply(id, &run, &request, answer),
             Command::View => self.reply_view(Some(id), "view", true),
             Command::Capture {
                 expected_store,
@@ -373,8 +384,11 @@ impl Owner {
                 next.view.runs[position].status = Status::StopRequested;
                 next.prevent_browser(&run, "user stopped before dispatch")?;
                 let permissions = self.take_native_permissions(&run);
+                let pi_ui = self.pi_ui.clone();
+                self.clear_pi_ui(&run);
                 if let Err(error) = self.commit(next) {
                     self.native_permissions.extend(permissions);
+                    self.pi_ui = pi_ui;
                     return Err(error);
                 }
                 if let Some(operation) = &self.operation {
@@ -383,6 +397,7 @@ impl Owner {
                     }
                 }
                 self.cancel_browser_approval(&run);
+                drop(pi_ui);
                 for (_, permission) in permissions {
                     let _ = permission.ack.send(None);
                 }

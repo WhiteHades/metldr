@@ -67,6 +67,34 @@ details[open]::details-content { block-size: auto; }
 #native-permissions > article { display: flex; flex-direction: column; gap: 0.5rem; }
 #native-permissions [data-part="controls"] { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 #native-permissions [data-part="input"] { font: inherit; font-size: var(--text-secondary); white-space: pre-wrap; }
+#pi-ui { display: flex; flex-direction: column; gap: 0.75rem; }
+#pi-ui[hidden], #pi-ui-widgets-below:empty { display: none; }
+#pi-ui-title { font-size: var(--text-title); font-weight: 600; }
+#pi-ui-cards { display: flex; flex-direction: column; gap: 0.75rem; }
+#pi-ui-cards > article { display: flex; flex-direction: column; gap: 0.75rem; padding: 1rem; border: 1px solid var(--line); border-radius: calc(0.5rem + 8px); background: var(--surface); }
+#pi-ui-cards h3 { font-size: var(--text-body); font-weight: 600; }
+#pi-ui-cards p, #pi-ui-statuses, #pi-ui-notices { color: var(--muted); font-size: var(--text-secondary); }
+#pi-ui-cards form { display: flex; flex-direction: column; gap: 0.75rem; }
+#pi-ui-cards [data-part="choices"], #pi-ui-cards [data-part="actions"] { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+#pi-ui-cards [data-part="choices"] { flex-direction: column; }
+#pi-ui-cards [data-part="choices"] button { text-align: start; }
+#pi-ui-cards [data-part="choice"] { display: flex; align-items: center; gap: 0.5rem; min-block-size: 44px; padding-inline: 0.5rem; border-color: transparent; background: transparent; }
+#pi-ui-cards [data-part="radio-mark"] { display: grid; flex: none; inline-size: 1rem; block-size: 1rem; place-items: center; border: 1px solid var(--line); border-radius: 50%; }
+#pi-ui-cards [aria-pressed="true"] [data-part="radio-mark"] { border-color: var(--ink); background: var(--ink); }
+#pi-ui-cards [aria-pressed="true"] [data-part="radio-mark"]::after { inline-size: 0.375rem; block-size: 0.375rem; border-radius: 50%; background: var(--surface); content: ""; }
+#pi-ui-cards [data-part="actions"] { justify-content: end; padding-block-start: 0.75rem; border-block-start: 1px solid var(--line); }
+#pi-ui-cards [data-variant="quiet"] { border-color: transparent; background: transparent; color: var(--muted); }
+#pi-ui-cards [data-variant="primary"] { border-color: var(--ink); background: var(--ink); color: var(--surface); }
+#pi-ui-cards [data-variant="primary"]:disabled { border-color: var(--line); background: var(--tint); color: var(--muted); }
+#pi-ui-cards textarea { font-size: max(16px, var(--text-body)); field-sizing: content; min-block-size: 3lh; max-block-size: 10lh; white-space: pre-wrap; resize: vertical; }
+#pi-ui-widgets-above, #pi-ui-widgets-below, #pi-ui-notices { display: flex; flex-direction: column; gap: 0.5rem; }
+#pi-ui [data-part="widget"], #pi-ui-widgets-below [data-part="widget"] { padding: 0.65rem 0.75rem; background: var(--tint); white-space: pre-wrap; }
+#pi-ui [data-part="notice"] { padding: 0.5rem 0.65rem; border-radius: 0.5rem; background: var(--tint); }
+#pi-ui [data-level]::before { content: attr(data-level) ": "; font-weight: 600; text-transform: capitalize; }
+#pi-ui [data-level="warning"], #pi-ui [data-level="error"] { color: var(--accent); }
+#pi-ui-widgets-below [data-part="suggestion"] { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; color: var(--muted); font-size: var(--text-secondary); }
+#pi-ui-widgets-below [data-part="editor-preview"] { flex: 1 1 100%; }
+#pi-ui-widgets-below [data-part="editor-preview"] pre { max-block-size: 12lh; overflow: auto; padding-block: 0.5rem; padding-inline: 0.65rem; background: var(--tint); white-space: pre-wrap; }
 #agent-details { margin-block-start: auto; border-block-start: 1px solid var(--line); }
 .agent-body { display: flex; flex-direction: column; gap: 0.5rem; padding-block-end: 0.5rem; }
 footer { display: flex; flex-direction: column; gap: 0.5rem; padding-block-start: 0.75rem; border-block-start: 1px solid var(--line); }
@@ -82,6 +110,8 @@ textarea::placeholder { color: var(--muted); }
 @media (hover: hover) and (pointer: fine) {
   button:not(:disabled):hover, summary:hover { background: var(--tint); }
   [data-action="ask"]:not(:disabled):hover { background: color-mix(in oklch, var(--accent) 85%, var(--ink)); }
+  #pi-ui-cards [data-variant="quiet"]:not(:disabled):hover { background: var(--tint); }
+  #pi-ui-cards [data-variant="primary"]:not(:disabled):hover { background: color-mix(in oklch, var(--ink) 88%, var(--surface)); }
 }
 @media (prefers-reduced-motion: no-preference) {
   button { transition: transform 150ms var(--ease-out), background-color 150ms var(--ease-out); }

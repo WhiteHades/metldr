@@ -103,6 +103,12 @@ pub(super) struct Request {
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum Command {
     #[serde(skip_serializing)]
+    PiUiReply {
+        run: String,
+        request: String,
+        answer: crate::agent::ui::Answer,
+    },
+    #[serde(skip_serializing)]
     ProviderSave {
         protocol: crate::provider_settings::Protocol,
         expected_revision: u64,

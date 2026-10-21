@@ -8,6 +8,7 @@ const MAX_RUNS: usize = 16;
 const MAX_ACTIVITY: usize = 64;
 const MAX_BROWSER_ACTIONS: usize = 16;
 const MAX_PAGE_TEXT: usize = 8_192;
+const MAX_PI_UI: usize = 32_768;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RunId(String);
@@ -165,6 +166,7 @@ pub(crate) struct PageView {
     pub(crate) opencode_profile: Option<CodexProfileView>,
     pub(crate) opencode_sessions: Vec<AgentSessionView>,
     pub(crate) native_permissions: Vec<NativePermissionView>,
+    pub(crate) pi_ui: Option<PiUiView>,
     pub(crate) browser_actions: Vec<BrowserActionView>,
     pub(crate) browser_route: Option<BrowserRouteView>,
     pub(crate) chat_route: Option<ChatRouteView>,
@@ -642,6 +644,80 @@ pub(crate) struct NativePermissionOption {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PiUiView {
+    pub(crate) run: RunId,
+    pub(crate) pending: Vec<PiUiPending>,
+    pub(crate) title: Option<String>,
+    pub(crate) statuses: Vec<PiUiStatus>,
+    pub(crate) widgets: Vec<PiUiWidget>,
+    #[serde(default)]
+    pub(crate) editor: Option<PiUiEditor>,
+    pub(crate) notices: Vec<PiUiNotice>,
+    #[serde(default)]
+    pub(crate) notices_omitted: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PiUiPending {
+    pub(crate) request: RunId,
+    pub(crate) dialog: PiUiDialog,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum PiUiDialog {
+    Select {
+        title: String,
+        options: Vec<String>,
+    },
+    Confirm {
+        title: String,
+        message: String,
+    },
+    Input {
+        title: String,
+        #[serde(default)]
+        placeholder: Option<String>,
+    },
+    Editor {
+        title: String,
+        #[serde(default)]
+        prefill: Option<String>,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PiUiStatus {
+    pub(crate) key: String,
+    pub(crate) text: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PiUiWidget {
+    pub(crate) key: String,
+    pub(crate) lines: Option<Vec<String>>,
+    pub(crate) placement: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PiUiEditor {
+    pub(crate) revision: u64,
+    pub(crate) text: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PiUiNotice {
+    pub(crate) level: String,
+    pub(crate) message: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum BrowserRouteView {
     Messages {
@@ -803,6 +879,8 @@ struct WireView {
     opencode_sessions: Vec<AgentSessionView>,
     #[serde(default)]
     native_permissions: Vec<NativePermissionView>,
+    #[serde(default, deserialize_with = "Option::deserialize")]
+    pi_ui: Option<PiUiView>,
     #[serde(default)]
     browser_actions: Vec<BrowserActionView>,
     #[serde(default, deserialize_with = "Option::deserialize")]
@@ -921,7 +999,16 @@ impl PageView {
         if bytes.len() > MAX_FRAME {
             return Err(FlowError::Protocol("view exceeds 65536 bytes".into()));
         }
-        let wire: WireView = serde_json::from_slice(bytes)
+        let value: serde_json::Value = serde_json::from_slice(bytes)
+            .map_err(|error| FlowError::Protocol(error.to_string()))?;
+        if value.get("pi_ui").is_some_and(|pi_ui| {
+            serde_json::to_vec(pi_ui).map_or(true, |encoded| encoded.len() > MAX_PI_UI)
+        }) {
+            return Err(FlowError::Protocol(
+                "Pi UI projection exceeds 32768 bytes".into(),
+            ));
+        }
+        let wire: WireView = serde_json::from_value(value)
             .map_err(|error| FlowError::Protocol(error.to_string()))?;
         if wire.store.len() != 32
             || !wire.store.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -930,6 +1017,12 @@ impl PageView {
             || wire.codex_sessions.len() > MAX_RUNS
             || wire.opencode_sessions.len() > MAX_RUNS
             || wire.native_permissions.len() > 8
+            || wire.pi_ui.as_ref().is_some_and(|ui| {
+                ui.pending.len() > 8
+                    || ui.statuses.len() > 16
+                    || ui.widgets.len() > 8
+                    || ui.notices.len() > 32
+            })
             || wire.browser_actions.len() > MAX_BROWSER_ACTIONS
         {
             return Err(FlowError::Protocol(
@@ -1135,6 +1228,35 @@ impl PageView {
         }
         let run_ids: std::collections::BTreeSet<_> =
             runs.iter().map(|run| run.id.as_str()).collect();
+        if let Some(ui) = &wire.pi_ui {
+            let mut requests = std::collections::BTreeSet::new();
+            let mut status_keys = std::collections::BTreeSet::new();
+            let mut widget_keys = std::collections::BTreeSet::new();
+            if !valid_id(ui.run.as_str())
+                || !runs
+                    .iter()
+                    .any(|run| run.id == ui.run && matches!(&run.route, RunRoute::Pi { .. }))
+                || runs
+                    .iter()
+                    .any(|run| run.id == ui.run && run.status.is_terminal())
+                    && !ui.pending.is_empty()
+                || ui.pending.iter().any(|pending| {
+                    !valid_id(pending.request.as_str())
+                        || !requests.insert(pending.request.as_str())
+                })
+                || ui
+                    .statuses
+                    .iter()
+                    .any(|status| !status_keys.insert(&status.key))
+                || ui.widgets.iter().any(|widget| {
+                    !widget_keys.insert(&widget.key)
+                        || !matches!(widget.placement.as_str(), "aboveEditor" | "belowEditor")
+                })
+                || ui.notices.iter().any(|notice| notice.level.is_empty())
+            {
+                return Err(FlowError::Protocol("invalid Pi UI projection".into()));
+            }
+        }
         let mut permission_ids = std::collections::BTreeSet::new();
         for permission in &wire.native_permissions {
             let mut option_ids = std::collections::BTreeSet::new();
@@ -1403,6 +1525,7 @@ impl PageView {
             opencode_profile: wire.opencode_profile,
             opencode_sessions: wire.opencode_sessions,
             native_permissions: wire.native_permissions,
+            pi_ui: wire.pi_ui,
             browser_actions: wire.browser_actions,
             browser_route: wire.browser_route,
             chat_route: wire.chat_route,
@@ -1581,6 +1704,52 @@ mod tests {
             assert!(PageView::decode(&serde_json::to_vec(&absent).unwrap()).is_err());
         }
         assert!(PageView::decode(&vec![b' '; MAX_FRAME + 1]).is_err());
+    }
+
+    #[test]
+    fn decodes_bounded_pi_ui_without_normalizing_choice_values() {
+        let mut frame: serde_json::Value = serde_json::from_str(VALID).unwrap();
+        frame["runs"][0]["kind"] = serde_json::json!("agent");
+        frame["runs"][0]["status"] = serde_json::json!("running");
+        frame["runs"][0]["route"] = serde_json::json!({
+            "kind":"pi", "workflow":format!("{STORE}:3"), "provider":"fixture", "model":"fixture"
+        });
+        frame["pi_ui"] = serde_json::json!({
+            "run":format!("{STORE}:2"),
+            "pending":[{"request":format!("{STORE}:4"),"dialog":{"kind":"select","title":"Pick","options":["","同じ 🪷","同じ 🪷"]}}],
+            "title":"Native title", "statuses":[{"key":"","text":null}],
+            "widgets":[{"key":"\u{0000}", "lines":["first","second"],"placement":"belowEditor"}],
+            "editor":{"revision":1,"text":"suggestion"},
+            "notices":[{"level":"info","message":"Ready"}], "notices_omitted":1
+        });
+        let view = PageView::decode(&serde_json::to_vec(&frame).unwrap()).unwrap();
+        let ui = view.pi_ui.unwrap();
+        let PiUiDialog::Select { options, .. } = &ui.pending[0].dialog else {
+            panic!("select dialog expected")
+        };
+        assert_eq!(options, &["", "同じ 🪷", "同じ 🪷"]);
+        assert_eq!(ui.statuses[0].key, "");
+        assert_eq!(ui.statuses[0].text, None);
+        assert_eq!(ui.widgets[0].key, "\u{0}");
+        assert_eq!(ui.widgets[0].placement, "belowEditor");
+        assert_eq!(ui.notices_omitted, 1);
+
+        frame["pi_ui"] = serde_json::Value::Null;
+        assert!(
+            PageView::decode(&serde_json::to_vec(&frame).unwrap())
+                .unwrap()
+                .pi_ui
+                .is_none()
+        );
+        frame["pi_ui"] = serde_json::json!({
+            "run":format!("{STORE}:2"), "pending":[], "title":null,
+            "statuses":[], "widgets":[], "editor":null, "notices":[], "extra":true
+        });
+        assert!(PageView::decode(&serde_json::to_vec(&frame).unwrap()).is_err());
+        frame["pi_ui"].as_object_mut().unwrap().remove("extra");
+        frame["pi_ui"]["pending"] = serde_json::json!([]);
+        frame["runs"][0]["status"] = serde_json::json!("complete");
+        assert!(PageView::decode(&serde_json::to_vec(&frame).unwrap()).is_ok());
     }
 
     #[test]

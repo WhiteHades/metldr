@@ -312,7 +312,7 @@ impl Owner {
             || session
                 .as_ref()
                 .is_some_and(|s| s.is_empty() || s.len() > 128)
-            || method == "MetLDR.detached"
+            || method == "metldr.detached"
             || slot.events.as_ref().is_none_or(|events| {
                 events
                     .try_send(Notice {

@@ -120,6 +120,7 @@ pub(super) fn render(panel: &Panel) -> Result<(), JsValue> {
     results::render(doc, snapshot.as_ref())
         .and_then(|()| render_browser_actions(panel))
         .and_then(|()| render_native_permissions(panel))
+        .and_then(|()| crate::pi_ui::render(panel))
 }
 
 fn render_native_permissions(panel: &Panel) -> Result<(), JsValue> {

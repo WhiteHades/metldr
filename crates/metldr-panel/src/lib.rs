@@ -1,4 +1,4 @@
-const WIRE_VERSION: u8 = 5;
+const WIRE_VERSION: u8 = 6;
 
 use std::{cell::RefCell, rc::Rc};
 
@@ -16,6 +16,7 @@ mod composer_ui;
 mod flow;
 mod interaction_audio;
 mod model;
+mod pi_ui;
 mod profile;
 mod provider_settings;
 mod readiness;
@@ -23,7 +24,9 @@ mod results;
 mod site;
 mod view;
 use flow::{FlowClient, StopReceipt};
-use model::{BrowserActionId, BrowserActionPhase, FlowError, PageView, RunId, SourceStatus};
+use model::{
+    BrowserActionId, BrowserActionPhase, FlowError, PageView, RunId, RunStatus, SourceStatus,
+};
 
 const HOST: &str = "io.metldr.first_flow";
 const PANEL_PORT: &str = "metldr-first-flow";
@@ -51,6 +54,8 @@ struct Panel {
     status_message: String,
     browser_decision_pending: Option<(BrowserActionId, u64)>,
     native_permission_pending: Option<(RunId, RunId)>,
+    pi_ui_pending: Option<(RunId, RunId)>,
+    pi_ui_stopping: Option<RunId>,
     stale_generation: u64,
     connection_generation: u64,
 }
@@ -147,6 +152,8 @@ async fn panel_start() -> Result<(), JsValue> {
         status_message: "Reconnect loads the saved view without starting work.".into(),
         browser_decision_pending: None,
         native_permission_pending: None,
+        pi_ui_pending: None,
+        pi_ui_stopping: None,
         stale_generation: 0,
         connection_generation: 0,
     }));
@@ -160,6 +167,8 @@ async fn panel_start() -> Result<(), JsValue> {
     });
     document.add_event_listener_with_callback("click", listener.as_ref().unchecked_ref())?;
     listener.forget();
+
+    pi_ui::install(&document, &panel)?;
 
     composer::install(&panel)?;
     composer_ui::install(&panel)?;
@@ -223,6 +232,9 @@ fn handle_click(panel: &Rc<RefCell<Panel>>, event: Event) -> Result<(), FlowErro
     else {
         return Ok(());
     };
+    if pi_ui::handle_click(panel, &button, &event)? {
+        return Ok(());
+    }
     let action = button.get_attribute("data-action");
     if matches!(action.as_deref(), Some("summarize")) {
         let p = panel.borrow();
@@ -419,18 +431,63 @@ fn handle_click(panel: &Rc<RefCell<Panel>>, event: Event) -> Result<(), FlowErro
                     p.connection_generation,
                 )
             };
+            {
+                let mut p = panel.borrow_mut();
+                if p.snapshot
+                    .as_ref()
+                    .is_some_and(|view| view.pi_ui.as_ref().is_some_and(|ui| ui.run == run))
+                {
+                    p.pi_ui_stopping = Some(run.clone());
+                    render(&p);
+                }
+            }
             let panel = Rc::clone(panel);
             spawn_local(async move {
-                let result = flow.request_stop(run).await;
+                let result = flow.request_stop(run.clone()).await;
                 if panel.borrow().connection_generation != generation {
                     return;
                 }
-                match result {
-                    Ok(StopReceipt::Requested) => set_panel_status(&panel, "Stop requested."),
-                    Ok(StopReceipt::AlreadyTerminal) => {
-                        set_panel_status(&panel, "Work has already finished.")
+                let message = match &result {
+                    Ok(StopReceipt::Requested) => {
+                        set_panel_status(&panel, "Stop requested.");
+                        return;
                     }
-                    Err(error) => set_panel_status(&panel, &format!("Request failed: {error}")),
+                    Ok(StopReceipt::AlreadyTerminal) => {
+                        "The host reports that work finished.".to_owned()
+                    }
+                    Err(error) => format!("Stop failed: {error}"),
+                };
+                let current = flow.current_page().await;
+                if panel.borrow().connection_generation != generation {
+                    return;
+                }
+                match current {
+                    Ok(view) => {
+                        let fresh = panel
+                            .borrow()
+                            .snapshot
+                            .as_ref()
+                            .is_none_or(|old| !view.is_older_than(old));
+                        let running = view
+                            .runs
+                            .iter()
+                            .any(|item| item.id == run && item.status == RunStatus::Running);
+                        apply_view(&panel, view, generation);
+                        if result.is_err() && fresh && running && flow.is_connected() {
+                            let mut p = panel.borrow_mut();
+                            if p.pi_ui_stopping.as_ref() == Some(&run) {
+                                p.pi_ui_stopping = None;
+                            }
+                            render(&p);
+                        }
+                        set_panel_status(&panel, &message);
+                    }
+                    Err(error) => set_panel_status(
+                        &panel,
+                        &format!(
+                            "{message} Could not refresh the host state: {error}. Controls remain paused."
+                        ),
+                    ),
                 }
             });
         }
@@ -506,12 +563,16 @@ fn reconnect(panel: Rc<RefCell<Panel>>) {
                         p.flow = flow.clone();
                         p.start_pending = false;
                         p.native_permission_pending = None;
+                        p.pi_ui_pending = None;
+                        p.pi_ui_stopping = None;
                         p.connection_generation = p.connection_generation.wrapping_add(1);
                         p.stale_generation = p.stale_generation.wrapping_add(1);
                         if let Some(view) = &mut p.snapshot {
                             view.source_status = SourceStatus::Checking;
                             view.source_epoch = 0;
+                            view.pi_ui = None;
                         }
+                        render(&p);
                     }
                     if let Err(error) = install_flow(&panel) {
                         set_panel_status(&panel, &error.to_string());
@@ -598,6 +659,22 @@ fn apply_view(panel: &Rc<RefCell<Panel>>, view: PageView, generation: u64) {
         })
     {
         p.native_permission_pending = None;
+    }
+    if p.pi_ui_pending.as_ref().is_some_and(|(run, request)| {
+        !p.snapshot
+            .as_ref()
+            .and_then(|view| view.pi_ui.as_ref())
+            .is_some_and(|ui| {
+                &ui.run == run && ui.pending.iter().any(|pending| &pending.request == request)
+            })
+    }) {
+        p.pi_ui_pending = None;
+    }
+    if p.pi_ui_stopping
+        .as_ref()
+        .is_some_and(|run| active_run(&p.snapshot) != Some(run))
+    {
+        p.pi_ui_stopping = None;
     }
     p.connected = p.flow.is_connected();
     p.status_message = if p.snapshot.as_ref().and_then(PageView::active_run).is_some() {

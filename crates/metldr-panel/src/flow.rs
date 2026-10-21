@@ -548,6 +548,40 @@ impl FlowClient {
         }
     }
 
+    pub(crate) async fn pi_ui_reply(
+        &self,
+        run: RunId,
+        request: RunId,
+        kind: &str,
+        text: Option<String>,
+        confirm: Option<bool>,
+    ) -> Result<PageView> {
+        let answer = match kind {
+            "select" | "text" => {
+                json!({"kind":kind,"value":text.ok_or_else(|| FlowError::InvalidInput("Pi UI answer is missing.".into()))?})
+            }
+            "confirm" => {
+                json!({"kind":kind,"value":confirm.ok_or_else(|| FlowError::InvalidInput("Pi UI answer is missing.".into()))?})
+            }
+            "cancel" => json!({"kind":"cancel"}),
+            _ => {
+                return Err(FlowError::InvalidInput(
+                    "Pi UI answer kind is invalid.".into(),
+                ));
+            }
+        };
+        match self
+            .request(
+                json!({"op":"pi_ui_reply","run":run,"request":request,"answer":answer}),
+                ReplyKind::Page,
+            )
+            .await?
+        {
+            Reply::Page(view) => Ok(self.check_source(view).await),
+            _ => Err(FlowError::Protocol("Expected a Pi UI reply view.".into())),
+        }
+    }
+
     async fn start(&self, command: Value) -> Result<RunId> {
         match self.request(command, ReplyKind::Start).await? {
             Reply::Started(run) => Ok(run),

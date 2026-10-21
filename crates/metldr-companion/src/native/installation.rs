@@ -185,9 +185,9 @@ mod tests {
             assert!(ProfileKey::decode(&greeting(&key)).is_err());
         }
         for bytes in [
-            br#"{"v":5,"command":{"op":"view"},"request":"early"}"#.as_slice(),
-            br#"{"v":5,"kind":"profile","key":"bad"}"#.as_slice(),
-            br#"{"v":5,"kind":"profile","key":"bad","path":"/elsewhere"}"#.as_slice(),
+            br#"{"v":6,"command":{"op":"view"},"request":"early"}"#.as_slice(),
+            br#"{"v":6,"kind":"profile","key":"bad"}"#.as_slice(),
+            br#"{"v":6,"kind":"profile","key":"bad","path":"/elsewhere"}"#.as_slice(),
         ] {
             assert!(ProfileKey::decode(bytes).is_err());
         }

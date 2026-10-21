@@ -93,6 +93,7 @@ mod tests {
             codex_profile: None,
             opencode_profile: None,
             native_permissions: BTreeMap::new(),
+            pi_ui: None,
             browser_approval: None,
             browser_io: None,
             browser_route: None,
@@ -189,6 +190,7 @@ mod tests {
             codex_profile: None,
             opencode_profile: None,
             native_permissions: BTreeMap::new(),
+            pi_ui: None,
             browser_approval: None,
             browser_io: None,
             browser_route: None,
@@ -273,6 +275,249 @@ mod tests {
     }
 
     #[test]
+    fn pi_ui_offers_are_durable_scoped_transient_and_stopped() {
+        let output = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(".tmp")
+            .join(format!(
+                "pi-ui-owner-check-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+        fs::create_dir_all(&output).unwrap();
+        let (disk, mut state) = Disk::open(output.join("state")).unwrap();
+        let source_id = state.id().unwrap();
+        let workflow = state.id().unwrap();
+        let run = state.id().unwrap();
+        let profile = crate::agent_model::Profile {
+            executable: std::env::current_exe().unwrap(),
+            workspace: output.clone(),
+            session_dir: output.clone(),
+            provider: "fixture".into(),
+            model: "fixture".into(),
+            offline: true,
+        };
+        let source = Source {
+            id: source_id.clone(),
+            page: Page {
+                tab: 1,
+                document: "owned-document".into(),
+                url: "https://example.com/article".into(),
+                title: "Example page".into(),
+                text: "Example page text.".into(),
+            },
+        };
+        state.view.source = Some(source.clone());
+        state.view.runs.push(Run {
+            id: run.clone(),
+            source: source_id,
+            kind: "agent".into(),
+            question: Some("Open the page".into()),
+            status: Status::Running,
+            output: metldr_conversation::Content::native(),
+            error: None,
+        });
+        state.workflows.insert(
+            workflow.clone(),
+            crate::agent_model::Workflow {
+                fingerprint: crate::agent_model::digest(&profile).unwrap(),
+                profile,
+                source,
+                revision: 1,
+                last_run: run.clone(),
+                binding: crate::agent_model::Binding::Pending,
+            },
+        );
+        state.launches.insert(
+            run.clone(),
+            crate::agent_model::Launch::Pi {
+                input_digest: "0".repeat(64),
+                workflow,
+                activity: vec![],
+            },
+        );
+        state.validate().unwrap();
+        disk.save(&state).unwrap();
+        let (transport, frames) = crate::transport::Transport::captured();
+        let (tx, _) = mpsc::sync_channel(1);
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut owner = Owner {
+            transport,
+            disk,
+            settings: Default::default(),
+            agent_runtime: Default::default(),
+            state,
+            fixture: None,
+            subscribers: BTreeMap::new(),
+            operation: Some(Operation {
+                run: run.clone(),
+                stop: stop.clone(),
+                worker: thread::spawn(|| {}),
+            }),
+            tx,
+            pi_profile: None,
+            codex_profile: None,
+            opencode_profile: None,
+            native_permissions: BTreeMap::new(),
+            pi_ui: None,
+            browser_approval: None,
+            browser_io: None,
+            browser_route: None,
+            responses_route: None,
+            google_route: None,
+            chat_route: None,
+        };
+
+        let nonce = owner.state.next;
+        let (request, received) = offer_pi_ui(
+            &mut owner,
+            &run,
+            1,
+            crate::agent::ui::Dialog::Input {
+                title: "Exact input".into(),
+                placeholder: None,
+            },
+        );
+        assert_eq!(request, format!("{}:{nonce}", owner.state.view.store));
+        let snapshot = fs::read_to_string(owner.disk.directory.join("snapshot.json")).unwrap();
+        let saved: serde_json::Value = serde_json::from_str(&snapshot).unwrap();
+        assert_eq!(saved["next"], nonce + 1);
+        assert!(
+            String::from_utf8(frames.lock().unwrap().clone())
+                .unwrap()
+                .contains(&request)
+        );
+        assert!(
+            owner
+                .pi_ui_reply(
+                    "wrong-run",
+                    "other-run",
+                    &request,
+                    crate::agent::ui::Answer::Text("wrong".into()),
+                )
+                .is_err()
+        );
+        assert!(
+            owner
+                .pi_ui_reply(
+                    "wrong-request",
+                    &run,
+                    "stale-request",
+                    crate::agent::ui::Answer::Text("wrong".into()),
+                )
+                .is_err()
+        );
+        let exact = "Exact answer with spaces";
+        owner
+            .pi_ui_reply(
+                "answer",
+                &run,
+                &request,
+                crate::agent::ui::Answer::Text(exact.into()),
+            )
+            .unwrap();
+        assert!(
+            matches!(received.recv().unwrap(), crate::agent::ui::Answer::Text(value) if value == exact)
+        );
+        assert!(
+            !fs::read_to_string(owner.disk.directory.join("snapshot.json"))
+                .unwrap()
+                .contains(exact)
+        );
+
+        let (disconnect_request, abandoned) = offer_pi_ui(
+            &mut owner,
+            &run,
+            2,
+            crate::agent::ui::Dialog::Confirm {
+                title: "Disconnect check".into(),
+                message: "Confirm?".into(),
+            },
+        );
+        owner.disconnect_pi_ui().unwrap();
+        assert!(
+            owner
+                .pi_ui_reply(
+                    "disconnected-reply",
+                    &run,
+                    &disconnect_request,
+                    crate::agent::ui::Answer::Confirm(true),
+                )
+                .is_err()
+        );
+        assert!(matches!(
+            abandoned.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
+
+        owner.state.view.runs[0].status = Status::Running;
+        stop.store(false, std::sync::atomic::Ordering::Release);
+        let (stop_request, queued) = offer_pi_ui(
+            &mut owner,
+            &run,
+            3,
+            crate::agent::ui::Dialog::Confirm {
+                title: "Stop check".into(),
+                message: "Confirm?".into(),
+            },
+        );
+        owner
+            .pi_ui_reply(
+                "queued-answer",
+                &run,
+                &stop_request,
+                crate::agent::ui::Answer::Confirm(true),
+            )
+            .unwrap();
+        owner
+            .command("stop", Command::Stop { run: run.clone() })
+            .unwrap();
+        assert!(stop.load(std::sync::atomic::Ordering::Acquire));
+        assert!(matches!(
+            queued.try_recv(),
+            Ok(crate::agent::ui::Answer::Confirm(true))
+        ));
+        assert!(
+            owner
+                .pi_ui_reply(
+                    "after-stop",
+                    &run,
+                    &stop_request,
+                    crate::agent::ui::Answer::Confirm(true),
+                )
+                .is_err()
+        );
+        drop(owner);
+        fs::remove_dir_all(output).unwrap();
+    }
+
+    fn offer_pi_ui(
+        owner: &mut Owner,
+        run: &str,
+        key: u64,
+        dialog: crate::agent::ui::Dialog,
+    ) -> (String, mpsc::Receiver<crate::agent::ui::Answer>) {
+        let (answer, received) = mpsc::sync_channel(1);
+        owner
+            .pi_ui_change(
+                run,
+                crate::agent::ui::Change::Offer {
+                    key,
+                    dialog,
+                    answer,
+                },
+            )
+            .unwrap();
+        let request = owner.pi_ui.as_ref().unwrap().public().unwrap()["pending"][0]["request"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        (request, received)
+    }
+
+    #[test]
     fn native_boundary_rejects_partial_oversize_and_invalid_utf8() {
         let value = json!({"v":crate::WIRE_VERSION,"request":"check:1","command":{"op":"view"}});
         let bytes = serde_json::to_vec(&value).unwrap();
@@ -283,7 +528,7 @@ mod tests {
                 .err()
                 .unwrap()
                 .to_string(),
-            "unsupported native wire version 4; expected 5"
+            "unsupported native wire version 4; expected 6"
         );
         let mut framed = (bytes.len() as u32).to_ne_bytes().to_vec();
         framed.extend_from_slice(&bytes);

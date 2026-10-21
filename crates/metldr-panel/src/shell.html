@@ -136,6 +136,13 @@
   </details>
 </section>
 <div id="workspace" tabindex="0" role="region" aria-label="Conversation and agent details">
+  <section id="pi-ui" aria-label="Pi requests and updates" hidden>
+    <h2 id="pi-ui-title" hidden></h2>
+    <div id="pi-ui-cards"></div>
+    <div id="pi-ui-statuses" aria-live="polite"></div>
+    <div id="pi-ui-widgets-above"></div>
+    <div id="pi-ui-notices" aria-live="polite"></div>
+  </section>
   <section id="native-permissions" aria-label="Native permission requests" hidden></section>
   <section id="browser-actions" aria-label="Browser actions" hidden>
     <div id="browser-current"></div>
@@ -157,6 +164,7 @@
   </details>
 </div>
 <footer>
+  <div id="pi-ui-widgets-below" aria-label="Pi widgets below the editor"></div>
   <form id="composer"></form>
   <p id="status" role="status" aria-live="polite" tabindex="-1">Reconnect loads the saved view without starting work.</p>
 </footer>

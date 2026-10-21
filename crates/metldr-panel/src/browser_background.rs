@@ -599,7 +599,7 @@ fn invalidate<T>(connection: u64, epoch: u64, reason: &str) -> Result<T, String>
     });
     clear_attachment(connection, epoch);
     if let Some((run, tab)) = details {
-        post_event(run, tab, None, "MetLDR.detached", json!({"reason":reason}));
+        post_event(run, tab, None, "metldr.detached", json!({"reason":reason}));
     }
     Err(reason.into())
 }
@@ -756,7 +756,7 @@ fn on_detach(source: JsValue) {
             active.run,
             active.tab,
             None,
-            "MetLDR.detached",
+            "metldr.detached",
             json!({"reason":"debugger detached"}),
         );
     }
@@ -790,7 +790,7 @@ fn on_permission_removed(permissions: JsValue) {
             run,
             tab,
             None,
-            "MetLDR.detached",
+            "metldr.detached",
             json!({"reason":"site access was revoked"}),
         );
     }
@@ -924,7 +924,7 @@ fn invalidate_event(tab: i32) {
             run,
             tab,
             None,
-            "MetLDR.detached",
+            "metldr.detached",
             json!({"reason":"invalid or oversized debugger event"}),
         );
     }
