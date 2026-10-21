@@ -27,16 +27,14 @@ pub(super) async fn run(
     failed: &AtomicBool,
     tx: &mpsc::SyncSender<Event>,
 ) -> Result<Outcome> {
-    let deadline = Instant::now() + Duration::from_secs(45);
+    let mut stop_wait = agent::StopWait::default();
     let mut pending: Vec<Pending> = Vec::new();
     let (mut tools, mut seen_tools): (BTreeMap<String, ActiveTool>, BTreeSet<String>) =
         (BTreeMap::new(), BTreeSet::new());
     let (mut cancelled, mut bytes, mut activities) = (false, 0usize, 0usize);
     loop {
-        if Instant::now() >= deadline {
-            return Err("OpenCode task exceeded the owned prototype deadline".into());
-        }
         let stopping = stop.load(Ordering::Acquire) || failed.load(Ordering::Acquire);
+        stop_wait.check(stopping, Instant::now())?;
         if stopping && !cancelled {
             session.cancel().await?;
             cancelled = true;

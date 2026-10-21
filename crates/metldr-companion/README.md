@@ -4,6 +4,8 @@ The companion runs provider requests, installed agents and browser tasks for the
 
 Pi receives the shared browser tools through a temporary MCP registration for each run. Its installed tools, authentication and saved session remain under Pi control. Browser field changes use the same separate MetLDR approval as other execution routes. The registration file contains no endpoint secret and is removed after Pi exits. An uncertain action or unconfirmed release blocks that session from continuing automatically.
 
+Active Pi, Codex and OpenCode turns have no overall companion time limit. Startup, RPC, browser operations and resource limits still apply. After Stop is observed, the companion waits up to 15 seconds for native confirmation between protocol operations, then enters cleanup if confirmation is missing. Expiry is a failure, not confirmed cancellation. Native RPC and process cleanup retain their own deadlines. MCP browser calls and OpenCode native permission decisions currently retain their separate 30 second limits.
+
 Browser inspection and field changes run in a named isolated world. Page scripts cannot replace the JavaScript properties used to read or change a field. The companion still checks the current frame and execution context before using an approved action, and requests no universal access for the isolated world. A verified field value does not establish that a website accepted or saved it.
 
 From the repository root, run:

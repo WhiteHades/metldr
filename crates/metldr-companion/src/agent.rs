@@ -19,8 +19,10 @@ use std::{
 
 mod browser;
 mod messages;
+mod stop;
 
 pub(super) use browser::execute;
+pub(crate) use stop::StopWait;
 
 pub(super) enum Outcome {
     Complete,
@@ -202,15 +204,14 @@ fn stream(
     let (mut tools, mut seen_tools) = (BTreeMap::<String, (String, Call)>::new(), BTreeSet::new());
     let mut activities = 0usize;
     let mut messages = messages::Messages::default();
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut stop_wait = StopWait::default();
     loop {
         if failed.load(Ordering::Acquire) {
             return Err("Pi browser service failed; task halted".into());
         }
-        if Instant::now() >= deadline {
-            return Err("Pi task exceeded the owned prototype deadline".into());
-        }
-        if stop.load(Ordering::Acquire) && !abort_sent {
+        let stopping = stop.load(Ordering::Acquire);
+        stop_wait.check(stopping, Instant::now())?;
+        if stopping && !abort_sent {
             pi.send(json!({"id":"native-abort","type":"abort"}))?;
             abort_sent = true;
         }

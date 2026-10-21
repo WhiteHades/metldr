@@ -145,13 +145,12 @@ async fn run(
     session
         .prompt(&format!("{prompt}\n\n{BROWSER_POLICY}"))
         .await?;
-    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut stop_wait = agent::StopWait::default();
     let mut interrupted = None;
     loop {
-        if Instant::now() >= deadline {
-            return Err("Codex task exceeded the owned prototype deadline".into());
-        }
-        if interrupted.is_none() && stop.load(Ordering::Acquire) {
+        let stopping = stop.load(Ordering::Acquire);
+        stop_wait.check(stopping, Instant::now())?;
+        if interrupted.is_none() && stopping {
             interrupted = Some(session.interrupt().await?);
         }
         let event =
@@ -241,6 +240,7 @@ async fn run(
                 let decoded = decode_call(&call.name, call.arguments.clone())?;
                 let outcome = tools.dispatch(&call.call_id, decoded, stop).await;
                 if stop.load(Ordering::Acquire) {
+                    stop_wait.check(true, Instant::now())?;
                     if interrupted.is_none() {
                         interrupted = Some(session.interrupt().await?);
                     }
