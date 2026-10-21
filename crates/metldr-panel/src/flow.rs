@@ -809,7 +809,8 @@ impl Connection {
             .map_err(js_error)?;
         Ok(Array::from(&tabs).get(0))
     }
-    async fn inject(&self, tab: i32, document: Option<&str>) -> Result<JsValue> {
+    async fn inject(&self, tab: i32, document: Option<&str>, url: &str) -> Result<JsValue> {
+        capture::check_access(url).await?;
         let mut target = json!({"tabId":tab});
         if let Some(document) = document {
             target["documentIds"] = json!([document]);
@@ -823,6 +824,7 @@ impl Connection {
         )
         .await
         .map_err(js_error)?;
+        capture::check_access(url).await?;
         let item = Array::from(&values).get(0);
         if get(&item, "frameId").map_err(js_error)?.as_f64() != Some(0.0) {
             return Err(FlowError::Host(
@@ -841,7 +843,7 @@ impl Connection {
             as i32;
         let selected_url = string_property(&tab, "url").map_err(js_error)?;
         validate_url(&selected_url)?;
-        let item = self.inject(tab_id, None).await?;
+        let item = self.inject(tab_id, None, &selected_url).await?;
         let document = string_property(&item, "documentId").map_err(js_error)?;
         let observed = get(&item, "result").map_err(js_error)?;
         let url = string_property(&observed, "url").map_err(js_error)?;
@@ -860,7 +862,7 @@ impl Connection {
                 "The page has empty or oversized content. Nothing was sent.".into(),
             ));
         }
-        let confirmed = self.inject(tab_id, Some(&document)).await?;
+        let confirmed = self.inject(tab_id, Some(&document), &url).await?;
         let current = self.active_tab().await?;
         let result = get(&confirmed, "result").map_err(js_error)?;
         if selected_url != url
@@ -885,7 +887,9 @@ impl Connection {
         if get(&tab, "id").map_err(js_error)?.as_f64() != Some(f64::from(source.tab)) {
             return Ok(SourceStatus::Saved);
         }
-        let item = self.inject(source.tab, Some(&source.document)).await?;
+        let item = self
+            .inject(source.tab, Some(&source.document), &source.url)
+            .await?;
         let observed = get(&item, "result").map_err(js_error)?;
         let current = self.active_tab().await?;
         let same_document = get(&current, "id").map_err(js_error)?.as_f64()
@@ -913,7 +917,9 @@ impl Connection {
         {
             return Ok(false);
         }
-        let item = self.inject(action.tab, Some(&action.document)).await?;
+        let item = self
+            .inject(action.tab, Some(&action.document), &action.url)
+            .await?;
         let observed = get(&item, "result").map_err(js_error)?;
         let current = await_call(&tabs, "get", &[action.tab.into()])
             .await

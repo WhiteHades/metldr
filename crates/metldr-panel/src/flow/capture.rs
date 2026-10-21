@@ -143,3 +143,20 @@ fn changed() -> FlowError {
         "The selected page or site permission changed during capture. Nothing was sent.".into(),
     )
 }
+
+pub(super) async fn check_access(url: &str) -> Result<()> {
+    let grant = json_js(&json!({"origins":[crate::site::permission(url)?]}))?;
+    let granted = await_call(
+        &chrome_api("permissions").map_err(js_error)?,
+        "contains",
+        &[grant],
+    )
+    .await
+    .map_err(js_error)?;
+    if granted.as_bool() != Some(true) {
+        return Err(FlowError::Host(
+            "Access to the selected site was not granted.".into(),
+        ));
+    }
+    Ok(())
+}
