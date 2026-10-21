@@ -22,16 +22,16 @@ impl From<&Page> for Target {
 }
 
 impl Store {
-    pub(crate) fn codex_browser_target(&self, run: &str) -> Result<Target> {
-        self.native_browser_target(run)
-    }
-
-    pub(crate) fn opencode_browser_target(&self, run: &str) -> Result<Target> {
-        self.native_browser_target(run)
-    }
-
-    fn native_browser_target(&self, run: &str) -> Result<Target> {
+    pub(crate) fn native_browser_target(&self, run: &str) -> Result<Target> {
         let (workflow, source) = match self.launches.get(run) {
+            Some(crate::agent_model::Launch::Pi { workflow, .. }) => (
+                workflow,
+                &self
+                    .workflows
+                    .get(workflow)
+                    .ok_or("missing Pi workflow")?
+                    .source,
+            ),
             Some(crate::agent_model::Launch::Codex { workflow, .. }) => (
                 workflow,
                 &self
@@ -55,7 +55,7 @@ impl Store {
             if prior.id == run {
                 return Ok(target);
             }
-            if matches!(self.launches.get(&prior.id), Some(crate::agent_model::Launch::Codex { workflow: other, .. } | crate::agent_model::Launch::OpenCode { workflow: other, .. }) if other == workflow)
+            if matches!(self.launches.get(&prior.id), Some(crate::agent_model::Launch::Pi { workflow: other, .. } | crate::agent_model::Launch::Codex { workflow: other, .. } | crate::agent_model::Launch::OpenCode { workflow: other, .. }) if other == workflow)
                 && let Some((binding, url)) =
                     self.navigation_destination(&prior.id, Some(&target))?
             {
@@ -137,11 +137,12 @@ pub(super) fn validate(state: &Store) -> Result<()> {
         let initial = if matches!(
             state.launches.get(&proposal.run),
             Some(
-                crate::agent_model::Launch::Codex { .. }
+                crate::agent_model::Launch::Pi { .. }
+                    | crate::agent_model::Launch::Codex { .. }
                     | crate::agent_model::Launch::OpenCode { .. }
             )
         ) {
-            Some(state.codex_browser_target(&proposal.run)?)
+            Some(state.native_browser_target(&proposal.run)?)
         } else {
             None
         };

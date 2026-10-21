@@ -1,4 +1,4 @@
-use crate::{PiProfile, ProcessExit, Result};
+use crate::{PiProfile, ProcessExit, Result, mcp::Registration};
 use serde_json::Value;
 use std::{
     io::{self, Write},
@@ -16,10 +16,12 @@ pub(crate) struct Session {
     stderr: Option<JoinHandle<()>>,
     closed: bool,
     forced: bool,
+    registration: Option<Registration>,
 }
 
 impl Session {
     pub(crate) fn spawn(profile: PiProfile) -> Result<Self> {
+        let registration = profile.mcp.as_ref().map(Registration::create).transpose()?;
         let mut command = Command::new(profile.executable);
         command
             .current_dir(profile.workspace)
@@ -36,6 +38,10 @@ impl Session {
         }
         if profile.offline {
             command.arg("--offline");
+        }
+        if let (Some(mcp), Some(registration)) = (&profile.mcp, &registration) {
+            command.arg("--extension").arg(registration.path());
+            command.env("METLDR_PI_BROWSER_TOKEN", mcp.token());
         }
         let mut child = command
             .stdin(Stdio::piped())
@@ -67,6 +73,7 @@ impl Session {
             stderr: Some(stderr),
             closed: false,
             forced: false,
+            registration,
         })
     }
 
@@ -122,6 +129,7 @@ impl Session {
             thread::sleep(Duration::from_millis(20));
         };
         self.closed = true;
+        self.registration.take();
         let deadline = Instant::now() + Duration::from_millis(200);
         while [&self.stdout, &self.stderr]
             .iter()
@@ -194,6 +202,7 @@ mod tests {
             stderr: None,
             closed: false,
             forced: false,
+            registration: None,
         };
         let first = session.close().unwrap();
         assert!(!first.drained && first.forced);

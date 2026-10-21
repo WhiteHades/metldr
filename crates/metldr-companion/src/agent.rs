@@ -5,20 +5,22 @@ use crate::{
     model::Source,
     tool_report::{Call, Preview},
 };
-use metldr_pi_session::{PiProfile, PiSession};
+use metldr_pi_session::{McpServer, PiProfile, PiSession};
 use serde_json::json;
 use std::{
     collections::{BTreeMap, BTreeSet},
     io,
     sync::{
-        Arc,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
     time::{Duration, Instant},
 };
 
+mod browser;
 mod messages;
+
+pub(super) use browser::execute;
 
 pub(super) enum Outcome {
     Complete,
@@ -33,6 +35,8 @@ pub(super) struct Job {
     pub binding: Binding,
     pub source: Source,
     pub text: String,
+    pub target: crate::browser_action::Target,
+    pub registration_dir: std::path::PathBuf,
 }
 
 pub(super) fn message(text: &str, source: &Source) -> Result<String> {
@@ -45,17 +49,16 @@ pub(super) fn message(text: &str, source: &Source) -> Result<String> {
     ))
 }
 
-pub(super) fn execute(job: Job, stop: Arc<AtomicBool>, tx: mpsc::SyncSender<Event>) {
-    let result = execute_inner(&job, &stop, &tx).unwrap_or_else(|e| Outcome::Failed(e.to_string()));
-    let _ = tx.send(Event::PiSettled {
-        run: job.run,
-        result,
-    });
-}
-
-fn execute_inner(job: &Job, stop: &AtomicBool, tx: &mpsc::SyncSender<Event>) -> Result<Outcome> {
+fn native(
+    job: &Job,
+    stop: &AtomicBool,
+    failed: &AtomicBool,
+    ready: &AtomicBool,
+    mcp: McpServer,
+    tx: &mpsc::SyncSender<Event>,
+) -> Result<(Outcome, bool)> {
     if stop.load(Ordering::Acquire) {
-        return Ok(Outcome::Cancelled);
+        return Ok((Outcome::Cancelled, true));
     }
     let resume = job.binding.resume_path()?;
     let mut pi = PiSession::spawn(PiProfile {
@@ -66,8 +69,9 @@ fn execute_inner(job: &Job, stop: &AtomicBool, tx: &mpsc::SyncSender<Event>) -> 
         session_dir: job.profile.session_dir.clone(),
         resume,
         offline: job.profile.offline,
+        mcp: Some(mcp),
     })?;
-    let result = session(job, &mut pi, stop, tx);
+    let result = session(job, &mut pi, stop, failed, ready, tx);
     if result.is_err() {
         let _ = pi.send(json!({"id":"cleanup-abort","type":"abort"}));
     }
@@ -75,13 +79,18 @@ fn execute_inner(job: &Job, stop: &AtomicBool, tx: &mpsc::SyncSender<Event>) -> 
     if closed.code != Some(0) || closed.forced || !closed.drained {
         return Err("Pi did not close cleanly with drained pipes".into());
     }
-    result
+    Ok((
+        result.unwrap_or_else(|error| Outcome::Failed(error.to_string())),
+        true,
+    ))
 }
 
 fn session(
     job: &Job,
     pi: &mut PiSession,
     stop: &AtomicBool,
+    failed: &AtomicBool,
+    ready: &AtomicBool,
     tx: &mpsc::SyncSender<Event>,
 ) -> Result<Outcome> {
     pi.send(json!({"id":"native-state","type":"get_state"}))?;
@@ -135,15 +144,56 @@ fn session(
     if stop.load(Ordering::Acquire) {
         return Ok(Outcome::Cancelled);
     }
-    let message = message(&job.text, &job.source)?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !ready.load(Ordering::Acquire) {
+        if stop.load(Ordering::Acquire) {
+            return Ok(Outcome::Cancelled);
+        }
+        if failed.load(Ordering::Acquire) || Instant::now() >= deadline {
+            return Err("Pi browser tools were not discovered before its prompt".into());
+        }
+        match pi.recv(Duration::from_millis(20)) {
+            Ok(event) => {
+                if event["type"] == "extension_ui_request" {
+                    return Err(if event["method"] == "notify" {
+                        "Pi browser tool setup needs attention"
+                    } else {
+                        "Pi requested native UI while browser tools were loading"
+                    }
+                    .into());
+                }
+                if event["type"] == "extension_error" {
+                    return Err("Pi extension failed while browser tools were loading".into());
+                }
+            }
+            Err(error)
+                if error
+                    .downcast_ref::<io::Error>()
+                    .is_some_and(|error| error.kind() == io::ErrorKind::TimedOut) =>
+            {
+                ()
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    if failed.load(Ordering::Acquire) {
+        return Err("Pi browser service ended before its prompt".into());
+    }
+    let message = format!(
+        "{}\n\n{}\nMetLDR browser tools are available through the {} MCP server for this run. Native tool permissions and MetLDR browser approvals are separate decisions.",
+        message(&job.text, &job.source)?,
+        crate::browser_worker::BROWSER_POLICY,
+        browser::name(&job.run)
+    );
     pi.send(json!({"id":"native-prompt","type":"prompt","message":message}))?;
-    stream(job, pi, stop, tx)
+    stream(job, pi, stop, failed, tx)
 }
 
 fn stream(
     job: &Job,
     pi: &mut PiSession,
     stop: &AtomicBool,
+    failed: &AtomicBool,
     tx: &mpsc::SyncSender<Event>,
 ) -> Result<Outcome> {
     let (mut prompt_ack, mut abort_sent, mut abort_reply) = (false, false, None);
@@ -154,6 +204,9 @@ fn stream(
     let mut messages = messages::Messages::default();
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
+        if failed.load(Ordering::Acquire) {
+            return Err("Pi browser service failed; task halted".into());
+        }
         if Instant::now() >= deadline {
             return Err("Pi task exceeded the owned prototype deadline".into());
         }
@@ -199,6 +252,12 @@ fn stream(
                     .filter(|s| !s.is_empty() && s.len() <= 128)
                     .ok_or("invalid Pi tool name")?
                     .to_owned();
+                let prefix = format!("mcp__{}__", browser::name(&job.run));
+                let display_name = name
+                    .strip_prefix(&prefix)
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or(&name)
+                    .to_owned();
                 let id = v["toolCallId"]
                     .as_str()
                     .filter(|s| !s.is_empty() && s.len() <= 128)
@@ -233,7 +292,7 @@ fn stream(
                         run: job.run.clone(),
                         activity: Activity {
                             outcome: None,
-                            tool: name,
+                            tool: display_name.clone(),
                             phase: "started".into(),
                             call: Some(report_call),
                         },
@@ -267,7 +326,7 @@ fn stream(
                     run: job.run.clone(),
                     activity: Activity {
                         outcome: None,
-                        tool: name,
+                        tool: display_name,
                         phase: phase.0.into(),
                         call: Some(phase.1),
                     },

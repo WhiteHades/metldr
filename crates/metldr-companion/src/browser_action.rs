@@ -109,6 +109,13 @@ impl Store {
         }
         self.browser_run(&proposal.run)?;
         let source = match self.launches.get(&proposal.run) {
+            Some(crate::agent_model::Launch::Pi { workflow, .. }) => {
+                &self
+                    .workflows
+                    .get(workflow)
+                    .ok_or("missing Pi browser source")?
+                    .source
+            }
             Some(crate::agent_model::Launch::Codex { workflow, .. }) => {
                 &self
                     .codex_workflows
@@ -134,11 +141,12 @@ impl Store {
         let initial = if matches!(
             self.launches.get(&proposal.run),
             Some(
-                crate::agent_model::Launch::Codex { .. }
+                crate::agent_model::Launch::Pi { .. }
+                    | crate::agent_model::Launch::Codex { .. }
                     | crate::agent_model::Launch::OpenCode { .. }
             )
         ) {
-            self.codex_browser_target(&proposal.run)?
+            self.native_browser_target(&proposal.run)?
         } else {
             Target::from(&source.page)
         };

@@ -283,63 +283,110 @@ fn codex_browser_follow_up_uses_the_verified_destination() {
 }
 
 #[test]
-fn codex_browser_actions_use_the_workflow_source_after_selection_changes() {
-    with_owner(|owner, proposal| {
-        bind_codex(owner, &proposal.run);
-        let new_source = owner.state.id().unwrap();
-        let selected = owner.state.view.source.as_mut().unwrap();
-        selected.id = new_source;
-        selected.page.tab = 8;
-        selected.page.document = "another-document".into();
-        selected.page.url = owner.fixture.as_ref().unwrap().origin.clone() + "/other";
-        owner.state.validate().unwrap();
-        let mut retargeted = proposal.clone();
-        retargeted.tool_use_id = "another-tool".into();
-        retargeted.binding.tab = 8;
-        retargeted.binding.document = "another-document".into();
-        retargeted.url = owner.fixture.as_ref().unwrap().origin.clone() + "/other";
-        assert!(owner.state.propose_browser(retargeted).is_err());
-        let action = owner.state.propose_browser(proposal).unwrap();
-        assert_eq!(action.proposal.binding.tab, 7);
-        assert_eq!(action.proposal.binding.document, "document-1");
-        let approved = owner
-            .state
-            .decide_browser(&action.id, action.revision, true)
-            .unwrap();
-        let dispatched = owner
-            .state
-            .dispatch_browser(&action.id, approved.revision)
-            .unwrap();
-        owner
-            .state
-            .settle_browser(
-                &action.id,
-                dispatched.revision,
-                Outcome::Uncertain {
-                    reason: "field observation was lost".into(),
-                },
-            )
-            .unwrap();
-        owner
-            .agent_settled(
-                &action.proposal.run,
-                crate::agent::Outcome::Failed("browser effect is uncertain".into()),
-                false,
-                true,
-            )
-            .unwrap();
-        assert!(
+fn native_browser_actions_keep_the_workflow_source_and_block_uncertain_recovery() {
+    for pi in [false, true] {
+        with_owner(|owner, proposal| {
+            let workflow = bind_codex(owner, &proposal.run);
+            if pi {
+                use crate::agent_model::{Binding, Launch, Profile, Workflow, digest};
+                let old = owner.state.codex_workflows.remove(&workflow).unwrap();
+                let profile = Profile {
+                    executable: "/tool/pi".into(),
+                    workspace: "/work".into(),
+                    session_dir: "/sessions".into(),
+                    provider: "probe".into(),
+                    model: "probe".into(),
+                    offline: true,
+                };
+                owner.state.workflows.insert(
+                    workflow.clone(),
+                    Workflow {
+                        fingerprint: digest(&profile).unwrap(),
+                        profile,
+                        source: old.source,
+                        revision: 1,
+                        last_run: proposal.run.clone(),
+                        binding: Binding::Pending,
+                    },
+                );
+                owner.state.launches.insert(
+                    proposal.run.clone(),
+                    Launch::Pi {
+                        workflow,
+                        input_digest: "0".repeat(64),
+                        activity: vec![],
+                    },
+                );
+            }
+            let new_source = owner.state.id().unwrap();
+            let selected = owner.state.view.source.as_mut().unwrap();
+            selected.id = new_source;
+            selected.page.tab = 8;
+            selected.page.document = "another-document".into();
+            selected.page.url = owner.fixture.as_ref().unwrap().origin.clone() + "/other";
+            owner.state.validate().unwrap();
+            let mut retargeted = proposal.clone();
+            retargeted.tool_use_id = "another-tool".into();
+            retargeted.binding.tab = 8;
+            retargeted.binding.document = "another-document".into();
+            retargeted.url = owner.fixture.as_ref().unwrap().origin.clone() + "/other";
+            assert!(owner.state.propose_browser(retargeted).is_err());
+            let action = owner.state.propose_browser(proposal).unwrap();
+            assert_eq!(action.proposal.binding.tab, 7);
+            assert_eq!(action.proposal.binding.document, "document-1");
+            let approved = owner
+                .state
+                .decide_browser(&action.id, action.revision, true)
+                .unwrap();
+            let dispatched = owner
+                .state
+                .dispatch_browser(&action.id, approved.revision)
+                .unwrap();
             owner
                 .state
-                .codex_workflows
-                .values()
-                .next()
-                .unwrap()
-                .binding
-                .resume()
-                .is_err()
-        );
-    });
+                .settle_browser(
+                    &action.id,
+                    dispatched.revision,
+                    Outcome::Uncertain {
+                        reason: "field observation was lost".into(),
+                    },
+                )
+                .unwrap();
+            owner
+                .agent_settled(
+                    &action.proposal.run,
+                    crate::agent::Outcome::Failed("browser effect is uncertain".into()),
+                    false,
+                    true,
+                )
+                .unwrap();
+            if pi {
+                assert!(
+                    owner
+                        .state
+                        .workflows
+                        .values()
+                        .next()
+                        .unwrap()
+                        .binding
+                        .resume_path()
+                        .is_err()
+                );
+            } else {
+                assert!(
+                    owner
+                        .state
+                        .codex_workflows
+                        .values()
+                        .next()
+                        .unwrap()
+                        .binding
+                        .resume()
+                        .is_err()
+                );
+            }
+        });
+    }
 }
 
 #[test]

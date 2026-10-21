@@ -2,7 +2,6 @@ use crate::{
     Result,
     browser_worker::{Call, Tools, decode_call, definitions},
 };
-use metldr_opencode_session::McpServer;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
@@ -32,12 +31,13 @@ pub(super) struct Server {
     run: String,
     capability: String,
     address: SocketAddr,
+    ready: Arc<AtomicBool>,
 }
 
 impl Server {
     pub(super) async fn bind(run: &str) -> Result<Self> {
         if !crate::model::valid_request_id(run) {
-            return Err("invalid OpenCode browser run id".into());
+            return Err("invalid browser run id".into());
         }
         let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
         let address = listener.local_addr()?;
@@ -48,18 +48,16 @@ impl Server {
             run: run.to_owned(),
             capability: hex(&secret),
             address,
+            ready: Arc::new(AtomicBool::new(false)),
         })
     }
 
-    pub(super) fn declaration(&self) -> McpServer {
-        McpServer::Http {
-            name: "metldr".into(),
-            url: format!("http://{}/mcp", self.address),
-            headers: vec![(
-                "Authorization".into(),
-                format!("Bearer {}", self.capability),
-            )],
-        }
+    pub(super) fn endpoint(&self) -> (SocketAddr, String) {
+        (self.address, self.capability.clone())
+    }
+
+    pub(super) fn ready(&self) -> Arc<AtomicBool> {
+        self.ready.clone()
     }
 
     pub(super) async fn serve(
@@ -74,6 +72,7 @@ impl Server {
             stop: stop.clone(),
             failed: failed.clone(),
             done: done.clone(),
+            ready: self.ready.clone(),
             ..Calls::default()
         });
         let mut connections = JoinSet::new();
@@ -89,7 +88,7 @@ impl Server {
             fatal_cancel |= active.cancelled.load(Ordering::Acquire)
                 && !stop.load(Ordering::Acquire) && !done.load(Ordering::Acquire);
             if failed.load(Ordering::Acquire) && !stop.load(Ordering::Acquire) && !done.load(Ordering::Acquire) {
-                dispatch_error.get_or_insert_with(|| "OpenCode browser service failed; task halted".into());
+                dispatch_error.get_or_insert_with(|| "Browser service failed; task halted".into());
             }
             if !stop.load(Ordering::Acquire) && !failed.load(Ordering::Acquire) && !done.load(Ordering::Acquire) && !fatal_cancel && dispatch_error.is_none() {
                 if let Some(request) = pending.pop_front() {
@@ -143,7 +142,7 @@ impl Server {
                     drop(call_future);
                     if (expired || result.is_err()) && !stop.load(Ordering::Acquire) && !done.load(Ordering::Acquire) {
                         failed.store(true, Ordering::Release);
-                        dispatch_error.get_or_insert_with(|| "OpenCode browser execution failed; task halted".into());
+                        dispatch_error.get_or_insert_with(|| "Browser execution failed; task halted".into());
                         accepting = false;
                     }
                     if stop.load(Ordering::Acquire) || failed.load(Ordering::Acquire) || done.load(Ordering::Acquire) {
@@ -207,7 +206,7 @@ impl Server {
             }
         }
         if fatal_cancel {
-            return Err("OpenCode cancelled an active browser tool call".into());
+            return Err("Agent cancelled an active browser tool call".into());
         }
         if let Some(error) = dispatch_error {
             return Err(error.into());
@@ -237,7 +236,7 @@ impl Server {
                 Err(error)
             }
             (Ok(()), Ok(())) if fatal_cancel => {
-                Err("OpenCode cancelled an active browser tool call".into())
+                Err("Agent cancelled an active browser tool call".into())
             }
             (Ok(()), Ok(())) => Ok(()),
         };
@@ -264,6 +263,7 @@ struct Calls {
     stop: Arc<AtomicBool>,
     failed: Arc<AtomicBool>,
     done: Arc<AtomicBool>,
+    ready: Arc<AtomicBool>,
 }
 
 impl Calls {
@@ -360,12 +360,19 @@ async fn handle_connection(
         return write_http(&mut stream, 400, "").await;
     }
     let tool_call = message["method"] == "tools/call";
+    let discovery = message["method"] == "tools/list";
     let result = process_message(message, run, tx, active.clone()).await;
     if tool_call && active.fence_response().await {
         return Ok(());
     }
     let response = match result {
-        Ok(Some(body)) => write_http(&mut stream, 200, &body).await,
+        Ok(Some(body)) => {
+            let sent = write_http(&mut stream, 200, &body).await;
+            if discovery && sent.is_ok() {
+                active.ready.store(true, Ordering::Release);
+            }
+            sent
+        }
         Ok(None) => write_http(&mut stream, 202, "").await,
         Err(error) => write_http(&mut stream, 400, &json_error(error)).await,
     };
@@ -661,9 +668,15 @@ mod tests {
         let server = Server::bind("0123456789abcdef0123456789abcdef:2")
             .await
             .unwrap();
-        assert!(matches!(server.declaration(), McpServer::Http { name, .. } if name == "metldr"));
+        let (address, capability) = server.endpoint();
+        assert_eq!(address, server.address);
+        assert_eq!(capability, server.capability);
+        assert!(!server.ready().load(Ordering::Acquire));
         let (tx, _rx) = mpsc::channel(8);
-        let active = Arc::new(Calls::default());
+        let active = Arc::new(Calls {
+            ready: server.ready(),
+            ..Calls::default()
+        });
         for (method, authorized, origin, version, body, status) in [
             ("GET", false, false, false, "", 403),
             ("GET", true, false, false, "", 405),
@@ -770,6 +783,10 @@ mod tests {
             })
             .await
             .unwrap();
+            assert_eq!(
+                server.ready().load(Ordering::Acquire),
+                body.contains("tools/list") && status == 200
+            );
         }
     }
     #[tokio::test]

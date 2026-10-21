@@ -139,7 +139,7 @@ impl Owner {
             profile: w.profile.clone(),
             binding: w.binding.clone(),
             source: w.source.clone(),
-            target: next.opencode_browser_target(&run)?,
+            target: next.native_browser_target(&run)?,
             text,
         };
         self.commit(next)?;

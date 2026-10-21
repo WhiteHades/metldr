@@ -222,7 +222,11 @@ pub(super) fn run() -> Result<()> {
             } => owner.pi_bound(&run, &workflow, binding, ack)?,
             Event::ToolProgress { run, call } => owner.tool_progress(&run, call)?,
             Event::PiActivity { run, activity } => owner.pi_activity(&run, activity)?,
-            Event::PiSettled { run, result } => owner.agent_settled(&run, result, closed, true)?,
+            Event::PiSettled {
+                run,
+                result,
+                released,
+            } => owner.agent_settled(&run, result, closed, released)?,
             Event::CodexBound {
                 run,
                 workflow,

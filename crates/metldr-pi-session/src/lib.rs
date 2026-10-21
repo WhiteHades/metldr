@@ -1,11 +1,14 @@
 #![doc = include_str!("../README.md")]
 
+mod mcp;
 mod process;
 mod rpc;
 
 use std::{error::Error, path::PathBuf};
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
+
+pub use mcp::McpServer;
 
 pub struct PiProfile {
     pub executable: PathBuf,
@@ -15,6 +18,7 @@ pub struct PiProfile {
     pub session_dir: PathBuf,
     pub resume: Option<PathBuf>,
     pub offline: bool,
+    pub mcp: Option<McpServer>,
 }
 
 pub struct PiSession(process::Session);

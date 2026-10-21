@@ -4,6 +4,8 @@ This Rust crate runs an installed Pi executable in RPC mode over stdio. It uses 
 
 The transport sends JSON commands and receives JSON events. Pi owns its tools, Skills, authentication and saved session files. Resume a session by setting `PiProfile.resume` to its saved session file. Reopening a session does not itself send a prompt.
 
+Set `PiProfile.mcp` to bind one temporary HTTP MCP server. The descriptor accepts only a named server on IPv4 loopback with a token of 64 hex characters. It creates a temporary extension registration for each session and passes the token only to the Pi child environment. The registration is removed after the child exits or the session is dropped. Each HTTP request asks for its connection to close. This does not add arbitrary Pi arguments or change Pi configuration.
+
 ```no_run
 use metldr_pi_session::{PiProfile, PiSession, Result};
 use serde_json::json;

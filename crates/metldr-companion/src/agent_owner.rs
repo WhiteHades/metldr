@@ -131,19 +131,11 @@ impl Owner {
             .checked_add(1)
             .ok_or("Pi workflow revision exhausted")?;
         w.last_run = run.clone();
-        let job = Job {
-            run: run.clone(),
-            workflow: workflow.clone(),
-            profile: w.profile.clone(),
-            binding: w.binding.clone(),
-            source: w.source.clone(),
-            text: text.clone(),
-        };
         next.view.runs.push(Run {
             id: run.clone(),
             source: w.source.id.clone(),
             kind: "agent".into(),
-            question: Some(text),
+            question: Some(text.clone()),
             status: Status::Running,
             output: metldr_conversation::Content::native(),
             error: None,
@@ -153,15 +145,28 @@ impl Owner {
             run.clone(),
             Launch::Pi {
                 input_digest,
-                workflow,
+                workflow: workflow.clone(),
                 activity: vec![],
             },
         );
+        let w = next.workflows.get(&workflow).ok_or("missing Pi workflow")?;
+        let job = Job {
+            run: run.clone(),
+            workflow,
+            profile: w.profile.clone(),
+            binding: w.binding.clone(),
+            source: w.source.clone(),
+            text,
+            target: next.native_browser_target(&run)?,
+            registration_dir: self.disk.directory.join("pi-browser"),
+        };
         self.commit(next)?;
+        let (slot, events) = crate::browser_io::Slot::new(run.clone(), job.target.tab);
+        self.browser_io = Some(slot);
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = stop.clone();
         let tx = self.tx.clone();
-        let worker = thread::spawn(move || agent::execute(job, worker_stop, tx));
+        let worker = thread::spawn(move || agent::execute(job, worker_stop, tx, events));
         self.operation = Some(Operation {
             run: run.clone(),
             stop,
@@ -303,6 +308,12 @@ impl Owner {
             && let Some(launch) = next.launches.get(run)
         {
             match launch {
+                Launch::Pi { workflow, .. } => next
+                    .workflows
+                    .get_mut(workflow)
+                    .ok_or("missing Pi workflow at settlement")?
+                    .binding
+                    .block_recovery(),
                 Launch::Codex { workflow, .. } => next
                     .codex_workflows
                     .get_mut(workflow)

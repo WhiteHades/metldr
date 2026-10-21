@@ -4,10 +4,10 @@ use crate::{
     Result,
     agent::{self, Outcome},
     browser_io::{Client, Notice},
+    browser_mcp::Server,
     browser_worker::{BROWSER_POLICY, Tools},
     flow::Event,
     model::Source,
-    opencode_mcp::Server,
     opencode_model::{Binding, Identity, Profile, Selection},
 };
 use metldr_opencode_session::{McpServer, OpenCodeSession, Session};
@@ -61,7 +61,12 @@ async fn execute_inner(
         Ok(server) => server,
         Err(error) => return (Outcome::Failed(error.to_string()), true),
     };
-    let declarations = [server.declaration()];
+    let (address, token) = server.endpoint();
+    let declarations = [McpServer::Http {
+        name: "metldr".into(),
+        url: format!("http://{address}/mcp"),
+        headers: vec![("Authorization".into(), format!("Bearer {token}"))],
+    }];
     let done = Arc::new(AtomicBool::new(false));
     let failed = Arc::new(AtomicBool::new(false));
     let tools = Tools::new(

@@ -45,6 +45,7 @@ pub(super) enum Event {
     PiSettled {
         run: String,
         result: crate::agent::Outcome,
+        released: bool,
     },
     CodexBound {
         run: String,
