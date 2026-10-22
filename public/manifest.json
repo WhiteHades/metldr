@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "version": "0.7.6",
-  "name": "metldr: local AI - gmail, article, pdf",
-  "description": "Work with pages, email and PDFs using local models, your AI provider, or installed agents.",
+  "name": "metldr: AI browser assistant",
+  "description": "Read pages, ask questions and automate browser tasks with your AI provider, local models or installed agents.",
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' http://localhost:11434 http://127.0.0.1:11434 https://media.githubusercontent.com https://raw.githubusercontent.com https://api.dictionaryapi.dev; style-src 'self' 'unsafe-inline'; font-src 'self';",
     "sandbox": "sandbox allow-scripts allow-forms allow-popups allow-modals; script-src 'self' 'unsafe-inline' 'unsafe-eval'; object-src 'self'; connect-src 'self';"
@@ -13,7 +13,7 @@
     ]
   },
   "action": {
-    "default_title": "metldr - click to open"
+    "default_title": "Open metldr"
   },
   "icons": {
     "16": "icon-16.png",
