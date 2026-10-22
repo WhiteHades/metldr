@@ -49,6 +49,15 @@ function capturePage() {
   };
 }
 
-const { default: init, start_panel } = await import("../crates/metldr-panel/pkg/metldr_panel.js");
-await init();
-start_panel(capturePage);
+document.getElementById("panel-reload")?.addEventListener("click", (event) => {
+  if (event.isTrusted) location.reload();
+});
+try {
+  const { default: init, start_panel } = await import("../crates/metldr-panel/pkg/metldr_panel.js");
+  await init();
+  start_panel(capturePage);
+} catch (error) {
+  const status = document.getElementById("panel-boot-status");
+  if (status) status.textContent = "metldr could not load. Reload the panel to try again.";
+  console.error("metldr panel startup failed", error);
+}

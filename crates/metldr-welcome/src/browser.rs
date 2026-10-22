@@ -26,6 +26,38 @@ pub fn start_clipboard_write(text: &str) -> Result<Promise, JsValue> {
     call(&clipboard, "writeText", &[JsValue::from_str(text)])?.dyn_into::<Promise>()
 }
 
+pub async fn prepare_panel() -> Result<i32, JsValue> {
+    let origin = crate::setup_guide::ExtensionOrigin::from_id(&runtime_id()?)
+        .ok_or_else(|| JsValue::from_str("Extension ID unavailable"))?;
+    let chrome = get(&js_sys::global(), "chrome")?;
+    let tab = await_call(&get(&chrome, "tabs")?, "getCurrent", &[]).await?;
+    let id = get(&tab, "id")?
+        .as_f64()
+        .filter(|id| id.is_finite() && id.fract() == 0.0 && (0.0..=i32::MAX as f64).contains(id))
+        .ok_or_else(|| JsValue::from_str("Welcome tab unavailable"))? as i32;
+    let url = get(&tab, "url")?.as_string().unwrap_or_default();
+    if url.split('#').next() != Some(format!("{}/welcome.html", origin.as_str()).as_str()) {
+        return Err(JsValue::from_str("Welcome tab unavailable"));
+    }
+    let options = object(&[
+        ("tabId", id.into()),
+        ("path", "panel.html".into()),
+        ("enabled", true.into()),
+    ])?;
+    await_call(&get(&chrome, "sidePanel")?, "setOptions", &[options]).await?;
+    Ok(id)
+}
+
+pub fn start_panel_open(tab: i32) -> Result<Promise, JsValue> {
+    let chrome = get(&js_sys::global(), "chrome")?;
+    call(
+        &get(&chrome, "sidePanel")?,
+        "open",
+        &[object(&[("tabId", tab.into())])?],
+    )?
+    .dyn_into::<Promise>()
+}
+
 pub fn get(object: &JsValue, key: &str) -> Result<JsValue, JsValue> {
     Reflect::get(object, &JsValue::from_str(key))
 }

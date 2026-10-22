@@ -1,7 +1,7 @@
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{Document, Element, HtmlSelectElement};
 
-use crate::state::{Choice, Setup, Status};
+use crate::state::{Choice, Panel, Setup, Status};
 
 pub fn element(document: &Document, id: &str) -> Result<Element, JsValue> {
     document
@@ -53,9 +53,9 @@ pub fn render(document: &Document, setup: &Setup, downloading: bool) -> Result<(
         ("local-options", local),
         ("chrome-controls", setup.choice == Choice::Chrome),
         ("ollama-controls", setup.choice == Choice::Ollama),
-        ("provider-note", setup.choice == Choice::Provider),
-        ("agent-note", setup.choice == Choice::Agent),
         ("check-button", local),
+        ("panel-setup", !local),
+        ("continue-button", local),
         ("download-button", setup.status == Status::Downloadable),
         ("cancel-button", downloading),
         ("download-progress", setup.status == Status::Downloading),
@@ -74,6 +74,10 @@ pub fn render(document: &Document, setup: &Setup, downloading: bool) -> Result<(
             setup.saving || downloading || setup.status != Status::Downloadable,
         ),
         ("cancel-button", !downloading),
+        (
+            "open-agent-panel",
+            setup.saving || !matches!(setup.panel, Panel::Ready(_)),
+        ),
         (
             "continue-button",
             setup.loading || setup.saving || setup.theme_saving || !setup.ready(),
@@ -94,8 +98,8 @@ pub fn render(document: &Document, setup: &Setup, downloading: bool) -> Result<(
             Status::Idle => match setup.choice {
                 Choice::Chrome => "Chrome AI selected",
                 Choice::Ollama => "Ollama selected",
-                Choice::Provider => "Provider setup unavailable",
-                Choice::Agent => "Agent setup unavailable",
+                Choice::Provider => "Set up a provider",
+                Choice::Agent => "Set up an installed agent",
             },
             Status::Checking => "Checking connection",
             Status::Ready => "Connection ready",
@@ -107,6 +111,18 @@ pub fn render(document: &Document, setup: &Setup, downloading: bool) -> Result<(
     };
     text(document, "status-text", heading)?;
     text(document, "connection-detail", &setup.detail)?;
+    text(
+        document,
+        "panel-setup-status",
+        match setup.panel {
+            Panel::Preparing => "Preparing the panel.",
+            Panel::Ready(_) => "The panel opens beside this tab.",
+            Panel::Opening => "Opening the panel.",
+            Panel::Unavailable => {
+                "Open this page in the installed extension. Reload the extension if the panel stays unavailable."
+            }
+        },
+    )?;
     let status = match setup.status {
         Status::Ready => "ready",
         Status::Error | Status::Unavailable => "error",

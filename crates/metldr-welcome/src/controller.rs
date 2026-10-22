@@ -6,7 +6,7 @@ use web_sys::{AbortController, Document, Element, Event, HtmlSelectElement};
 
 use crate::{
     browser, dom, download, guide_view, scene, setup_view,
-    state::{Choice, Setup, Status},
+    state::{Choice, Panel, Setup, Status},
 };
 
 pub type Shared = Rc<RefCell<App>>;
@@ -64,7 +64,13 @@ pub fn mount() -> Result<(), JsValue> {
             .and_then(|v| v.dyn_into::<Element>().ok())
             .and_then(|v| v.closest("button").ok().flatten());
         if let Some(button) = button.filter(|v| !v.has_attribute("disabled")) {
-            handle_click(clicks.clone(), &button.id());
+            if button.id() == "open-agent-panel" {
+                if event.is_trusted() {
+                    open_panel(clicks.clone());
+                }
+            } else {
+                handle_click(clicks.clone(), &button.id());
+            }
         }
     });
     document.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
@@ -106,8 +112,56 @@ pub fn mount() -> Result<(), JsValue> {
     window.add_event_listener_with_callback("pageshow", pageshow.as_ref().unchecked_ref())?;
     pageshow.forget();
     app.borrow().paint();
+    spawn_local(prepare_panel(app.clone()));
     spawn_local(load(app));
     Ok(())
+}
+
+async fn prepare_panel(app: Shared) {
+    let result = browser::prepare_panel().await;
+    let mut app = app.borrow_mut();
+    if app.alive {
+        app.setup.panel = result.map_or(Panel::Unavailable, Panel::Ready);
+        app.paint();
+    }
+}
+
+fn open_panel(app: Shared) {
+    let mut current = app.borrow_mut();
+    let Panel::Ready(tab) = current.setup.panel else {
+        return;
+    };
+    if !current.alive
+        || current.setup.saving
+        || !matches!(current.setup.choice, Choice::Provider | Choice::Agent)
+    {
+        return;
+    }
+    // Start Chrome's call before yielding so it retains the trusted click.
+    let result = browser::start_panel_open(tab);
+    current.setup.panel = Panel::Opening;
+    current.paint();
+    drop(current);
+    spawn_local(async move {
+        let result = match result {
+            Ok(promise) => wasm_bindgen_futures::JsFuture::from(promise)
+                .await
+                .map(|_| ()),
+            Err(error) => Err(error),
+        };
+        let mut app = app.borrow_mut();
+        if !app.alive {
+            return;
+        }
+        app.setup.panel = Panel::Ready(tab);
+        let notice = if result.is_ok() {
+            "Panel opened. Choose Settings to continue."
+        } else {
+            "The panel could not open. Try again or press Alt+Shift+M in Chrome."
+        };
+        app.notice(notice);
+        app.paint();
+    });
 }
 
 async fn load(app: Shared) {
@@ -144,7 +198,7 @@ async fn load(app: Shared) {
                     app.setup.theme = theme;
                 }
             }
-            app.notice("Setup is ready. Connections are checked only when you ask.");
+            app.notice("Choose a connection to get started.");
         }
         Err(_) => app.notice(
             "Saved settings could not be read. Choose your settings again or reload to retry.",

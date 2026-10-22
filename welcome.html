@@ -14,16 +14,16 @@
 <noscript>Enable JavaScript to use metldr setup.</noscript>
 <a class="skip" href="#setup">Skip to setup</a>
 <header class="site-header">
-  <a class="brand" href="#top" aria-label="metldr welcome"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M4 24V8l12 9L28 8v16M4 8l12 9 12-9"/></svg>metldr</a>
+  <a class="brand" href="#top" aria-label="metldr welcome"><img src="/assets/logo/metldr-mark.svg" width="28" height="28" alt="">metldr</a>
   <nav aria-label="Welcome"><label for="theme-choice">Theme</label><select id="theme-choice" disabled><option value="catppuccin">Catppuccin</option><option value="gruvbox">Gruvbox</option><option value="cyberpunk">Cyberpunk</option><option value="light">Light</option></select><a href="#help">Help</a></nav>
 </header>
 <main id="top">
   <section class="hero" aria-labelledby="welcome-title">
     <div class="hero-copy">
       <h1 id="welcome-title">Welcome to metldr.</h1>
-      <p>Read, understand, and work with the pages already in your browser.</p>
+      <p>Read pages, ask questions and complete tasks in your browser.</p>
       <a class="button hero-action" href="#setup"><span>Set up metldr</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a>
-      <p class="hero-note">Choose where your AI runs.</p>
+      <p class="hero-note">Use the AI you choose.</p>
     </div>
     <figure class="hero-figure">
       <svg id="scene" viewBox="0 0 560 430" aria-hidden="true" data-active="false">
@@ -62,12 +62,12 @@
     </figure>
   </section>
   <section id="setup" class="setup content-grid" aria-labelledby="setup-title">
-    <div class="setup-heading"><h2 id="setup-title">Choose your AI.</h2><p>Start with Chrome AI or Ollama. You can change the connection later.</p></div>
+    <div class="setup-heading"><h2 id="setup-title">Choose your AI.</h2><p>Use your provider, an installed agent or local AI.</p></div>
     <div class="connection-layout">
       <div class="choices" role="group" aria-label="AI connection">
-        <button disabled class="choice" id="choose-local" aria-pressed="false" type="button"><span class="choice-title"><span>Local AI</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v12H4zm4 16h8m-4-4v4"/></svg></span><span>Connect to Chrome AI or Ollama on this computer.</span><span class="choice-meta">Choose Chrome AI or Ollama.</span></button>
-        <button disabled class="choice" id="choose-provider" aria-pressed="false" type="button"><span class="choice-title"><span>Your provider</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 16H6a4 4 0 0 1 0-8 6 6 0 0 1 11-1 4.5 4.5 0 1 1 1 9h-1m-5-4v9m-3-3 3 3 3-3"/></svg></span><span>Provider setup is unavailable here.</span><span class="choice-meta">No provider connection is made.</span><span id="provider-note" hidden>Provider setup is not available in this version.</span></button>
-        <button disabled class="choice" id="choose-agent" aria-pressed="false" type="button"><span class="choice-title"><span>Installed agent</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 7 5 5-5 5m8 0h6M3 3h18v18H3z"/></svg></span><span>Agent setup is unavailable here.</span><span class="choice-meta">Agent support is not available in this version.</span><span id="agent-note" hidden>Installed agent setup is not available in this version.</span></button>
+        <button disabled class="choice" id="choose-local" aria-pressed="false" type="button"><span class="choice-title"><span>Local AI</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v12H4zm4 16h8m-4-4v4"/></svg></span><span>Chrome AI or Ollama.</span><span class="choice-meta">Check availability before connecting.</span></button>
+        <button disabled class="choice" id="choose-provider" aria-pressed="false" type="button"><span class="choice-title"><span>Your provider</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 16H6a4 4 0 0 1 0-8 6 6 0 0 1 11-1 4.5 4.5 0 1 1 1 9h-1m-5-4v9m-3-3 3 3 3-3"/></svg></span><span>Use your own API key.</span><span class="choice-meta">Provider charges may apply.</span></button>
+        <button disabled class="choice" id="choose-agent" aria-pressed="false" type="button"><span class="choice-title"><span>Installed agent</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 7 5 5-5 5m8 0h6M3 3h18v18H3z"/></svg></span><span>Codex, OpenCode or Pi.</span><span class="choice-meta">Use your existing account.</span></button>
       </div>
       <div class="connection-panel">
         <p id="boot-status" class="boot-status" role="status">Loading setup. Help is available while it loads.</p>
@@ -75,6 +75,7 @@
         <div id="connection-status" role="status" aria-live="polite"><p id="connection-detail">Choose a local option after setup loads. The check sends no prompt and does not download models.</p></div>
         <div id="local-options" class="local-options" role="group" aria-label="Local AI options"><button disabled id="choose-chrome" class="text-button" type="button" aria-pressed="false">Chrome AI</button><button disabled id="choose-ollama" class="text-button" type="button" aria-pressed="false">Ollama at 127.0.0.1</button></div>
         <button disabled id="check-button" class="button primary" type="button">Check</button>
+        <section id="panel-setup" class="backend-controls" aria-label="Browser agent setup" hidden><button disabled id="open-agent-panel" class="button primary" type="button" aria-describedby="panel-setup-status panel-companion-note">Open browser agent</button><p id="panel-setup-status" role="status">Preparing the panel.</p><p id="panel-companion-note">Providers and agents need the companion. If the panel says Disconnected or Unavailable, <a href="https://github.com/WhiteHades/metldr/tree/main/crates/metldr-companion#metldr-companion" target="_blank" rel="noreferrer">set up the companion</a>, then reconnect. Opening the panel sends no prompt and saves no connection.</p></section>
         <section id="chrome-controls" class="backend-controls" aria-label="Chrome AI controls" hidden><p>Use Check to read Chrome AI availability. Choose Download model to start a download.</p><button disabled id="download-button" class="button" type="button">Download model</button><button disabled id="cancel-button" class="text-button" type="button">Cancel</button><progress id="download-progress" hidden max="100" aria-label="Model download progress"></progress></section>
         <section id="ollama-controls" class="backend-controls" aria-label="Ollama controls" hidden><label id="model-choice-label" for="model-choice" hidden>Ollama model</label><select id="model-choice" hidden disabled></select><p>Check whether Ollama is available at 127.0.0.1:11434. Start Ollama separately. <a href="#ollama-setup">Read the Ollama setup guide in Help.</a></p></section>
         <div class="completion-actions"><button disabled id="continue-button" class="button primary" type="button">Save and close</button><button disabled id="explore-button" class="text-button" type="button">Continue without connecting</button></div>
@@ -82,22 +83,19 @@
     </div>
   </section>
   <section id="help" class="help content-grid" aria-labelledby="help-title">
-    <div><h2 id="help-title">You control the connection.</h2><p>Choose a model before sharing page content. Local and provider connections have different data destinations. metldr should make that choice clear before a task starts.</p></div>
+    <div><h2 id="help-title">Choose what you share.</h2><p>Local models run on your computer. Providers and installed agents may send content to their configured service.</p></div>
 <!--WELCOME_SETUP-->
     <section class="feature-overview" aria-labelledby="feature-title">
-      <h3 id="feature-title">Features in the current extension</h3>
-      <p>Open metldr from the Chrome toolbar to use these features.</p>
+      <h3 id="feature-title">What you can do</h3>
       <ul>
-        <li><h4>Page and PDF summaries</h4><p>Summarize articles, webpages, and PDF documents.</p></li>
-        <li><h4>Contextual page chat</h4><p>Ask questions about the page you are reading.</p></li>
-        <li><h4>Gmail summaries</h4><p>Review email threads with key points and action items.</p></li>
-        <li><h4>Reply suggestions</h4><p>Draft replies using the context of an email thread.</p></li>
-        <li><h4>Word lookup</h4><p>Look up definitions and synonyms from a webpage.</p></li>
-        <li><h4>Multilingual lookup</h4><p>Look up words from other languages while browsing.</p></li>
+        <li><h4>Read and ask</h4><p>Summarize webpages and PDFs, then ask questions.</p></li>
+        <li><h4>Work in Gmail</h4><p>Summarize threads and draft replies.</p></li>
+        <li><h4>Complete browser tasks</h4><p>Approve changes, stop work and return to saved chats.</p></li>
+        <li><h4>Look up and search</h4><p>Find word meanings and search page content.</p></li>
       </ul>
+      <p>Reusable workflows, skills, schedules, file tools and editable memory are in development.</p>
     </section>
     <section class="faq-guide" aria-label="Help topics">
-      <p class="faq-note">Full answers remain readable without setup. Search becomes available when setup loads.</p>
       <div id="faq-filters" class="faq-filters" hidden>
         <label class="faq-field" for="faq-search">Search answers<input id="faq-search" type="search" maxlength="256" disabled></label>
         <label class="faq-field" for="faq-category">Filter by category<select id="faq-category" disabled></select></label>

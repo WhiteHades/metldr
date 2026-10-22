@@ -17,7 +17,16 @@ pub enum Status {
     Error,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Panel {
+    Preparing,
+    Ready(i32),
+    Opening,
+    Unavailable,
+}
+
 pub struct Setup {
+    pub panel: Panel,
     pub choice: Choice,
     pub status: Status,
     pub generation: u64,
@@ -35,6 +44,7 @@ pub struct Setup {
 impl Default for Setup {
     fn default() -> Self {
         Self {
+            panel: Panel::Preparing,
             choice: Choice::Chrome,
             status: Status::Idle,
             generation: 0,
@@ -61,8 +71,8 @@ impl Setup {
         self.detail = match choice {
             Choice::Chrome => "Check whether Chrome AI is ready on this device.",
             Choice::Ollama => "Check the Ollama service at 127.0.0.1:11434. The check lists installed models and sends no prompt.",
-            Choice::Provider => "Provider setup is not available in this version. No API key is requested or stored.",
-            Choice::Agent => "Installed agent setup is not available in this version. No agent process is started.",
+            Choice::Provider => "In the panel, choose Settings, then Providers.",
+            Choice::Agent => "In the panel, choose Settings, then Installed agents.",
         }.into();
     }
 
@@ -138,8 +148,12 @@ mod tests {
         setup.model = "model:latest".into();
         assert!(setup.ready());
         setup.choose(Choice::Provider);
+        setup.panel = Panel::Ready(7);
         setup.status = Status::Ready;
         assert!(!setup.ready());
+        setup.choose(Choice::Agent);
+        assert!(!setup.ready());
+        assert_eq!(setup.panel, Panel::Ready(7));
     }
 
     #[test]
