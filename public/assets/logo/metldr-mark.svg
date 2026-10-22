@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-labelledby="title description">
+  <title id="title">metldr</title>
+  <desc id="description">An m formed from three folded pages.</desc>
+  <g fill="none" stroke-width="10" stroke-linejoin="round">
+    <g id="source-layer" stroke="#75659a"><path d="M14 85V35l34 25 34-25v50"/></g>
+    <g id="model-layer" stroke="#b4befe"><path d="M14 73V23l34 25 34-25v50"/></g>
+    <g id="action-layer" stroke="#ff8338"><path d="M14 61V15l34 25 34-25v46"/></g>
+  </g>
+</svg>
