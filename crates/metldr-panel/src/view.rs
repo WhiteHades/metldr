@@ -3,6 +3,7 @@ use crate::{
     model::{BrowserActionIntent, BrowserActionOutcome, BrowserActionPhase, SourceStatus},
     results,
 };
+use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{Document, Element, HtmlElement};
 
@@ -13,6 +14,59 @@ pub(super) fn mount(doc: &Document) -> Result<(), JsValue> {
     doc.get_element_by_id("composer")
         .ok_or_else(|| err("Composer missing."))?
         .set_inner_html(include_str!("composer_ui.html"));
+    Ok(())
+}
+
+pub(super) fn startup_failed(doc: &Document) -> Result<(), JsValue> {
+    let extension = doc.url()?.starts_with("chrome-extension://");
+    let message = if extension {
+        "The panel connection could not start. Reload the panel to try again."
+    } else {
+        "This webpage previews metldr. Open the installed Chrome extension for browser and agent tasks."
+    };
+    set_text(
+        doc,
+        "connection",
+        if extension { "Unavailable" } else { "Preview" },
+    );
+    set_text(doc, "status", message);
+    set_text(doc, "empty-history", message);
+    set_text(doc, "source-meta", message);
+    set_text(
+        doc,
+        "saved-history-status",
+        "Saved work is available in the installed extension.",
+    );
+    let controls =
+        doc.query_selector_all("[data-action], #conversations-trigger, #composer button")?;
+    for index in 0..controls.length() {
+        if let Some(control) = controls
+            .item(index)
+            .and_then(|node| node.dyn_into::<Element>().ok())
+        {
+            control.set_attribute("disabled", "")?;
+        }
+    }
+    if let Some(details) = doc.get_element_by_id("agent-details") {
+        details.set_attribute("hidden", "")?;
+    }
+    if let Some(connection) = doc.get_element_by_id("connection") {
+        connection.set_attribute("data-connected", "false")?;
+    }
+    if let Some(reload) = doc.query_selector("[data-action='reconnect']")? {
+        reload.remove_attribute("disabled")?;
+        reload.set_attribute("aria-label", "Reload panel")?;
+        reload.set_attribute("title", "Reload panel")?;
+        let listener = Closure::<dyn FnMut(web_sys::Event)>::new(|event: web_sys::Event| {
+            if event.is_trusted()
+                && let Some(window) = web_sys::window()
+            {
+                let _ = window.location().reload();
+            }
+        });
+        reload.add_event_listener_with_callback("click", listener.as_ref().unchecked_ref())?;
+        listener.forget();
+    }
     Ok(())
 }
 

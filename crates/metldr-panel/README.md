@@ -14,6 +14,8 @@ The Codex composer offers Default and Plan. Default keeps the native collaborati
 
 The module uses the shared `metldr-conversation` model. Streaming updates retain message identities and observed tool order. Copy reads current validated output and reports when the copied result has changed. The Chrome background validates browser context and grants before browser commands. Provider credentials belong to the native companion rather than page scripts.
 
+The named web preview displays the interface but cannot start native work. If the panel connection cannot start, the panel shows its unavailable state and disables task controls. Reload panel retries startup. Actual provider and browser tasks require the installed extension and its paired companion.
+
 Run `npm run build` at the repository root to build the complete extension into `dist`, then load that directory at `chrome://extensions`. Press Alt+Shift+M to open the Rust browser agent, or Ctrl+Shift+Y to return to the current page tools. Chrome lets you change shortcuts at `chrome://extensions/shortcuts`. The Rust path requires the [native companion](../metldr-companion/README.md), registered separately for the loaded extension ID. Building does not install or register it.
 
 The build retrieves pinned fonts and required dependency notices through the Rust asset helper. Generated output stays outside Git. Existing Gmail, PDF, dictionary and local inference interfaces continue to use their current entry while their replacements are unfinished. Complete visual parity and native Windows and macOS verification remain unfinished.

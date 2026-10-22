@@ -148,9 +148,16 @@ async fn panel_start() -> Result<(), JsValue> {
             ));
         }
     }
-    let flow = FlowClient::connect()
-        .await
-        .map_err(|e| err(&e.to_string()))?;
+    let flow = match FlowClient::connect().await {
+        Ok(flow) => flow,
+        Err(error) => {
+            view::startup_failed(&document)?;
+            if document.url()?.starts_with("chrome-extension://") {
+                web_sys::console::error_1(&err(&error.to_string()));
+            }
+            return Ok(());
+        }
+    };
     let panel = Rc::new(RefCell::new(Panel {
         saved_history: Default::default(),
         conversations: Default::default(),
