@@ -1,9 +1,14 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-labelledby="title description">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-labelledby="title desc">
   <title id="title">metldr</title>
-  <desc id="description">An m formed from three folded pages.</desc>
-  <g fill="none" stroke-width="10" stroke-linejoin="round">
-    <g id="source-layer" stroke="#75659a"><path d="M14 85V35l34 25 34-25v50"/></g>
-    <g id="model-layer" stroke="#b4befe"><path d="M14 73V23l34 25 34-25v50"/></g>
-    <g id="action-layer" stroke="#ff8338"><path d="M14 61V15l34 25 34-25v46"/></g>
+  <desc id="desc">Three connected paths around one control point.</desc>
+  <g id="connections" fill="#75659a">
+    <path transform="rotate(240 48 48)" d="M28 33v-7C28 15 37 6 48 6s20 9 20 20v25c0 10-5 17-14 22l-7 4-13-8 13-7c5-3 8-7 8-13V26c0-5-3-8-7-8s-8 3-8 8Z"/>
+  </g>
+  <g id="execution" fill="#ff8338">
+    <path transform="rotate(120 48 48)" d="M28 33v-7C28 15 37 6 48 6s20 9 20 20v25c0 10-5 17-14 22l-7 4-13-8 13-7c5-3 8-7 8-13V26c0-5-3-8-7-8s-8 3-8 8Z"/>
+    <circle cx="48" cy="48" r="6"/>
+  </g>
+  <g id="browser" fill="#b4befe">
+    <path d="M28 33v-7C28 15 37 6 48 6s20 9 20 20v25c0 10-5 17-14 22l-7 4-13-8 13-7c5-3 8-7 8-13V26c0-5-3-8-7-8s-8 3-8 8Z"/>
   </g>
 </svg>
