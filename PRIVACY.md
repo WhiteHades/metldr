@@ -14,6 +14,8 @@ Dictionary lookups can send selected words to dictionaryapi.dev. Downloads conta
 
 The extension saves settings, cached summaries and page context in your browser. The companion saves conversations, results and recovery records on your computer. Installed agents can keep their own sessions and files.
 
+The extension also saves usage records in your browser, including page addresses, domains, session activity, model use and feature events. Automatic deletion after a set period is not currently enabled. Remove the extension's browser data to delete those records.
+
 Provider keys are managed by the companion's credential store, outside page scripts. Installed agents keep their own authentication.
 
 Clearing the extension's cache or browser data does not remove companion records or agent files. Remove those separately using their storage locations and tools. See [companion setup](crates/metldr-companion/README.md) for its data location.
