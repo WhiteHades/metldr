@@ -21,6 +21,8 @@ The decoder rejects unknown tools, extra arguments and handles outside the suppo
 
 Decoded calls do not grant browser access or approve effects. The caller must validate destination URLs against its navigation policy, resolve handles against the latest observation, bind actions to the current document and obtain approval before dispatch. The crate does not execute browser commands.
 
+Text fields include native text inputs and multiline textareas. Hidden, readonly, disabled and sensitive fields are excluded from observation. Every change still requires approval and checks that the field and its previous value have not changed.
+
 Run `make check-browser-tools` from the repository root.
 
 `activate_button` proposes a native click on a button handle from the latest observation. The user must approve the exact control. `button_click_observed` reports one trusted click observed on that control; it does not certify a site result or identify who supplied concurrent input. An uncertain result stops automatic continuation and is never replayed. Model callers cannot supply selectors, scripts or coordinates.

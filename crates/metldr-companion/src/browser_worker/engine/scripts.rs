@@ -59,8 +59,9 @@ const safeLabel = element => {
   if (/password|passcode|one[ -]?time[ -]?code|\botp\b|token|secret|api[ _-]?key|payment[ _-]?card|credit[ _-]?card|card[ _-]?(number|cvc|cvv)|cc[ _-]?(number|name|exp|csc|cvc|cvv)|\b(cvc|cvv)\b|social[ _-]?security|\bssn\b/.test(metadata)) return null;
   return accessible;
 };
+const textField = element => element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement && element.type === 'text';
 const eligible = element => {
-  if (!(element instanceof HTMLInputElement) || element.type !== 'text' || element.disabled || element.readOnly || !visible(element)) return null;
+  if (!textField(element) || element.matches(':disabled') || element.readOnly || !visible(element)) return null;
   return safeLabel(element);
 };
 const eligibleButton = element => {
@@ -115,7 +116,7 @@ while (walker.nextNode()) {
         summary.buttons.push({ slot, label: bounded(buttonLabel, 128)[0], check_label: buttonLabel });
       }
     }
-    if (node instanceof HTMLInputElement && node.type === 'text') {
+    if (textField(node)) {
       const accessible = eligible(node);
       if (accessible !== null) {
         if (summary.fields.length === 32) { summary.fields_truncated = true; continue; }
