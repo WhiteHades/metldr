@@ -163,6 +163,7 @@ impl Edit<'_> {
         workflow: &NativeWorkflow,
         revision: u64,
     ) -> Result<()> {
+        super::native_choices::update_index(self.write, &self.profile, scope, name, workflow)?;
         macro_rules! save {
             ($table:ident, $value:expr) => {{
                 self.write.open_table($table)?.insert(

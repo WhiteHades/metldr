@@ -332,6 +332,7 @@ impl Prepared {
                 };
                 receipts.insert(request.as_str(), encode(&receipt)?.as_slice())?;
             }
+            super::edit::native_choices::backfill(&write, &profile)?;
         }
         write.commit()?;
         Ok(())

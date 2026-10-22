@@ -85,6 +85,7 @@ pub(super) fn render(
     google_route: Option<&crate::https_profile::Profile>,
     chat_route: Option<&crate::https_profile::Profile>,
     fixture_available: bool,
+    native_choices: Option<&crate::history::NativeChoices>,
 ) -> Result<Value> {
     let mut view = serde_json::to_value(&state.view)?;
     view["pi_ui"] = pi_ui
@@ -158,6 +159,9 @@ pub(super) fn render(
         let details=&pending.details;
         json!({"run":pending.run,"request":request,"agent":details["agent"],"tool":details["tool"],"title":details["title"],"input":details["input"],"options":details["options"]})
     }).collect());
+    if let Some(choices) = native_choices {
+        choices.apply(&mut view)?;
+    }
     Ok(view)
 }
 

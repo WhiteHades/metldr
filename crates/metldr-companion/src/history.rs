@@ -10,7 +10,7 @@ mod context;
 mod edit;
 pub(crate) use edit::{
     ConversationBusy, ConversationChange, ConversationChanged, ConversationPage, Cursor, Edit,
-    NativeWorkflow, Observed, RunPage, RunSummary, Selection,
+    NativeChoices, NativeWorkflow, Observed, RunPage, RunSummary, Selection,
 };
 mod import;
 #[cfg(target_os = "linux")]
@@ -87,13 +87,14 @@ impl History {
 
     fn open(path: &Path, lease: Arc<File>) -> Result<Self> {
         let history = Self::file(path, false, lease)?;
-        upgrade::conversations(&history.db)?;
+        upgrade::run(&history.db)?;
         let read = history.db.begin_read()?;
         let meta = read.open_table(schema::META)?;
         let bytes = meta.get("profile")?.ok_or("history profile is absent")?;
         let profile: schema::Profile = schema::decode(bytes.value())?;
         profile.validate()?;
         schema::require_base_tables(&read)?;
+        read.open_table(schema::NATIVE_CHOICES)?;
         read.open_table(schema::SELECTIONS)?;
         let order = read.open_table(schema::CONVERSATION_ORDER)?;
         let selected_number = schema::conversation_number(&profile, &profile.selected)?;

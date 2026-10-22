@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::io::{self, Write};
 
-pub(super) const FORMAT: u8 = 11;
+pub(super) const FORMAT: u8 = 12;
 const RECORD_MAX: usize = 2 * 1024 * 1024;
 pub(super) const META: TableDefinition<&str, &[u8]> = TableDefinition::new("metadata");
 pub(super) const CONVERSATIONS: TableDefinition<&str, &[u8]> =
@@ -41,6 +41,8 @@ pub(super) const NAVIGATION_GRANTS: TableDefinition<(&str, u64), &str> =
     TableDefinition::new("navigation_grants");
 pub(super) const UNCERTAIN_RUNS: TableDefinition<&str, &str> =
     TableDefinition::new("uncertain_runs");
+pub(super) const NATIVE_CHOICES: TableDefinition<(&str, u64), &str> =
+    TableDefinition::new("native_choices");
 
 pub(super) fn require_base_tables(read: &redb::ReadTransaction) -> Result<()> {
     for definition in [

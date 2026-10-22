@@ -555,7 +555,7 @@ fn startup_capture_lock_and_legacy_reopen() -> Result<()> {
                 .ok_or("history profile absent")?
                 .value(),
         )?;
-        assert_eq!(profile.format, 11);
+        assert_eq!(profile.format, schema::FORMAT);
         drop(meta);
         drop(read);
         drop(history);

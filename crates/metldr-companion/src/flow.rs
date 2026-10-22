@@ -147,6 +147,37 @@ pub(super) struct Owner {
 }
 
 impl Owner {
+    pub(super) fn native_fingerprints(
+        &self,
+    ) -> Result<BTreeMap<crate::agent_settings::Kind, String>> {
+        use crate::agent_settings::Kind;
+        Ok([
+            (
+                Kind::Pi,
+                self.pi_profile
+                    .as_ref()
+                    .map(crate::agent_model::digest)
+                    .transpose()?,
+            ),
+            (
+                Kind::Codex,
+                self.codex_profile
+                    .as_ref()
+                    .map(crate::agent_model::digest)
+                    .transpose()?,
+            ),
+            (
+                Kind::Opencode,
+                self.opencode_profile
+                    .as_ref()
+                    .map(crate::agent_model::digest)
+                    .transpose()?,
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(kind, fingerprint)| fingerprint.map(|value| (kind, value)))
+        .collect())
+    }
     pub(super) fn emit(&mut self, value: serde_json::Value) -> Result<()> {
         self.transport.emit(value)
     }
@@ -176,6 +207,18 @@ impl Owner {
             .as_ref()
             .map(|history| history.selection())
             .transpose()?;
+        let choices = self
+            .record_history
+            .as_ref()
+            .zip(selection.as_ref())
+            .map(|(history, scope)| {
+                history.native_choices(
+                    scope,
+                    state.view.source.as_ref(),
+                    &self.native_fingerprints()?,
+                )
+            })
+            .transpose()?;
         self.view_reply_with_browser_actions(
             state,
             request,
@@ -183,6 +226,7 @@ impl Owner {
             ended,
             Some(browser_actions),
             selection.as_ref(),
+            choices.as_ref(),
         )
     }
     fn view_reply_with_browser_actions(
@@ -193,6 +237,7 @@ impl Owner {
         ended: bool,
         browser_actions: Option<&BTreeMap<String, crate::browser_action::Action>>,
         selection: Option<&crate::history::Selection>,
+        choices: Option<&crate::history::NativeChoices>,
     ) -> Result<serde_json::Value> {
         let mut view = crate::public_view::render(
             state,
@@ -207,6 +252,7 @@ impl Owner {
             self.google_route.as_ref(),
             self.chat_route.as_ref(),
             self.fixture.is_some(),
+            choices,
         )?;
         if let Some(actions) = browser_actions {
             if actions.is_empty() {
@@ -261,6 +307,7 @@ impl Owner {
         state: &Store,
         browser_actions: &BTreeMap<String, crate::browser_action::Action>,
         selection: &crate::history::Selection,
+        choices: &crate::history::NativeChoices,
     ) -> Result<()> {
         self.view_reply_with_browser_actions(
             state,
@@ -269,6 +316,7 @@ impl Owner {
             false,
             Some(browser_actions),
             Some(selection),
+            Some(choices),
         )?;
         Ok(())
     }

@@ -287,6 +287,6 @@ fn actual_conversations_keep_receipts_scopes_settings_and_native_history() -> Re
     assert_eq!(final_profile["agents"], settled["agents"]);
     assert_eq!(counts(&reopened)?.0, 20);
     assert_eq!(counts(&reopened)?.1, 20);
-    assert_eq!(final_profile["format"], json!(11));
+    assert_eq!(final_profile["format"], json!(FORMAT));
     Ok(())
 }

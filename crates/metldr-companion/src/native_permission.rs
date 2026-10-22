@@ -111,6 +111,7 @@ impl Owner {
             self.google_route.as_ref(),
             self.chat_route.as_ref(),
             self.fixture.is_some(),
+            None,
         ) {
             Ok(view) => view,
             Err(error) => {

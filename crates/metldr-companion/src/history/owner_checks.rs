@@ -243,6 +243,69 @@ fn reopen(
 }
 
 #[test]
+fn native_choices_survive_a_flat_result_without_loading_native_runs() -> Result<()> {
+    use crate::agent_settings::Kind;
+    for kind in [Kind::Pi, Kind::Codex, Kind::Opencode] {
+        let directory = Directory::new()?;
+        let disk = Disk::lock(directory.0.clone())?;
+        let mut legacy = super::fixture::legacy();
+        crate::recovery::interrupt(&mut legacy)?;
+        let (workflow, source, field) = match kind {
+            Kind::Pi => legacy
+                .workflows
+                .iter()
+                .next()
+                .map(|(id, w)| (id.clone(), w.source.clone(), "agent_sessions")),
+            Kind::Codex => legacy
+                .codex_workflows
+                .iter()
+                .next()
+                .map(|(id, w)| (id.clone(), w.source.clone(), "codex_sessions")),
+            Kind::Opencode => legacy
+                .opencode_workflows
+                .iter()
+                .next()
+                .map(|(id, w)| (id.clone(), w.source.clone(), "opencode_sessions")),
+        }
+        .ok_or("fixture workflow absent")?;
+        legacy.view.source = Some(source.clone());
+        let run = legacy.view.runs[0].id.clone();
+        let mut history = History::import_new(
+            &directory.0.join("history.redb"),
+            &serde_json::to_vec(&legacy)?,
+            disk.lease(),
+        )?;
+        let scope = history.selection()?;
+        let state = history.edit(|edit| edit.project(&scope, Some(&run)))?;
+        assert_eq!(state.view.runs.len(), 1);
+        assert!(
+            state.workflows.is_empty()
+                && state.codex_workflows.is_empty()
+                && state.opencode_workflows.is_empty()
+        );
+        let (mut owner, _, wire) = owner(disk, state, history, "127.0.0.1:1".parse()?)?;
+        match kind {
+            Kind::Pi => owner.pi_profile = Some(legacy.workflows[&workflow].profile.clone()),
+            Kind::Codex => {
+                owner.codex_profile = Some(legacy.codex_workflows[&workflow].profile.clone())
+            }
+            Kind::Opencode => {
+                owner.opencode_profile = Some(legacy.opencode_workflows[&workflow].profile.clone())
+            }
+        }
+        owner.reply_view(Some("native-choices"), "view", true)?;
+        let view = frames(&wire)?.pop().ok_or("view reply absent")?["view"].clone();
+        assert_eq!(view[field].as_array().map(Vec::len), Some(1));
+        assert_eq!(view[field][0]["workflow"], workflow);
+        assert_eq!(view[field][0]["source"], source.id);
+        assert_eq!(view["runs"].as_array().map(Vec::len), Some(1));
+        assert_eq!(view["runs"][0]["id"], run);
+        assert!(!serde_json::to_string(&view)?.contains("/synthetic/"));
+    }
+    Ok(())
+}
+
+#[test]
 fn actual_owner_admission_stream_and_durable_retry() -> Result<()> {
     let directory = Directory::new()?;
     let listener = TcpListener::bind("127.0.0.1:0")?;

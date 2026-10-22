@@ -589,6 +589,7 @@ fn saved_fixture_start_replays_but_cannot_retarget_https() {
             None,
             None,
             owner.fixture.is_some(),
+            None,
         )
         .unwrap();
         assert!(public["responses_route"].is_null());
@@ -648,6 +649,7 @@ fn saved_fixture_start_replays_but_cannot_retarget_https() {
             None,
             None,
             owner.fixture.is_some(),
+            None,
         )
         .unwrap();
         assert!(public["google_route"].is_null());
@@ -705,6 +707,7 @@ fn saved_fixture_start_replays_but_cannot_retarget_https() {
             None,
             None,
             owner.fixture.is_some(),
+            None,
         )
         .unwrap();
         assert!(public["chat_route"].is_null());
@@ -913,6 +916,7 @@ fn browser_owner_saves_approval_dispatch_and_observation_before_acknowledging() 
             None,
             None,
             owner.fixture.is_some(),
+            None,
         )
         .unwrap();
         assert_eq!(projected["browser_actions"][0]["outcome"], "verified");

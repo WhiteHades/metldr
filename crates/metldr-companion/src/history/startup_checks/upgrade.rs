@@ -1,6 +1,6 @@
 use super::{Directory, Output, Running};
 use crate::{Result, history::schema::*};
-use redb::{ReadableDatabase, ReadableTable, TableHandle};
+use redb::{ReadableDatabase, ReadableTable, ReadableTableMetadata, TableHandle};
 use serde_json::{Value, json};
 use std::{fs, path::Path, time::Duration};
 
@@ -86,7 +86,7 @@ fn refused(mut host: Running) -> Result<()> {
 }
 
 #[test]
-#[ignore = "requires METLDR_STARTUP_BINARY and METLDR_HISTORY_OLD_BINARY with history format 10"]
+#[ignore = "requires METLDR_STARTUP_BINARY and METLDR_HISTORY_OLD_BINARY with history format 10 or 11"]
 fn actual_old_private_host_upgrades_and_cannot_reopen_new_history() -> Result<()> {
     let directory = Directory::new()?;
     let mut legacy = crate::history::fixture::legacy();
@@ -103,10 +103,17 @@ fn actual_old_private_host_upgrades_and_cannot_reopen_new_history() -> Result<()
     let old = std::env::var_os("METLDR_HISTORY_OLD_BINARY")
         .ok_or("METLDR_HISTORY_OLD_BINARY is required")?;
     let host = Running::start_binary(&directory.0, &old)?;
-    host.ready_version(10)?;
+    let ready = host.until(Duration::from_secs(10), |_| true)?;
+    assert_eq!(ready["kind"], "ready");
+    assert_eq!(ready["request"], Value::Null);
+    assert_eq!(ready["ended"], true);
     assert!(host.finish()?.success());
     let before = profile(&directory.0)?;
-    assert_eq!(before["profile"]["format"], 10);
+    let old_format = before["profile"]["format"]
+        .as_u64()
+        .ok_or("old format absent")?;
+    assert!(matches!(old_format, 10 | 11));
+    assert_eq!(ready["v"], if old_format == 10 { 10 } else { 12 });
     assert_eq!(before["tables"]["runs"].as_array().unwrap().len(), 11);
     assert_eq!(before["tables"]["starts"].as_array().unwrap().len(), 11);
     assert_eq!(
@@ -114,7 +121,12 @@ fn actual_old_private_host_upgrades_and_cannot_reopen_new_history() -> Result<()
         1
     );
     let marker = fs::read(directory.0.join("snapshot.json"))?;
-    for damage in ["missing table", "origin digest"] {
+    for damage in [
+        "missing table",
+        "origin digest",
+        "native head",
+        "index collision",
+    ] {
         let broken = Directory::new()?;
         for name in ["snapshot.json", "snapshot.v8.json", "history.redb"] {
             fs::copy(directory.0.join(name), broken.0.join(name))?;
@@ -124,12 +136,30 @@ fn actual_old_private_host_upgrades_and_cannot_reopen_new_history() -> Result<()
             let write = db.begin_write()?;
             if damage == "missing table" {
                 assert!(write.delete_table(RUNS)?);
-            } else {
+            } else if damage == "origin digest" {
                 let mut meta = write.open_table(META)?;
                 let mut saved: Value =
                     serde_json::from_slice(meta.get("profile")?.unwrap().value())?;
                 saved["legacy_sha256"] = "0".repeat(64).into();
                 meta.insert("profile", serde_json::to_vec(&saved)?.as_slice())?;
+            } else if damage == "native head" {
+                let mut workflows = write.open_table(OPENCODE)?;
+                let id = legacy.opencode_workflows.keys().next().unwrap();
+                let mut saved: Value =
+                    serde_json::from_slice(workflows.get(id.as_str())?.unwrap().value())?;
+                saved["value"]["last_run"] = legacy
+                    .workflows
+                    .values()
+                    .next()
+                    .unwrap()
+                    .last_run
+                    .clone()
+                    .into();
+                workflows.insert(id.as_str(), serde_json::to_vec(&saved)?.as_slice())?;
+            } else {
+                write
+                    .open_table(NATIVE_CHOICES)?
+                    .insert(("conflict", 1), "unowned")?;
             }
             write.commit()?;
             let read = db.begin_read()?;
@@ -143,7 +173,7 @@ fn actual_old_private_host_upgrades_and_cannot_reopen_new_history() -> Result<()
         let bytes = meta.get("profile")?.unwrap();
         let saved: Value = serde_json::from_slice(bytes.value())?;
         assert_eq!(
-            saved["format"], 10,
+            saved["format"], old_format,
             "refused upgrade changed the old profile"
         );
         assert_eq!(
@@ -151,15 +181,27 @@ fn actual_old_private_host_upgrades_and_cannot_reopen_new_history() -> Result<()
             before_profile,
             "refused upgrade changed {damage}"
         );
+        if damage == "index collision" {
+            assert_eq!(read.open_table(NATIVE_CHOICES)?.len()?, 1);
+        } else {
+            assert!(
+                read.open_table(NATIVE_CHOICES).is_err(),
+                "failed backfill retained a partial index"
+            );
+        }
     }
     let host = Running::start(&directory.0)?;
     host.ready()?;
     assert!(host.finish()?.success());
     let after = profile(&directory.0)?;
-    assert_eq!(after["profile"]["format"], 11);
+    assert_eq!(after["profile"]["format"], super::super::schema::FORMAT);
     let mut expected = before;
-    expected["profile"]["format"] = 11.into();
+    expected["profile"]["format"] = super::super::schema::FORMAT.into();
     assert_eq!(after, expected);
+    {
+        let db = redb::Database::open(directory.0.join("history.redb"))?;
+        assert_eq!(db.begin_read()?.open_table(NATIVE_CHOICES)?.len()?, 3);
+    }
     assert_eq!(fs::read(directory.0.join("snapshot.v8.json"))?, original);
     assert_eq!(fs::read(directory.0.join("snapshot.json"))?, marker);
     refused(Running::start_binary(&directory.0, &old)?)?;

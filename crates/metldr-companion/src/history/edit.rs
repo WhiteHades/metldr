@@ -17,6 +17,7 @@ mod browser_write;
 mod context;
 mod conversations;
 mod native_admit;
+pub(super) mod native_choices;
 mod native_start;
 mod native_target;
 mod native_task;
@@ -30,6 +31,7 @@ mod view;
 pub(crate) use conversations::{
     ConversationBusy, ConversationChange, ConversationChanged, ConversationPage,
 };
+pub(crate) use native_choices::NativeChoices;
 pub(crate) use native_task::NativeTask;
 pub(crate) use native_workflow::NativeWorkflow;
 pub(crate) use read::{Cursor, Observed, RunPage, RunSummary};

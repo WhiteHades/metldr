@@ -50,7 +50,12 @@ impl Owner {
                         let run_ids: Vec<_> =
                             state.view.runs.iter().map(|run| run.id.as_str()).collect();
                         let browser_view = edit.browser_view(&current, &run_ids)?;
-                        self.preflight_records(&state, &browser_view, &current)?;
+                        let choices = edit.native_choices(
+                            &current,
+                            state.view.source.as_ref(),
+                            &self.native_fingerprints()?,
+                        )?;
+                        self.preflight_records(&state, &browser_view, &current, &choices)?;
                         Ok((state, browser_view))
                     })
                     .transpose()?;
