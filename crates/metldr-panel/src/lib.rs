@@ -1,4 +1,4 @@
-const WIRE_VERSION: u8 = 9;
+const WIRE_VERSION: u8 = 12;
 
 use std::{cell::RefCell, rc::Rc};
 
@@ -14,7 +14,10 @@ mod browser_background;
 mod codex_input;
 mod composer;
 mod composer_ui;
+mod conversations;
 mod flow;
+mod history;
+mod history_ui;
 mod interaction_audio;
 mod model;
 mod pi_ui;
@@ -47,6 +50,8 @@ struct Background {
 }
 
 struct Panel {
+    saved_history: history_ui::State,
+    conversations: conversations::State,
     composer: composer_ui::State,
     flow: FlowClient,
     document: Document,
@@ -147,6 +152,8 @@ async fn panel_start() -> Result<(), JsValue> {
         .await
         .map_err(|e| err(&e.to_string()))?;
     let panel = Rc::new(RefCell::new(Panel {
+        saved_history: Default::default(),
+        conversations: Default::default(),
         composer: composer_ui::State::default(),
         flow,
         document: document.clone(),
@@ -165,6 +172,7 @@ async fn panel_start() -> Result<(), JsValue> {
     }));
     provider_settings::install(&document, &panel)?;
     agent_settings::install(&document, &panel)?;
+    conversations::install(&document, &panel)?;
     let click = Rc::clone(&panel);
     let listener = Closure::<dyn FnMut(Event)>::new(move |event| {
         if let Err(error) = handle_click(&click, event) {
@@ -188,7 +196,11 @@ async fn panel_start() -> Result<(), JsValue> {
 fn capture_page(panel: &Rc<RefCell<Panel>>) {
     {
         let state = panel.borrow();
-        if !state.connected || state.start_pending || active_run(&state.snapshot).is_some() {
+        if !state.connected
+            || state.start_pending
+            || active_run(&state.snapshot).is_some()
+            || conversations::start_blocked(&state)
+        {
             return;
         }
     }
@@ -197,7 +209,13 @@ fn capture_page(panel: &Rc<RefCell<Panel>>) {
         (p.flow.clone(), p.connection_generation)
     };
     begin_start(panel);
-    let capture = flow.capture_selected();
+    let capture = {
+        let p = panel.borrow();
+        let Some(view) = p.snapshot.as_ref() else {
+            return;
+        };
+        flow.capture_selected(view)
+    };
     let panel = Rc::clone(panel);
     spawn_local(async move {
         let result = capture.await;
@@ -207,11 +225,19 @@ fn capture_page(panel: &Rc<RefCell<Panel>>) {
         panel.borrow_mut().start_pending = false;
         match result {
             Ok(view) => {
+                let selection = view.selection.clone();
                 apply_view(&panel, view, generation);
-                set_panel_status(
-                    &panel,
-                    "Page saved. Choose a destination and send your request.",
-                );
+                if panel
+                    .borrow()
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|current| current.selection == selection)
+                {
+                    set_panel_status(
+                        &panel,
+                        "Page saved. Choose a destination and send your request.",
+                    );
+                }
             }
             Err(error) => {
                 set_panel_status(
@@ -242,10 +268,20 @@ fn handle_click(panel: &Rc<RefCell<Panel>>, event: Event) -> Result<(), FlowErro
     if pi_ui::handle_click(panel, &button, &event)? {
         return Ok(());
     }
+    if conversations::handle_click(panel, &button, &event)? {
+        return Ok(());
+    }
+    if history_ui::handle_click(panel, &button, &event)? {
+        return Ok(());
+    }
     let action = button.get_attribute("data-action");
     if matches!(action.as_deref(), Some("summarize")) {
         let p = panel.borrow();
-        if !p.connected || p.start_pending || active_run(&p.snapshot).is_some() {
+        if !p.connected
+            || p.start_pending
+            || active_run(&p.snapshot).is_some()
+            || conversations::start_blocked(&p)
+        {
             return Ok(());
         }
     }
@@ -263,7 +299,7 @@ fn handle_click(panel: &Rc<RefCell<Panel>>, event: Event) -> Result<(), FlowErro
             ))
             .map_err(|_| FlowError::InvalidInput("Native request identity is invalid.".into()))?;
             let option = button.get_attribute("data-native-option");
-            let (flow, generation) = {
+            let (flow, scope, generation) = {
                 let mut p = panel.borrow_mut();
                 let pending = p.connected
                     && p.native_permission_pending.is_none()
@@ -281,7 +317,13 @@ fn handle_click(panel: &Rc<RefCell<Panel>>, event: Event) -> Result<(), FlowErro
                     return Ok(());
                 }
                 p.native_permission_pending = Some((run.clone(), request.clone()));
-                (p.flow.clone(), p.connection_generation)
+                let scope = p
+                    .snapshot
+                    .as_ref()
+                    .ok_or(FlowError::NoSource)?
+                    .selection
+                    .clone();
+                (p.flow.clone(), scope, p.connection_generation)
             };
             disable_native_permission_buttons(panel);
             set_panel_status(
@@ -290,7 +332,7 @@ fn handle_click(panel: &Rc<RefCell<Panel>>, event: Event) -> Result<(), FlowErro
             );
             let panel = Rc::clone(panel);
             spawn_local(async move {
-                let result = flow.native_permission(run, request, option).await;
+                let result = flow.native_permission(scope, run, request, option).await;
                 let mut p = panel.borrow_mut();
                 if p.connection_generation != generation {
                     return;
@@ -333,7 +375,7 @@ fn handle_click(panel: &Rc<RefCell<Panel>>, event: Event) -> Result<(), FlowErro
                 .ok_or_else(|| {
                     FlowError::InvalidInput("Browser action revision is invalid.".into())
                 })?;
-            let (flow, generation) = {
+            let (flow, scope, generation) = {
                 let mut p = panel.borrow_mut();
                 let pending = p.connected
                     && p.browser_decision_pending.is_none()
@@ -355,7 +397,13 @@ fn handle_click(panel: &Rc<RefCell<Panel>>, event: Event) -> Result<(), FlowErro
                     return Ok(());
                 }
                 p.browser_decision_pending = Some((id.clone(), revision));
-                (p.flow.clone(), p.connection_generation)
+                let scope = p
+                    .snapshot
+                    .as_ref()
+                    .ok_or(FlowError::NoSource)?
+                    .selection
+                    .clone();
+                (p.flow.clone(), scope, p.connection_generation)
             };
             let document = panel.borrow().document.clone();
             if let Ok(buttons) = document.query_selector_all("[data-action^='browser-']") {
@@ -371,7 +419,9 @@ fn handle_click(panel: &Rc<RefCell<Panel>>, event: Event) -> Result<(), FlowErro
             set_panel_status(panel, "Sending decision to the local host.");
             let panel = Rc::clone(panel);
             spawn_local(async move {
-                let result = flow.decide_browser_action(id, revision, approve).await;
+                let result = flow
+                    .decide_browser_action(scope, id, revision, approve)
+                    .await;
                 let mut p = panel.borrow_mut();
                 if p.connection_generation != generation {
                     return;
@@ -406,10 +456,15 @@ fn handle_click(panel: &Rc<RefCell<Panel>>, event: Event) -> Result<(), FlowErro
         Some("capture") if event.is_trusted() => capture_page(panel),
         Some("summarize") if event.is_trusted() => summary::start(panel)?,
         Some("stop") => {
-            let (flow, run, generation) = {
+            let (flow, scope, run, generation) = {
                 let p = panel.borrow();
                 (
                     p.flow.clone(),
+                    p.snapshot
+                        .as_ref()
+                        .ok_or(FlowError::NoSource)?
+                        .selection
+                        .clone(),
                     active_run(&p.snapshot)
                         .ok_or_else(|| {
                             FlowError::InvalidInput("There is no active run to stop.".into())
@@ -436,7 +491,7 @@ fn handle_click(panel: &Rc<RefCell<Panel>>, event: Event) -> Result<(), FlowErro
             }
             let panel = Rc::clone(panel);
             spawn_local(async move {
-                let result = flow.request_stop(run.clone()).await;
+                let result = flow.request_stop(scope, run.clone()).await;
                 if panel.borrow().connection_generation != generation {
                     return;
                 }
@@ -534,6 +589,7 @@ fn install_flow(panel: &Rc<RefCell<Panel>>) -> Result<(), FlowError> {
                 Err(error) => {
                     let mut p = panel.borrow_mut();
                     p.connected = false;
+                    conversations::disconnected(&mut p.conversations);
                     p.status_message = error.to_string();
                     p.codex_input_pending = None;
                     p.codex_input_stopping = None;
@@ -560,6 +616,8 @@ fn reconnect(panel: Rc<RefCell<Panel>>) {
                     {
                         let mut p = panel.borrow_mut();
                         p.flow = flow.clone();
+                        p.saved_history = Default::default();
+                        conversations::disconnected(&mut p.conversations);
                         p.start_pending = false;
                         p.native_permission_pending = None;
                         p.pi_ui_pending = None;
@@ -609,13 +667,14 @@ fn reconnect(panel: Rc<RefCell<Panel>>) {
 async fn follow_start(
     panel: Rc<RefCell<Panel>>,
     flow: FlowClient,
+    scope: metldr_history_pages::Scope,
     generation: u64,
     start: Result<RunId, FlowError>,
     label: &str,
 ) {
     let mut awaiting_view = true;
     let result = async {
-        let mut views = flow.watch(start?).await?;
+        let mut views = flow.watch(scope, start?).await?;
         while let Some(view) = views.changed().await? {
             if awaiting_view && panel.borrow().connection_generation == generation {
                 panel.borrow_mut().start_pending = false;
@@ -649,6 +708,12 @@ fn apply_view(panel: &Rc<RefCell<Panel>>, view: PageView, generation: u64) {
     {
         return;
     }
+    let selection_changed = p
+        .snapshot
+        .as_ref()
+        .is_some_and(|old| old.selection != view.selection);
+    history_ui::selection_changed(&mut p.saved_history, selection_changed, generation);
+    conversations::reconcile(&mut p.conversations, &view, selection_changed, generation);
     p.snapshot = Some(view);
     if p.native_permission_pending
         .as_ref()
@@ -732,7 +797,10 @@ fn stale_check(panel: Rc<RefCell<Panel>>) {
         if p.connected && p.stale_generation == generation && p.connection_generation == connection
         {
             if let Some(old) = &mut p.snapshot {
-                if old.store == view.store && old.sequence == view.sequence {
+                if old.store == view.store
+                    && old.selection == view.selection
+                    && old.sequence == view.sequence
+                {
                     *old = view;
                     render(&p);
                 }

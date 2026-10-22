@@ -522,15 +522,23 @@ fn send(
             return Ok(());
         }
         state.pi_ui_pending = Some((run.clone(), request.clone()));
-        Some((state.flow.clone(), state.connection_generation))
+        let scope = state
+            .snapshot
+            .as_ref()
+            .ok_or(FlowError::NoSource)?
+            .selection
+            .clone();
+        Some((state.flow.clone(), scope, state.connection_generation))
     };
-    let Some((flow, generation)) = allowed else {
+    let Some((flow, scope, generation)) = allowed else {
         return Ok(());
     };
     crate::view::status(&panel.borrow().document, "Sending reply to Pi.");
     let panel = Rc::clone(panel);
     wasm_bindgen_futures::spawn_local(async move {
-        let result = flow.pi_ui_reply(run, request, &kind, text, confirm).await;
+        let result = flow
+            .pi_ui_reply(scope, run, request, &kind, text, confirm)
+            .await;
         if panel.borrow().connection_generation != generation {
             return;
         }

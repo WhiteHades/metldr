@@ -1,7 +1,12 @@
 use std::{fmt, num::NonZeroU64};
 
-use metldr_conversation::{Display, ProjectedEntry, Projection};
+use metldr_conversation::{Display, ProjectedEntry};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+#[path = "model/run.rs"]
+mod run;
+#[path = "model/source.rs"]
+mod source;
 
 const MAX_FRAME: usize = 65_536;
 const MAX_RUNS: usize = 16;
@@ -60,14 +65,14 @@ identity!(SourceId);
 identity!(BrowserActionId);
 
 fn parse_identity(value: &str) -> Result<(&str, NonZeroU64), String> {
+    if value.len() > 49_152 {
+        return Err("identity exceeds its saved record bound".to_owned());
+    }
     let (store, local) = value
         .split_once(':')
         .ok_or_else(|| "identity has no store separator".to_owned())?;
     if store.len() != 32 || !store.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err("invalid store identity".into());
-    }
-    if local.starts_with('0') || !local.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err("invalid local identity".into());
     }
     let local = local
         .parse::<u64>()
@@ -157,6 +162,7 @@ pub(crate) struct PageView {
     pub(crate) sequence: u64,
     pub(crate) fixture_available: bool,
     pub(crate) store: String,
+    pub(crate) selection: metldr_history_pages::Scope,
     pub(crate) source: Option<SourceView>,
     pub(crate) runs: Vec<RunView>,
     pub(crate) pi_profile: Option<PiProfileView>,
@@ -1090,6 +1096,7 @@ struct WireView {
     #[serde(default)]
     fixture_available: bool,
     store: String,
+    selection: metldr_history_pages::Scope,
     #[serde(deserialize_with = "Option::deserialize")]
     source: Option<WireSource>,
     runs: Vec<WireRun>,
@@ -1192,6 +1199,8 @@ struct WireRun {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum FlowError {
+    HistoryBusy,
+    HistoryStale,
     NoSource,
     Disconnected,
     InvalidInput(String),
@@ -1203,6 +1212,8 @@ pub(crate) enum FlowError {
 impl fmt::Display for FlowError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::HistoryBusy => f.write_str("History is busy. Try again shortly."),
+            Self::HistoryStale => f.write_str("History changed. Refresh saved work to continue."),
             Self::NoSource => f.write_str("no saved source"),
             Self::Disconnected => f.write_str("host disconnected"),
             Self::Timeout => {
@@ -1220,8 +1231,14 @@ impl std::error::Error for FlowError {}
 impl PageView {
     pub(crate) fn is_older_than(&self, other: &Self) -> bool {
         self.store == other.store
-            && (self.sequence < other.sequence
-                || (self.sequence == other.sequence && self.source_epoch < other.source_epoch))
+            && if self.selection.epoch != other.selection.epoch {
+                self.selection.epoch.0 < other.selection.epoch.0
+            } else {
+                self.sequence < other.sequence
+                    || (self.selection == other.selection
+                        && self.sequence == other.sequence
+                        && self.source_epoch < other.source_epoch)
+            }
     }
 
     pub(crate) fn decode(bytes: &[u8]) -> Result<Self, FlowError> {
@@ -1269,31 +1286,18 @@ impl PageView {
                 "invalid view identity or run count".into(),
             ));
         }
+        wire.selection
+            .validate()
+            .map_err(|_| FlowError::Protocol("invalid view selection".into()))?;
+        if wire.selection.store != wire.store {
+            return Err(FlowError::Protocol(
+                "view selection belongs to another store".into(),
+            ));
+        }
         let valid_id = |id: &str| parse_identity(id).is_ok_and(|(store, _)| store == wire.store);
         let source = wire
             .source
-            .map(|source| {
-                if !valid_id(source.id.as_str())
-                    || source.tab < 0
-                    || source.document.is_empty()
-                    || source.document.len() > 128
-                    || source.url.len() > 2_048
-                    || source.title.is_empty()
-                    || source.title.len() > 256
-                    || source.text.is_empty()
-                    || source.text.len() > MAX_PAGE_TEXT
-                {
-                    return Err(FlowError::Protocol("invalid or oversized source".into()));
-                }
-                Ok(SourceView {
-                    id: source.id,
-                    tab: source.tab,
-                    document: source.document,
-                    url: source.url,
-                    title: source.title,
-                    text: source.text,
-                })
-            })
+            .map(|source| source.into_view(&wire.store))
             .transpose()?;
         let mut ids = std::collections::BTreeSet::new();
         if let Some(profile) = &wire.pi_profile {
@@ -1352,104 +1356,8 @@ impl PageView {
         let mut active = false;
         let mut runs = Vec::with_capacity(wire.runs.len());
         for run in wire.runs {
-            if !valid_id(run.id.as_str())
-                || !valid_id(run.source.as_str())
-                || !ids.insert(run.id.as_str().to_owned())
-                || run.output.len() > MAX_PAGE_TEXT
-                || run.question.as_ref().is_some_and(|text| {
-                    text.is_empty()
-                        || text.len() > 1_024
-                        || (!matches!(&run.route, RunRoute::LegacyUnspecified)
-                            && text.trim().is_empty())
-                })
-                || run.error.as_ref().is_some_and(|text| text.len() > 256)
-                || run.activity.len() > MAX_ACTIVITY
-                || run.activity.iter().any(|item| {
-                    !valid_label(&item.tool, 128)
-                        || !matches!(
-                            (item.phase, item.outcome),
-                            (ActivityPhase::Started, None)
-                                | (
-                                    ActivityPhase::Completed,
-                                    None | Some(
-                                        ActivityOutcome::Succeeded | ActivityOutcome::Unspecified
-                                    )
-                                )
-                                | (
-                                    ActivityPhase::Failed,
-                                    None | Some(
-                                        ActivityOutcome::Failed | ActivityOutcome::Declined
-                                    )
-                                )
-                        )
-                        || item.call.as_ref().is_some_and(|call| {
-                            call.id.is_empty()
-                                || call.id.len() > 128
-                                || call.id.chars().any(char::is_control)
-                                || call
-                                    .title
-                                    .as_ref()
-                                    .is_some_and(|preview| preview.text.len() > 256)
-                                || call
-                                    .input
-                                    .as_ref()
-                                    .is_some_and(|preview| preview.text.len() > 1_024)
-                                || call
-                                    .output
-                                    .as_ref()
-                                    .is_some_and(|preview| preview.text.len() > 2_048)
-                        })
-                })
-                || (!run.activity.is_empty()
-                    && !matches!(
-                        &run.route,
-                        RunRoute::Pi { .. } | RunRoute::Codex { .. } | RunRoute::OpenCode { .. }
-                    ))
-                || matches!(&run.route, RunRoute::Text { .. } if !run.activity.is_empty()
-                || !run.conversation.is_empty()
-                || match run.kind {
-                    RunKind::Summary => run.question.is_some(),
-                    RunKind::Answer => run.question.as_ref().is_none_or(|question| question.trim().is_empty()),
-                    _ => true,
-                })
-                || (matches!(run.kind, RunKind::Browser)
-                    != matches!(
-                        &run.route,
-                        RunRoute::Messages { .. }
-                            | RunRoute::HttpsMessages { .. }
-                            | RunRoute::HttpsChatCompletions { .. }
-                            | RunRoute::HttpsResponses { .. }
-                            | RunRoute::HttpsGoogleInteractions { .. }
-                    ))
-                || matches!(&run.route, RunRoute::Messages { model } if model != "fixture-browser-model")
-                || matches!(&run.route, RunRoute::HttpsMessages { endpoint, model, revision, fingerprint }
-                    if !valid_https_endpoint(endpoint) || !valid_ascii_label(model, 128) || *revision == 0 || !valid_fingerprint(fingerprint))
-                || matches!(&run.route, RunRoute::HttpsChatCompletions { endpoint, model, revision, fingerprint }
-                    if !valid_https_endpoint(endpoint) || !valid_ascii_label(model, 128) || *revision == 0 || !valid_fingerprint(fingerprint))
-                || matches!(&run.route, RunRoute::HttpsResponses { endpoint, model, revision, fingerprint }
-                    if !valid_https_endpoint(endpoint) || !valid_ascii_label(model, 128) || *revision == 0 || !valid_fingerprint(fingerprint))
-                || matches!(&run.route, RunRoute::HttpsGoogleInteractions { endpoint, model, revision, fingerprint }
-                    if !valid_https_endpoint(endpoint) || !valid_ascii_label(model, 128) || *revision == 0 || !valid_fingerprint(fingerprint))
-                || matches!(&run.route, RunRoute::Text { endpoint, model, revision, fingerprint, .. }
-                    if !valid_https_endpoint(endpoint) || !valid_ascii_label(model, 128) || *revision == 0 || !valid_fingerprint(fingerprint))
-                || (matches!(run.kind, RunKind::Agent)
-                    != matches!(
-                        &run.route,
-                        RunRoute::Pi { .. } | RunRoute::Codex { .. } | RunRoute::OpenCode { .. }
-                    ))
-                || matches!(&run.route, RunRoute::Pi { workflow, provider, model }
-                    if !valid_id(workflow.as_str()) || !valid_label(provider, 128) || !valid_label(model, 128))
-                || matches!(&run.route, RunRoute::Codex { workflow, provider, model }
-                    if !valid_id(workflow.as_str())
-                        || provider.is_some() != model.is_some()
-                        || provider.as_ref().is_some_and(|value| !valid_label(value, 128))
-                        || model.as_ref().is_some_and(|value| !valid_label(value, 128)))
-                || matches!(&run.route, RunRoute::OpenCode { workflow, model, mode }
-                    if !valid_id(workflow.as_str())
-                        || model.is_some() != mode.is_some()
-                        || model.as_ref().is_some_and(|value| !valid_label(value, 128))
-                        || mode.as_ref().is_some_and(|value| !valid_label(value, 128)))
-            {
+            let run = run.into_view(&wire.store)?;
+            if !ids.insert(run.id.as_str().to_owned()) {
                 return Err(FlowError::Protocol("invalid saved run".into()));
             }
             if !run.status.is_terminal() {
@@ -1458,22 +1366,7 @@ impl PageView {
                 }
                 active = true;
             }
-            let output = Display::new(Projection {
-                output: run.output,
-                conversation: run.conversation,
-            })
-            .map_err(|_| FlowError::Protocol("invalid saved run conversation".into()))?;
-            runs.push(RunView {
-                id: run.id,
-                source: run.source,
-                kind: run.kind,
-                question: run.question,
-                status: run.status,
-                output,
-                error: run.error,
-                route: run.route,
-                activity: run.activity,
-            });
+            runs.push(run);
         }
         let run_ids: std::collections::BTreeSet<_> =
             runs.iter().map(|run| run.id.as_str()).collect();
@@ -1817,6 +1710,7 @@ impl PageView {
             sequence: wire.sequence,
             fixture_available: wire.fixture_available,
             store: wire.store,
+            selection: wire.selection,
             source,
             runs,
             pi_profile: wire.pi_profile,
@@ -1978,7 +1872,7 @@ mod tests {
     use super::*;
 
     const STORE: &str = "0123456789abcdef0123456789abcdef";
-    const VALID: &str = r#"{"sequence":2,"store":"0123456789abcdef0123456789abcdef","source":{"id":"0123456789abcdef0123456789abcdef:1","tab":4,"document":"doc-1","url":"http://127.0.0.1:43123/article","title":"North report","text":"The North project reports an amount of 17 units."},"runs":[{"id":"0123456789abcdef0123456789abcdef:2","source":"0123456789abcdef0123456789abcdef:1","kind":"summary","question":null,"status":"complete","output":"North reports 17 units.","conversation":[],"error":null,"route":{"kind":"fixture"},"activity":[]}],"pi_profile":null,"agent_sessions":[],"browser_route":null}"#;
+    const VALID: &str = r#"{"sequence":2,"store":"0123456789abcdef0123456789abcdef","selection":{"store":"0123456789abcdef0123456789abcdef","conversation":"0123456789abcdef0123456789abcdef:100","epoch":"1"},"source":{"id":"0123456789abcdef0123456789abcdef:1","tab":4,"document":"doc-1","url":"http://127.0.0.1:43123/article","title":"North report","text":"The North project reports an amount of 17 units."},"runs":[{"id":"0123456789abcdef0123456789abcdef:2","source":"0123456789abcdef0123456789abcdef:1","kind":"summary","question":null,"status":"complete","output":"North reports 17 units.","conversation":[],"error":null,"route":{"kind":"fixture"},"activity":[]}],"pi_profile":null,"agent_sessions":[],"browser_route":null}"#;
 
     #[test]
     fn decodes_host_view_and_rejects_invalid_boundary_data() {
@@ -1989,6 +1883,18 @@ mod tests {
         assert!(view.active_run().is_none());
 
         for invalid in [
+            VALID.replace(
+                "\"selection\":{\"store\":\"0123456789abcdef0123456789abcdef\",\"conversation\":\"0123456789abcdef0123456789abcdef:100\",\"epoch\":\"1\"},",
+                "",
+            ),
+            VALID.replace(
+                "\"selection\":{\"store\":\"0123456789abcdef0123456789abcdef\",\"conversation\":\"0123456789abcdef0123456789abcdef:100\",\"epoch\":\"1\"}",
+                "\"selection\":null",
+            ),
+            VALID.replace(
+                "\"selection\":{\"store\":\"0123456789abcdef0123456789abcdef\",\"conversation\":\"0123456789abcdef0123456789abcdef:100\",\"epoch\":\"1\"}",
+                "\"selection\":{\"store\":\"ffffffffffffffffffffffffffffffff\",\"conversation\":\"ffffffffffffffffffffffffffffffff:100\",\"epoch\":\"1\"}",
+            ),
             VALID.replace("\"conversation\":[],", ""),
             VALID.replace(&format!("{STORE}:1"), "ffffffffffffffffffffffffffffffff:1"),
             VALID.replace("\"kind\":\"summary\"", "\"kind\":\"unknown\""),
@@ -2002,9 +1908,14 @@ mod tests {
                 "\"activity\":[{\"tool\":\"read\",\"phase\":\"unknown\"}]",
             ),
             VALID.replace("\"sequence\":2", "\"sequence\":2,\"extra\":true"),
-            VALID.replace(&format!("{STORE}:2"), &format!("{STORE}:+2")),
+            VALID.replace(&format!("{STORE}:2"), &format!("{STORE}:2 ")),
         ] {
             assert!(PageView::decode(invalid.as_bytes()).is_err());
+        }
+        for alias in ["02", "+2"] {
+            let saved = VALID.replace(&format!("{STORE}:2"), &format!("{STORE}:{alias}"));
+            let view = PageView::decode(saved.as_bytes()).unwrap();
+            assert_eq!(view.runs[0].id.as_str(), format!("{STORE}:{alias}"));
         }
         let mut duplicate: serde_json::Value = serde_json::from_str(VALID).unwrap();
         let run = duplicate["runs"][0].clone();
@@ -2019,6 +1930,25 @@ mod tests {
             assert!(PageView::decode(&serde_json::to_vec(&absent).unwrap()).is_err());
         }
         assert!(PageView::decode(&vec![b' '; MAX_FRAME + 1]).is_err());
+    }
+
+    #[test]
+    fn selection_epoch_orders_views_before_global_sequence() {
+        let older = PageView::decode(
+            VALID
+                .replace("\"sequence\":2", "\"sequence\":99")
+                .as_bytes(),
+        )
+        .unwrap();
+        let newer = PageView::decode(
+            VALID
+                .replace("\"sequence\":2", "\"sequence\":3")
+                .replace("\"epoch\":\"1\"", "\"epoch\":\"2\"")
+                .as_bytes(),
+        )
+        .unwrap();
+        assert!(older.is_older_than(&newer));
+        assert!(!newer.is_older_than(&older));
     }
 
     #[test]

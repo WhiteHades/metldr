@@ -123,6 +123,7 @@ pub(super) fn render(
     view: &PageView,
     generation: u64,
     start_pending: bool,
+    conversation_busy: bool,
 ) -> Result<(), JsValue> {
     let busy = view.agent_settings.busy
         || view.provider_settings.busy
@@ -171,13 +172,16 @@ pub(super) fn render(
     }
     let disabled = PANEL.with(|slot| {
         slot.borrow().as_ref().is_some_and(|state| {
-            state.mutation_busy.get() || state.server_busy.get() || state.unknown.get()
+            state.mutation_busy.get()
+                || state.server_busy.get()
+                || state.unknown.get()
+                || conversation_busy
         })
     });
     let refresh_disabled = PANEL.with(|slot| {
-        slot.borrow()
-            .as_ref()
-            .is_some_and(|state| state.mutation_busy.get() || state.server_busy.get())
+        slot.borrow().as_ref().is_some_and(|state| {
+            state.mutation_busy.get() || state.server_busy.get() || conversation_busy
+        })
     });
     for agent in AgentKind::ALL {
         for action in ["save", "remove"] {
@@ -258,7 +262,21 @@ fn sync_generation(state: &SettingsPanel, generation: u64) {
     }
 }
 fn can_mutate(state: &SettingsPanel) -> bool {
-    !state.mutation_busy.get() && !state.server_busy.get() && !state.unknown.get()
+    !state.mutation_busy.get()
+        && !state.server_busy.get()
+        && !state.unknown.get()
+        && state
+            .panel
+            .upgrade()
+            .is_some_and(|panel| !crate::conversations::settings_blocked(&panel.borrow()))
+}
+
+pub(super) fn interlocked() -> bool {
+    PANEL.with(|slot| {
+        slot.borrow().as_ref().is_some_and(|state| {
+            state.mutation_busy.get() || state.server_busy.get() || state.unknown.get()
+        })
+    })
 }
 fn start_mutation(state: &SettingsPanel, store: Option<String>) {
     state.mutation_busy.set(true);
@@ -275,6 +293,9 @@ fn save(state: Rc<SettingsPanel>, agent: AgentKind) {
     let Some((panel, flow, generation, store)) = context(&state) else {
         return;
     };
+    if crate::conversations::settings_blocked(&panel.borrow()) {
+        return;
+    }
     let profile = read_profile(&state.document, agent);
     let (revision, version) = {
         let drafts = state.drafts.borrow();
@@ -332,6 +353,9 @@ fn refresh_agents(state: Rc<SettingsPanel>) {
     let Some((panel, flow, generation, store)) = context(&state) else {
         return;
     };
+    if crate::conversations::settings_blocked(&panel.borrow()) {
+        return;
+    }
     state.mutation_busy.set(true);
     let read_epoch = state.mutation_epoch.get();
     update_controls(&state);
@@ -478,7 +502,14 @@ fn use_saved(state: Rc<SettingsPanel>, agent: AgentKind) {
     );
 }
 fn update_controls(state: &SettingsPanel) {
-    let disabled = state.mutation_busy.get() || state.server_busy.get() || state.unknown.get();
+    let conversation_busy = state
+        .panel
+        .upgrade()
+        .is_some_and(|panel| crate::conversations::settings_blocked(&panel.borrow()));
+    let disabled = state.mutation_busy.get()
+        || state.server_busy.get()
+        || state.unknown.get()
+        || conversation_busy;
     for agent in AgentKind::ALL {
         for action in ["save", "remove"] {
             if let Some(button) = state.document.get_element_by_id(&control_id(agent, action)) {
@@ -491,7 +522,7 @@ fn update_controls(state: &SettingsPanel) {
         }
     }
     if let Some(button) = state.document.get_element_by_id("agent-refresh") {
-        if state.mutation_busy.get() || state.server_busy.get() {
+        if state.mutation_busy.get() || state.server_busy.get() || conversation_busy {
             let _ = button.set_attribute("disabled", "");
         } else {
             let _ = button.remove_attribute("disabled");

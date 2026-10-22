@@ -463,6 +463,12 @@ fn reply(panel: &Rc<RefCell<Panel>>, control: &Element, kind: &str) -> Result<()
         _ => return Ok(()),
     };
     let flow = state.flow.clone();
+    let scope = state
+        .snapshot
+        .as_ref()
+        .ok_or(FlowError::NoSource)?
+        .selection
+        .clone();
     let generation = state.connection_generation;
     let stopped_run = run.clone();
     drop(state);
@@ -470,7 +476,7 @@ fn reply(panel: &Rc<RefCell<Panel>>, control: &Element, kind: &str) -> Result<()
     set_disabled(&card, true);
     let panel = Rc::clone(panel);
     wasm_bindgen_futures::spawn_local(async move {
-        match flow.codex_input_reply(run, request, answer).await {
+        match flow.codex_input_reply(scope, run, request, answer).await {
             Ok(view) if panel.borrow().connection_generation == generation => {
                 crate::apply_view(&panel, view, generation);
                 crate::set_panel_status(&panel, "Reply sent to Codex.");

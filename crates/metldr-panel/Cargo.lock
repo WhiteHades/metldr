@@ -69,11 +69,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "metldr-history-pages"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "metldr-panel"
 version = "0.1.0"
 dependencies = [
  "js-sys",
  "metldr-conversation",
+ "metldr-history-pages",
  "serde",
  "serde_json",
  "wasm-bindgen",

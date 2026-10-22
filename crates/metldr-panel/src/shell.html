@@ -9,10 +9,28 @@
     </div>
   </div>
   <div class="toolbar-actions">
+    <button data-action="conversation-new" type="button">New chat</button>
+    <button id="conversations-trigger" type="button" popovertarget="conversations" aria-haspopup="dialog" aria-controls="conversations">Chats</button>
     <button id="settings-trigger" type="button" popovertarget="appearance-settings" aria-haspopup="dialog">Settings</button>
     <button data-action="reconnect" type="button" aria-label="Reconnect" title="Reconnect"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></svg></button>
   </div>
 </header>
+<div id="conversation-recovery" class="conversation-recovery" hidden>
+  <p id="conversation-recovery-status" role="status" aria-live="polite"></p>
+  <button data-action="conversation-retry" type="button" hidden>Retry exact change</button>
+</div>
+<section id="conversations" popover role="dialog" aria-labelledby="conversation-heading">
+  <header class="conversation-heading">
+    <h2 id="conversation-heading">Chats</h2>
+    <button data-action="conversation-search" type="button">Search</button>
+  </header>
+  <label class="conversation-search" for="conversation-query">Search loaded chats<input id="conversation-query" type="search" autocomplete="off" maxlength="256" autofocus></label>
+  <button data-action="conversation-search-close" type="button" hidden>Clear search</button>
+  <nav id="conversation-list" aria-label="Saved conversations"></nav>
+  <button data-action="conversation-refresh" type="button">Refresh conversations</button>
+  <button data-action="conversation-more" type="button" hidden>More conversations</button>
+  <p id="conversation-status" role="status" aria-live="polite">Chats lists saved conversations for the current store.</p>
+</section>
 <section id="appearance-settings" popover role="dialog" aria-labelledby="appearance-title">
   <h2 id="appearance-title">Settings</h2>
   <section aria-labelledby="appearance-heading">
@@ -157,6 +175,14 @@
   </section>
   <p id="empty-history">Capture a page and send a request. Your saved work will appear here.</p>
   <section id="history" aria-label="Saved work"></section>
+  <details id="saved-history">
+    <summary>Earlier saved work</summary>
+    <button data-action="history-latest" type="button">Refresh saved work</button>
+    <p id="saved-history-status" role="status" aria-live="polite">Open saved results without starting a task.</p>
+    <div id="saved-history-list" aria-label="Saved results"></div>
+    <button data-action="history-earlier" type="button" hidden>Earlier results</button>
+    <section id="saved-result" aria-label="Selected saved result"></section>
+  </details>
   <details id="agent-details" open>
     <summary>Execution details</summary>
     <div class="agent-body">

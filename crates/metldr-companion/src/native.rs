@@ -10,7 +10,7 @@ pub(super) use config::{parse_bootstrap_config, valid_parent_window_arg};
 use crate::{
     Result,
     flow::{Event, Owner},
-    store::Disk,
+    history::History,
     transport::{Action, Transport},
 };
 use config::{Config, Mode};
@@ -36,7 +36,9 @@ pub(super) fn run() -> Result<()> {
             &config.extension_origin,
         );
     }
-    let (disk, mut state) = Disk::open(config.state.clone())?;
+    let (disk, mut history) = History::load(config.state.clone())?;
+    let scope = history.selection()?;
+    let state = history.edit(|edit| edit.project(&scope, None))?;
     let fixture_profiles = (
         if matches!(
             state
@@ -115,16 +117,13 @@ pub(super) fn run() -> Result<()> {
             })
             .transpose()?
     };
-    if let Some(pending) = state.providers.pending.take() {
-        state.providers.retired.push(pending.connection.credential);
-    }
-    crate::recovery::interrupt(&mut state)?;
     let (tx, rx) = mpsc::sync_channel(64);
     let mut owner = Owner {
         disk,
         settings: Default::default(),
         agent_runtime: Default::default(),
         state,
+        browser_view: BTreeMap::new(),
         fixture: config.fixture,
         subscribers: BTreeMap::new(),
         operation: None,
@@ -142,9 +141,13 @@ pub(super) fn run() -> Result<()> {
         google_route,
         chat_route,
         transport,
+        record_history: Some(history),
+        history_pins: Default::default(),
     };
-    owner.preflight(&owner.state)?;
-    owner.disk.save(&owner.state)?;
+    owner.persist_records(|edit, scope| {
+        edit.recover(scope)?;
+        Ok(((), Some(edit.project_latest(scope)?)))
+    })?;
     owner.transport.start(owner.tx.clone())?;
     for kind in [
         crate::agent_settings::Kind::Pi,
@@ -166,6 +169,7 @@ pub(super) fn run() -> Result<()> {
     let mut closed = false;
     let mut input_error = None;
     loop {
+        owner.expire_history();
         owner.settings.check_deadline()?;
         if closed && owner.operation.is_none() && owner.settings.job.is_none() {
             break;
@@ -184,6 +188,7 @@ pub(super) fn run() -> Result<()> {
             Event::Browser(event) => owner.browser_event(event)?,
             Event::Input(input) => match owner.transport.input(input)? {
                 Action::Connected => {
+                    owner.invalidate_history();
                     owner.subscribers.clear();
                     if !closed {
                         owner.reply_view(None, "ready", true)?;
@@ -191,6 +196,7 @@ pub(super) fn run() -> Result<()> {
                 }
                 Action::Request(request) if !closed => owner.request(request)?,
                 Action::Detached => {
+                    owner.invalidate_history();
                     owner.subscribers.clear();
                     owner.disconnect_pi_ui()?;
                     owner.disconnect_codex_input()?;
@@ -201,6 +207,7 @@ pub(super) fn run() -> Result<()> {
                     }
                 }
                 Action::Shutdown(error) => {
+                    owner.invalidate_history();
                     owner.disconnect_pi_ui()?;
                     owner.disconnect_codex_input()?;
                     if let Some(run) = owner.browser_io.as_ref().map(|s| s.run.clone()) {

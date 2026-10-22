@@ -138,6 +138,14 @@ impl Client {
 impl Owner {
     pub(super) fn browser_io_call(&mut self, call: Call) -> Result<()> {
         let result = (|| -> Result<u64> {
+            let saved_action = match &call.operation {
+                Operation::Navigate { action, .. }
+                | Operation::ActivateButton { action, .. }
+                | Operation::ConfirmNavigation { action, .. } => {
+                    Some(self.saved_browser_action(action)?)
+                }
+                _ => None,
+            };
             let slot = self
                 .browser_io
                 .as_mut()
@@ -168,11 +176,7 @@ impl Owner {
                     destination,
                     ..
                 } => {
-                    let record = self
-                        .state
-                        .browser_actions
-                        .get(action)
-                        .ok_or("unknown navigation action")?;
+                    let record = saved_action.as_ref().ok_or("unknown navigation action")?;
                     if record.proposal.run != call.run
                         || record.revision != *revision
                         || record.state != crate::browser_action::Phase::Dispatching
@@ -194,11 +198,7 @@ impl Owner {
                     url,
                     ..
                 } => {
-                    let record = self
-                        .state
-                        .browser_actions
-                        .get(action)
-                        .ok_or("unknown button action")?;
+                    let record = saved_action.as_ref().ok_or("unknown button action")?;
                     if record.proposal.run != call.run
                         || record.revision != *revision
                         || record.state != crate::browser_action::Phase::Dispatching
@@ -222,11 +222,7 @@ impl Owner {
                     tab,
                     ..
                 } => {
-                    let record = self
-                        .state
-                        .browser_actions
-                        .get(action)
-                        .ok_or("unknown navigation action")?;
+                    let record = saved_action.as_ref().ok_or("unknown navigation action")?;
                     if record.proposal.run != call.run
                         || record.revision != *revision
                         || record.state != crate::browser_action::Phase::Dispatching
@@ -258,6 +254,11 @@ impl Owner {
             Ok(id) => id,
             Err(error) => {
                 let _ = call.ack.send(Err(error.to_string()));
+                if error.downcast_ref::<std::io::Error>().is_some()
+                    || crate::history::is_failure(error.as_ref())
+                {
+                    return Err(error);
+                }
                 return Ok(());
             }
         };

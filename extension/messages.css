@@ -1,5 +1,5 @@
 /* ChatExperience message structure, with actual run text and retained nodes. */
-#history {
+:is(#history, #saved-result) {
   --message-ink: light-dark(oklch(0.247 0.006 258.361), oklch(0.964 0.002 247.839));
   --message-ink-2: light-dark(oklch(0.506 0.01 264.477), oklch(0.731 0.008 260.731));
   --message-ink-3: light-dark(oklch(0.695 0.009 264.505), oklch(0.541 0.01 264.484));
@@ -13,10 +13,11 @@
   font-size: calc(var(--text-body) * 0.875);
   letter-spacing: -0.01em;
   line-height: 1.5;
+  overflow-wrap: break-word;
 }
-#history .run { display: flex; flex-direction: column; gap: 32px; }
-#history [data-part="conversation"] { display: flex; flex-direction: column; gap: 32px; }
-#history .run > [data-part="question"] {
+:is(#history, #saved-result) .run { display: flex; flex-direction: column; gap: 32px; }
+:is(#history, #saved-result) [data-part="conversation"] { display: flex; flex-direction: column; gap: 32px; }
+:is(#history, #saved-result) .run > [data-part="question"] {
   align-self: end;
   inline-size: fit-content;
   max-inline-size: calc(100% - 40px);
@@ -30,8 +31,8 @@
   line-height: 1.625;
   white-space: pre-wrap;
 }
-#history .assistant-message { display: flex; align-items: start; gap: 12px; }
-#history .message-spark {
+:is(#history, #saved-result) .assistant-message { display: flex; align-items: start; gap: 12px; }
+:is(#history, #saved-result) .message-spark {
   display: flex;
   flex: none;
   align-items: center;
@@ -44,9 +45,9 @@
   color: var(--message-surface);
   box-shadow: 0 0 0 1px var(--message-line);
 }
-#history .message-spark svg { display: block; flex: none; inline-size: calc(13em / 14); block-size: calc(13em / 14); }
-#history .message-body { display: flex; flex: 1; flex-direction: column; min-inline-size: 0; gap: 8px; }
-#history :is([data-part="heading"], [data-part="message-label"]) {
+:is(#history, #saved-result) .message-spark svg { display: block; flex: none; inline-size: calc(13em / 14); block-size: calc(13em / 14); }
+:is(#history, #saved-result) .message-body { display: flex; flex: 1; flex-direction: column; min-inline-size: 0; gap: 8px; }
+:is(#history, #saved-result) :is([data-part="heading"], [data-part="message-label"]) {
   color: var(--message-ink-3);
   font-size: calc(11em / 14);
   font-weight: 500;
@@ -55,15 +56,15 @@
   text-transform: uppercase;
   text-wrap: wrap;
 }
-#history [data-part="message-label"] { text-transform: none; }
-#history [data-part="route"] { text-transform: none; }
-#history [data-part="output"] { max-inline-size: 620px; color: var(--message-ink); font-size: inherit; line-height: 1.65; white-space: pre-wrap; }
-#history [data-part="error"] { color: var(--accent); white-space: pre-wrap; }
-#history [data-activity] { color: var(--message-ink-2); font-size: calc(12em / 14); }
-#history .result-actions { color: var(--message-ink-2); }
-#history [data-part="copy-status"] { color: inherit; }
+:is(#history, #saved-result) [data-part="message-label"] { text-transform: none; }
+:is(#history, #saved-result) [data-part="route"] { text-transform: none; }
+:is(#history, #saved-result) [data-part="output"] { max-inline-size: 620px; color: var(--message-ink); font-size: inherit; line-height: 1.65; white-space: pre-wrap; }
+:is(#history, #saved-result) [data-part="error"] { color: var(--accent); white-space: pre-wrap; }
+:is(#history, #saved-result) [data-activity] { color: var(--message-ink-2); font-size: calc(12em / 14); }
+:is(#history, #saved-result) .result-actions { color: var(--message-ink-2); }
+:is(#history, #saved-result) [data-part="copy-status"] { color: inherit; }
 @media (prefers-reduced-motion: no-preference) {
-  #history .assistant-message { animation: message-enter 450ms var(--ease-out) both; }
+  :is(#history, #saved-result) .assistant-message { animation: message-enter 450ms var(--ease-out) both; }
 }
 @keyframes message-enter {
   from { opacity: 0; transform: translateY(8px); }

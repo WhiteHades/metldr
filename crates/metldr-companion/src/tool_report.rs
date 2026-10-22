@@ -136,7 +136,7 @@ impl Call {
     }
 }
 
-fn coalesce(activity: &mut [crate::agent_model::Activity], update: Call) -> bool {
+pub(super) fn coalesce(activity: &mut [crate::agent_model::Activity], update: Call) -> bool {
     if !update.valid() {
         return false;
     }
@@ -196,18 +196,15 @@ impl crate::flow::Owner {
         {
             return Ok(());
         }
-        let mut next = self.state.clone();
-        let Some(
-            Launch::Pi { activity, .. }
+        self.native_change(run, |_, launch, _| {
+            let (Launch::Pi { activity, .. }
             | Launch::Codex { activity, .. }
-            | Launch::OpenCode { activity, .. },
-        ) = next.launches.get_mut(run)
-        else {
-            return Ok(());
-        };
-        if coalesce(activity, call) {
-            self.commit(next)?;
-        }
+            | Launch::OpenCode { activity, .. }) = launch
+            else {
+                return Ok(false);
+            };
+            Ok(coalesce(activity, call))
+        })?;
         Ok(())
     }
 }

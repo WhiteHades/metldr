@@ -1,0 +1,172 @@
+use super::{Directory, Output, Running};
+use crate::{Result, history::schema::*};
+use redb::{ReadableDatabase, ReadableTable, TableHandle};
+use serde_json::{Value, json};
+use std::{fs, path::Path, time::Duration};
+
+fn profile(directory: &Path) -> Result<Value> {
+    let db = redb::Database::open(directory.join("history.redb"))?;
+    let read = db.begin_read()?;
+    let table = read.open_table(META)?;
+    let profile: Value =
+        serde_json::from_slice(table.get("profile")?.ok_or("missing profile")?.value())?;
+    let mut tables = serde_json::Map::new();
+    for definition in [
+        META,
+        CONVERSATIONS,
+        SOURCES,
+        RUNS,
+        LAUNCHES,
+        STARTS,
+        NATIVE_TARGETS,
+        PI,
+        CODEX,
+        OPENCODE,
+        ACTIONS,
+    ] {
+        let mut rows = Vec::new();
+        for row in read.open_table(definition)?.iter()? {
+            let (key, bytes) = row?;
+            if definition.name() != "metadata" || key.value() != "profile" {
+                rows.push(json!([key.value(), bytes.value()]));
+            }
+        }
+        tables.insert(definition.name().into(), json!(rows));
+    }
+    for definition in [NAVIGATION_HEADS, OPEN_ACTIONS, UNCERTAIN_RUNS] {
+        let mut rows = Vec::new();
+        for row in read.open_table(definition)?.iter()? {
+            let (key, value) = row?;
+            rows.push(json!([key.value(), value.value()]));
+        }
+        tables.insert(definition.name().into(), json!(rows));
+    }
+    for definition in [CONTEXT, WORKFLOW_RUNS, RUN_ORDER, NAVIGATION_GRANTS] {
+        let mut rows = Vec::new();
+        for row in read.open_table(definition)?.iter()? {
+            let (key, value) = row?;
+            rows.push(json!([key.value(), value.value()]));
+        }
+        tables.insert(definition.name().into(), json!(rows));
+    }
+    let mut action_order = Vec::new();
+    for row in read.open_table(ACTION_ORDER)?.iter()? {
+        let (key, value) = row?;
+        action_order.push(json!([key.value(), value.value()]));
+    }
+    tables.insert("action_order".into(), json!(action_order));
+    let mut by_tool = Vec::new();
+    for row in read.open_table(ACTION_BY_TOOL)?.iter()? {
+        let (key, value) = row?;
+        by_tool.push(json!([key.value(), value.value()]));
+    }
+    tables.insert("action_by_tool".into(), json!(by_tool));
+    let mut active = Vec::new();
+    for row in read.open_table(ACTIVE_RUNS)?.iter()? {
+        let (key, _) = row?;
+        active.push(key.value().to_owned());
+    }
+    tables.insert("active_runs".into(), json!(active));
+    Ok(json!({"profile":profile,"tables":tables}))
+}
+
+fn refused(mut host: Running) -> Result<()> {
+    assert!(matches!(
+        host.output.recv_timeout(Duration::from_secs(5))?,
+        Output::Eof
+    ));
+    assert!(!host.child().wait()?.success());
+    host.reader
+        .take()
+        .unwrap()
+        .join()
+        .map_err(|_| "refused host reader panicked")?;
+    host.child.take();
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires METLDR_STARTUP_BINARY and METLDR_HISTORY_OLD_BINARY with history format 10"]
+fn actual_old_private_host_upgrades_and_cannot_reopen_new_history() -> Result<()> {
+    let directory = Directory::new()?;
+    let mut legacy = crate::history::fixture::legacy();
+    legacy.providers = Default::default();
+    legacy.agent_settings = Default::default();
+    for (number, run) in legacy.view.runs.iter().enumerate() {
+        legacy
+            .starts
+            .insert(format!("upgrade-start-{number}"), run.id.clone());
+    }
+    legacy.validate()?;
+    let original = serde_json::to_vec(&legacy)?;
+    fs::write(directory.0.join("snapshot.json"), &original)?;
+    let old = std::env::var_os("METLDR_HISTORY_OLD_BINARY")
+        .ok_or("METLDR_HISTORY_OLD_BINARY is required")?;
+    let host = Running::start_binary(&directory.0, &old)?;
+    host.ready_version(10)?;
+    assert!(host.finish()?.success());
+    let before = profile(&directory.0)?;
+    assert_eq!(before["profile"]["format"], 10);
+    assert_eq!(before["tables"]["runs"].as_array().unwrap().len(), 11);
+    assert_eq!(before["tables"]["starts"].as_array().unwrap().len(), 11);
+    assert_eq!(
+        before["tables"]["pi_workflows"].as_array().unwrap().len(),
+        1
+    );
+    let marker = fs::read(directory.0.join("snapshot.json"))?;
+    for damage in ["missing table", "origin digest"] {
+        let broken = Directory::new()?;
+        for name in ["snapshot.json", "snapshot.v8.json", "history.redb"] {
+            fs::copy(directory.0.join(name), broken.0.join(name))?;
+        }
+        let before_profile = {
+            let db = redb::Database::open(broken.0.join("history.redb"))?;
+            let write = db.begin_write()?;
+            if damage == "missing table" {
+                assert!(write.delete_table(RUNS)?);
+            } else {
+                let mut meta = write.open_table(META)?;
+                let mut saved: Value =
+                    serde_json::from_slice(meta.get("profile")?.unwrap().value())?;
+                saved["legacy_sha256"] = "0".repeat(64).into();
+                meta.insert("profile", serde_json::to_vec(&saved)?.as_slice())?;
+            }
+            write.commit()?;
+            let read = db.begin_read()?;
+            let meta = read.open_table(META)?;
+            meta.get("profile")?.unwrap().value().to_vec()
+        };
+        refused(Running::start(&broken.0)?)?;
+        let db = redb::Database::open(broken.0.join("history.redb"))?;
+        let read = db.begin_read()?;
+        let meta = read.open_table(META)?;
+        let bytes = meta.get("profile")?.unwrap();
+        let saved: Value = serde_json::from_slice(bytes.value())?;
+        assert_eq!(
+            saved["format"], 10,
+            "refused upgrade changed the old profile"
+        );
+        assert_eq!(
+            bytes.value(),
+            before_profile,
+            "refused upgrade changed {damage}"
+        );
+    }
+    let host = Running::start(&directory.0)?;
+    host.ready()?;
+    assert!(host.finish()?.success());
+    let after = profile(&directory.0)?;
+    assert_eq!(after["profile"]["format"], 11);
+    let mut expected = before;
+    expected["profile"]["format"] = 11.into();
+    assert_eq!(after, expected);
+    assert_eq!(fs::read(directory.0.join("snapshot.v8.json"))?, original);
+    assert_eq!(fs::read(directory.0.join("snapshot.json"))?, marker);
+    refused(Running::start_binary(&directory.0, &old)?)?;
+    assert_eq!(profile(&directory.0)?, after);
+    let host = Running::start(&directory.0)?;
+    host.ready()?;
+    assert!(host.finish()?.success());
+    assert_eq!(profile(&directory.0)?, after);
+    Ok(())
+}

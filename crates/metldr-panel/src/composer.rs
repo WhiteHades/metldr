@@ -362,7 +362,11 @@ pub(super) fn selected(panel: &Panel) -> Result<Destination, FlowError> {
 
 fn submit(panel: &Rc<RefCell<Panel>>) -> Result<(), FlowError> {
     let state = panel.borrow();
-    if !state.connected || state.start_pending || active_run(&state.snapshot).is_some() {
+    if !state.connected
+        || state.start_pending
+        || active_run(&state.snapshot).is_some()
+        || crate::conversations::start_blocked(&state)
+    {
         return Ok(());
     }
     let destination = selected(&state)?;
@@ -379,6 +383,12 @@ fn submit(panel: &Rc<RefCell<Panel>>) -> Result<(), FlowError> {
         .and_then(PageView::source)
         .ok_or(FlowError::NoSource)?
         .clone();
+    let scope = state
+        .snapshot
+        .as_ref()
+        .ok_or(FlowError::NoSource)?
+        .selection
+        .clone();
     let flow = state.flow.clone();
     let generation = state.connection_generation;
     let codex_mode = codex_mode(panel);
@@ -387,22 +397,29 @@ fn submit(panel: &Rc<RefCell<Panel>>) -> Result<(), FlowError> {
     let panel = Rc::clone(panel);
     spawn_local(async move {
         let start = match destination {
-            Destination::Model => flow.ask(source, text).await,
+            Destination::Model => flow.ask(scope.clone(), source, text).await,
             Destination::Browser { fingerprint } => {
-                flow.browser_task(source, text, fingerprint).await
+                flow.browser_task(scope.clone(), source, text, fingerprint)
+                    .await
             }
             Destination::Responses { fingerprint } => {
-                flow.responses_task(source, text, fingerprint).await
+                flow.responses_task(scope.clone(), source, text, fingerprint)
+                    .await
             }
-            Destination::Chat { fingerprint } => flow.chat_task(source, text, fingerprint).await,
+            Destination::Chat { fingerprint } => {
+                flow.chat_task(scope.clone(), source, text, fingerprint)
+                    .await
+            }
             Destination::Google { fingerprint } => {
-                flow.google_task(source, text, fingerprint).await
+                flow.google_task(scope.clone(), source, text, fingerprint)
+                    .await
             }
             Destination::PageText {
                 protocol,
                 fingerprint,
             } => {
                 flow.page_text(
+                    scope.clone(),
                     source,
                     protocol,
                     fingerprint,
@@ -410,21 +427,26 @@ fn submit(panel: &Rc<RefCell<Panel>>) -> Result<(), FlowError> {
                 )
                 .await
             }
-            Destination::Pi => flow.pi_prompt(source, text).await,
-            Destination::Codex => flow.codex_prompt(source, text, codex_mode).await,
-            Destination::OpenCode => flow.opencode_prompt(source, text).await,
+            Destination::Pi => flow.pi_prompt(scope.clone(), source, text).await,
+            Destination::Codex => {
+                flow.codex_prompt(scope.clone(), source, text, codex_mode)
+                    .await
+            }
+            Destination::OpenCode => flow.opencode_prompt(scope.clone(), source, text).await,
             Destination::Continue { workflow, revision } => {
-                flow.pi_follow_up(workflow, revision, text).await
+                flow.pi_follow_up(scope.clone(), workflow, revision, text)
+                    .await
             }
             Destination::ContinueCodex { workflow, revision } => {
-                flow.codex_follow_up(workflow, revision, text, codex_mode)
+                flow.codex_follow_up(scope.clone(), workflow, revision, text, codex_mode)
                     .await
             }
             Destination::ContinueOpenCode { workflow, revision } => {
-                flow.opencode_follow_up(workflow, revision, text).await
+                flow.opencode_follow_up(scope.clone(), workflow, revision, text)
+                    .await
             }
         };
-        follow_start(panel, flow, generation, start, "Request failed").await;
+        follow_start(panel, flow, scope, generation, start, "Request failed").await;
     });
     Ok(())
 }
@@ -676,7 +698,9 @@ pub(super) fn render(panel: &Panel) -> Result<(), JsValue> {
     if destination.is_ok() || value.is_empty() {
         crate::composer_ui::remember_choice(panel, &value);
     }
-    let busy = panel.start_pending || active_run(&panel.snapshot).is_some();
+    let busy = panel.start_pending
+        || active_run(&panel.snapshot).is_some()
+        || crate::conversations::start_blocked(panel);
     crate::summary::render(panel)?;
     let button = panel
         .document

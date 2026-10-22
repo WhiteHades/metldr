@@ -91,7 +91,7 @@ impl Disk {
         std::sync::Arc::clone(&self._lock)
     }
 
-    pub(super) fn open(directory: PathBuf) -> Result<(Self, Store)> {
+    pub(super) fn lock(directory: PathBuf) -> Result<Self> {
         fs::create_dir_all(&directory)?;
         #[cfg(unix)]
         {
@@ -104,7 +104,17 @@ impl Disk {
             directory,
             _lock: std::sync::Arc::new(lock),
         };
-        let path = disk.directory.join("snapshot.json");
+        Ok(disk)
+    }
+
+    pub(super) fn open(directory: PathBuf) -> Result<(Self, Store)> {
+        let disk = Self::lock(directory)?;
+        let state = disk.read_snapshot()?;
+        Ok((disk, state))
+    }
+
+    pub(super) fn read_snapshot(&self) -> Result<Store> {
+        let path = self.directory.join("snapshot.json");
         let state = match File::open(&path) {
             Ok(file) => {
                 let mut bytes = Vec::new();
@@ -124,8 +134,8 @@ impl Disk {
                         reject_text_launches(&state.launches)?;
                         state.schema = crate::STORE_VERSION;
                         state.validate()?;
-                        disk.backup_versioned(&bytes, 7)?;
-                        disk.save(&state)?;
+                        self.backup_versioned(&bytes, 7)?;
+                        self.save(&state)?;
                         state
                     }
                     Some(6) => {
@@ -134,8 +144,8 @@ impl Disk {
                         crate::browser_action::reject_selection_actions(&state.browser_actions)?;
                         state.schema = crate::STORE_VERSION;
                         state.validate()?;
-                        disk.backup_versioned(&bytes, 6)?;
-                        disk.save(&state)?;
+                        self.backup_versioned(&bytes, 6)?;
+                        self.save(&state)?;
                         state
                     }
                     Some(5) => {
@@ -145,8 +155,8 @@ impl Disk {
                         crate::browser_action::reject_selection_actions(&state.browser_actions)?;
                         state.schema = crate::STORE_VERSION;
                         state.validate()?;
-                        disk.backup_versioned(&bytes, 5)?;
-                        disk.save(&state)?;
+                        self.backup_versioned(&bytes, 5)?;
+                        self.save(&state)?;
                         state
                     }
                     Some(4) => {
@@ -159,8 +169,8 @@ impl Disk {
                         }
                         state.schema = crate::STORE_VERSION;
                         state.validate()?;
-                        disk.backup_versioned(&bytes, 4)?;
-                        disk.save(&state)?;
+                        self.backup_versioned(&bytes, 4)?;
+                        self.save(&state)?;
                         state
                     }
                     Some(3) => {
@@ -186,8 +196,8 @@ impl Disk {
                             agent_settings: crate::agent_settings::Settings::default(),
                         };
                         state.validate()?;
-                        disk.backup_versioned(&bytes, 3)?;
-                        disk.save(&state)?;
+                        self.backup_versioned(&bytes, 3)?;
+                        self.save(&state)?;
                         state
                     }
                     Some(2) => {
@@ -213,8 +223,8 @@ impl Disk {
                             agent_settings: crate::agent_settings::Settings::default(),
                         };
                         state.validate()?;
-                        disk.backup_versioned(&bytes, 2)?;
-                        disk.save(&state)?;
+                        self.backup_versioned(&bytes, 2)?;
+                        self.save(&state)?;
                         state
                     }
                     Some(schema) => {
@@ -238,8 +248,8 @@ impl Disk {
                         };
                         state.launches = crate::agent_model::legacy_launches(&state);
                         state.validate()?;
-                        disk.backup_versioned(&bytes, 1)?;
-                        disk.save(&state)?;
+                        self.backup_versioned(&bytes, 1)?;
+                        self.save(&state)?;
                         state
                     }
                 }
@@ -274,7 +284,7 @@ impl Disk {
             }
             Err(e) => return Err(e.into()),
         };
-        Ok((disk, state))
+        Ok(state)
     }
 
     fn backup_versioned(&self, bytes: &[u8], version: u8) -> Result<()> {

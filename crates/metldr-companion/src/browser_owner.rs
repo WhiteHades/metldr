@@ -47,6 +47,31 @@ impl PendingApproval {
 }
 
 impl Owner {
+    pub(super) fn saved_browser_action(&mut self, id: &str) -> Result<Action> {
+        if let Some(history) = self.record_history.as_mut() {
+            let scope = history.selection()?;
+            return history.edit(|edit| edit.browser_action(&scope, id));
+        }
+        self.state
+            .browser_actions
+            .get(id)
+            .cloned()
+            .ok_or_else(|| "unknown browser action".into())
+    }
+
+    fn saved_browser_tool(&mut self, run: &str, tool: &str) -> Result<Option<Action>> {
+        if let Some(history) = self.record_history.as_mut() {
+            let scope = history.selection()?;
+            return history.edit(|edit| edit.browser_by_tool(&scope, run, tool));
+        }
+        Ok(self
+            .state
+            .browser_actions
+            .values()
+            .find(|action| action.proposal.run == run && action.proposal.tool_use_id == tool)
+            .cloned())
+    }
+
     fn browser_operation(&self, run: &str) -> Result<()> {
         if self
             .operation
@@ -65,33 +90,47 @@ impl Owner {
                 ack,
                 budget,
             } => {
-                let existing = self.state.browser_actions.values().any(|a| {
-                    a.proposal.run == proposal.run && a.proposal.tool_use_id == proposal.tool_use_id
-                });
-                let result = (|| -> Result<Action> {
-                    if !existing {
-                        self.browser_operation(&proposal.run)?;
+                let result = (|| -> Result<(Action, bool)> {
+                    if let Some(existing) =
+                        self.saved_browser_tool(&proposal.run, &proposal.tool_use_id)?
+                    {
+                        if existing.proposal != proposal {
+                            return Err(
+                                "browser tool identity was reused with a changed proposal".into()
+                            );
+                        }
+                        return Ok((existing, false));
                     }
-                    if !existing && self.browser_approval.is_some() {
+                    self.browser_operation(&proposal.run)?;
+                    if self.browser_approval.is_some() {
                         return Err("browser approval already pending".into());
                     }
-                    if !existing && budget.as_ref().is_some_and(Budget::expired) {
+                    if budget.as_ref().is_some_and(Budget::expired) {
                         return Err("browser tool deadline expired before proposal".into());
+                    }
+                    if self.record_history.is_some() {
+                        let run = proposal.run.clone();
+                        return self.record_change(|edit, scope| {
+                            let (action, created) = edit.propose_browser(scope, proposal)?;
+                            let projected = if created {
+                                Some(edit.project(scope, Some(&run))?)
+                            } else {
+                                None
+                            };
+                            Ok(((action, created), projected))
+                        });
                     }
                     let mut next = self.state.clone();
                     let action = next.propose_browser(proposal)?;
-                    if existing {
-                        return Ok(action);
-                    }
                     self.commit(next)?;
-                    Ok(action)
+                    Ok((action, true))
                 })();
                 match result {
-                    Ok(action) if existing => {
+                    Ok((action, false)) => {
                         let _ = ack.send(Ok(action));
                         Ok(())
                     }
-                    Ok(action) => {
+                    Ok((action, true)) => {
                         let review = match budget.as_ref().map(Budget::pause).transpose() {
                             Ok(review) => review,
                             Err(error) => return reply(ack, Err(error)),
@@ -113,12 +152,15 @@ impl Owner {
                 ack,
             } => {
                 let result = (|| -> Result<Action> {
-                    let record = self
-                        .state
-                        .browser_actions
-                        .get(&action)
-                        .ok_or("unknown browser action")?;
+                    let record = self.saved_browser_action(&action)?;
                     self.browser_operation(&record.proposal.run)?;
+                    if self.record_history.is_some() {
+                        let run = record.proposal.run.clone();
+                        return self.record_change(|edit, scope| {
+                            let record = edit.dispatch_browser(scope, &action, revision)?;
+                            Ok((record, Some(edit.project(scope, Some(&run))?)))
+                        });
+                    }
                     let mut next = self.state.clone();
                     let record = next.dispatch_browser(&action, revision)?;
                     // The worker receives permission only after the dispatch record is durable.
@@ -134,17 +176,20 @@ impl Owner {
                 ack,
             } => {
                 let result = (|| -> Result<Action> {
-                    let record = self
-                        .state
-                        .browser_actions
-                        .get(&action)
-                        .ok_or("unknown browser action")?;
+                    let record = self.saved_browser_action(&action)?;
                     if self
                         .operation
                         .as_ref()
                         .is_none_or(|op| op.run != record.proposal.run)
                     {
                         return Err("browser result came from a stale operation".into());
+                    }
+                    if self.record_history.is_some() {
+                        let run = record.proposal.run.clone();
+                        return self.record_change(|edit, scope| {
+                            let record = edit.settle_browser(scope, &action, revision, outcome)?;
+                            Ok((record, Some(edit.project(scope, Some(&run))?)))
+                        });
                     }
                     let mut next = self.state.clone();
                     let record = next.settle_browser(&action, revision, outcome)?;
@@ -168,9 +213,18 @@ impl Owner {
             .filter(|p| p.action == action)
             .ok_or("browser action is not awaiting this approval")?;
         self.browser_operation(&pending.run)?;
-        let mut next = self.state.clone();
-        let record = next.decide_browser(action, revision, approve)?;
-        self.commit(next)?;
+        let record = if self.record_history.is_some() {
+            let run = pending.run.clone();
+            self.record_change(|edit, scope| {
+                let record = edit.decide_browser(scope, action, revision, approve)?;
+                Ok((record, Some(edit.project(scope, Some(&run))?)))
+            })?
+        } else {
+            let mut next = self.state.clone();
+            let record = next.decide_browser(action, revision, approve)?;
+            self.commit(next)?;
+            record
+        };
         if let Some(pending) = self.browser_approval.take() {
             pending.reply(Ok(record));
         }
@@ -194,7 +248,9 @@ fn reply(ack: Reply, result: Result<Action>) -> Result<()> {
         }
         Err(error) => {
             let _ = ack.send(Err(error.to_string()));
-            if error.downcast_ref::<io::Error>().is_some() {
+            if error.downcast_ref::<io::Error>().is_some()
+                || crate::history::is_failure(error.as_ref())
+            {
                 Err(error)
             } else {
                 Ok(())

@@ -118,10 +118,8 @@ fn context_contains_only_completed_same_source_and_provider_selection_answers() 
     let prompt = Prompt::Answer {
         text: "How many units?".into(),
     };
-    let context: Value = serde_json::from_str(
-        &input(&state, &source, Protocol::Messages, &current, &prompt).unwrap(),
-    )
-    .unwrap();
+    let history = legacy_context(&state, &source, Protocol::Messages, &current);
+    let context: Value = serde_json::from_str(&input(&history, &source, &prompt).unwrap()).unwrap();
     assert_eq!(
         context,
         json!({"request":{"kind":"answer","text":"How many units?"},
@@ -145,14 +143,8 @@ fn context_limit_drops_whole_old_turns_and_preserves_latest_order() {
             format!("turn{at}:{}", "x".repeat(8186)),
         );
     }
-    let encoded = input(
-        &state,
-        &source,
-        Protocol::Messages,
-        &fingerprint,
-        &Prompt::Summary,
-    )
-    .unwrap();
+    let history = legacy_context(&state, &source, Protocol::Messages, &fingerprint);
+    let encoded = input(&history, &source, &Prompt::Summary).unwrap();
     assert!(encoded.len() <= INPUT_MAX);
     let context: Value = serde_json::from_str(&encoded).unwrap();
     let history = context["history"].as_array().unwrap();
@@ -177,14 +169,8 @@ fn context_retains_at_most_six_complete_turns() {
             format!("turn{at}"),
         );
     }
-    let encoded = input(
-        &state,
-        &source,
-        Protocol::Messages,
-        &fingerprint,
-        &Prompt::Summary,
-    )
-    .unwrap();
+    let history = legacy_context(&state, &source, Protocol::Messages, &fingerprint);
+    let encoded = input(&history, &source, &Prompt::Summary).unwrap();
     let context: Value = serde_json::from_str(&encoded).unwrap();
     let history = context["history"].as_array().unwrap();
     assert_eq!(history.len(), 6);

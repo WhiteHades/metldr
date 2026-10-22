@@ -984,11 +984,13 @@ dependencies = [
  "metldr-codex-session",
  "metldr-conversation",
  "metldr-google-interactions",
+ "metldr-history-pages",
  "metldr-messages",
  "metldr-native-credentials",
  "metldr-opencode-session",
  "metldr-pi-session",
  "metldr-responses",
+ "redb",
  "reqwest",
  "rustix",
  "rustls",
@@ -1015,6 +1017,14 @@ dependencies = [
  "reqwest",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "metldr-history-pages"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1335,6 +1345,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "caa0f4137e1c0a72f4c651489402276c8e8e1cf081f3b0ba156d2cbeef09e86a"
 dependencies = [
  "rand_core 0.10.1",
+]
+
+[[package]]
+name = "redb"
+version = "4.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "39178e0a867f9e3eaa6292a4ab1dd3613f2519c5b564341e1e7b29b270736cc4"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

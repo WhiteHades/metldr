@@ -64,6 +64,7 @@ pub(super) fn render(panel: &Panel) -> Result<(), JsValue> {
         || !panel.connected
         || panel.start_pending
         || active_run(&panel.snapshot).is_some()
+        || crate::conversations::start_blocked(panel)
     {
         button.set_attribute("disabled", "")?;
     } else {
@@ -73,15 +74,30 @@ pub(super) fn render(panel: &Panel) -> Result<(), JsValue> {
 }
 
 pub(super) fn start(panel: &Rc<RefCell<Panel>>) -> Result<(), FlowError> {
-    let (flow, generation, target) = {
+    let (flow, scope, generation, target) = {
         let state = panel.borrow();
-        if !state.connected || state.start_pending || active_run(&state.snapshot).is_some() {
+        if !state.connected
+            || state.start_pending
+            || active_run(&state.snapshot).is_some()
+            || crate::conversations::start_blocked(&state)
+        {
             return Ok(());
         }
         let target = target(&state).ok_or_else(|| {
             FlowError::InvalidInput("Choose a page questions provider before summarizing.".into())
         })?;
-        (state.flow.clone(), state.connection_generation, target)
+        let scope = state
+            .snapshot
+            .as_ref()
+            .ok_or(FlowError::NoSource)?
+            .selection
+            .clone();
+        (
+            state.flow.clone(),
+            scope,
+            state.connection_generation,
+            target,
+        )
     };
     begin_start(panel);
     match target {
@@ -94,27 +110,48 @@ pub(super) fn start(panel: &Rc<RefCell<Panel>>) -> Result<(), FlowError> {
             {
                 select.set_value("model");
             }
-            let start = flow.summarize_selected();
+            let start = {
+                let view = panel.borrow().snapshot.clone().ok_or(FlowError::NoSource)?;
+                flow.summarize_selected(&view)
+            };
             let panel = Rc::clone(panel);
             spawn_local(async move {
-                follow_start(panel, flow, generation, start.await, "Capture failed").await;
+                follow_start(
+                    panel,
+                    flow,
+                    scope,
+                    generation,
+                    start.await,
+                    "Capture failed",
+                )
+                .await;
             });
         }
         Target::Provider {
             protocol,
             fingerprint,
         } => {
-            let capture = flow.capture_selected();
+            let capture = {
+                let state = panel.borrow();
+                let view = state.snapshot.as_ref().ok_or(FlowError::NoSource)?;
+                flow.capture_selected(view)
+            };
             let panel = Rc::clone(panel);
             spawn_local(async move {
                 let result = async {
                     let receipt = capture.await?;
                     let source = receipt.source().ok_or(FlowError::NoSource)?.clone();
-                    flow.page_text(source, protocol, fingerprint, PageTextPrompt::Summary)
-                        .await
+                    flow.page_text(
+                        scope.clone(),
+                        source,
+                        protocol,
+                        fingerprint,
+                        PageTextPrompt::Summary,
+                    )
+                    .await
                 }
                 .await;
-                follow_start(panel, flow, generation, result, "Summary failed").await;
+                follow_start(panel, flow, scope, generation, result, "Summary failed").await;
             });
         }
     }

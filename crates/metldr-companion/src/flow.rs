@@ -1,6 +1,5 @@
 use crate::Result;
-use crate::model::{Command, Request, Run, Source, Status, Store, check_page_fields};
-use crate::provider::provider;
+use crate::model::{Command, ConversationAction, Request, Status, Store};
 use crate::store::Disk;
 use metldr_conversation::Change;
 use serde_json::json;
@@ -12,7 +11,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         mpsc::SyncSender,
     },
-    thread::{self, JoinHandle},
+    thread::JoinHandle,
 };
 
 pub(super) enum Event {
@@ -114,14 +113,23 @@ pub(super) struct Operation {
     pub(super) stop: Arc<AtomicBool>,
     pub(super) worker: JoinHandle<()>,
 }
+#[derive(Clone)]
+pub(super) struct Subscription {
+    pub(super) scope: crate::history::Selection,
+    pub(super) run: String,
+}
+
 pub(super) struct Owner {
     pub(super) transport: crate::transport::Transport,
     pub(super) disk: Disk,
+    pub(super) record_history: Option<crate::history::History>,
+    pub(super) history_pins: crate::history_io::Pins,
     pub(super) settings: crate::provider_settings::Runtime,
     pub(super) agent_runtime: crate::agent_settings::Runtime,
     pub(super) state: Store,
+    pub(super) browser_view: BTreeMap<String, crate::browser_action::Action>,
     pub(super) fixture: Option<crate::native::Fixture>,
-    pub(super) subscribers: BTreeMap<String, String>,
+    pub(super) subscribers: BTreeMap<String, Subscription>,
     pub(super) operation: Option<Operation>,
     pub(super) tx: SyncSender<Event>,
     pub(super) pi_profile: Option<crate::agent_model::Profile>,
@@ -158,6 +166,34 @@ impl Owner {
         kind: &str,
         ended: bool,
     ) -> Result<serde_json::Value> {
+        let browser_actions = if self.record_history.is_some() {
+            &self.browser_view
+        } else {
+            &state.browser_actions
+        };
+        let selection = self
+            .record_history
+            .as_ref()
+            .map(|history| history.selection())
+            .transpose()?;
+        self.view_reply_with_browser_actions(
+            state,
+            request,
+            kind,
+            ended,
+            Some(browser_actions),
+            selection.as_ref(),
+        )
+    }
+    fn view_reply_with_browser_actions(
+        &self,
+        state: &Store,
+        request: Option<&str>,
+        kind: &str,
+        ended: bool,
+        browser_actions: Option<&BTreeMap<String, crate::browser_action::Action>>,
+        selection: Option<&crate::history::Selection>,
+    ) -> Result<serde_json::Value> {
         let mut view = crate::public_view::render(
             state,
             self.pi_profile.as_ref(),
@@ -172,6 +208,16 @@ impl Owner {
             self.chat_route.as_ref(),
             self.fixture.is_some(),
         )?;
+        if let Some(actions) = browser_actions {
+            if actions.is_empty() {
+                view.as_object_mut()
+                    .ok_or("invalid public view")?
+                    .remove("browser_actions");
+            } else {
+                view["browser_actions"] = crate::public_view::browser_actions(actions);
+            }
+        }
+        view["selection"] = serde_json::to_value(selection.map(crate::history_io::Scope::from))?;
         view["provider_settings"] = self.settings.public(&state.providers);
         view["agent_settings"] = self.agent_runtime.public(
             &state.agent_settings,
@@ -186,6 +232,11 @@ impl Owner {
         self.publish()
     }
     pub(super) fn persist(&mut self, mut next: Store) -> Result<()> {
+        if self.record_history.is_some() {
+            return Err(
+                io::Error::other("snapshot persistence cannot write record history").into(),
+            );
+        }
         next.view.sequence = self
             .state
             .view
@@ -205,6 +256,22 @@ impl Owner {
         self.view_reply(state, Some(&"x".repeat(96)), "view", false)?;
         Ok(())
     }
+    pub(super) fn preflight_records(
+        &self,
+        state: &Store,
+        browser_actions: &BTreeMap<String, crate::browser_action::Action>,
+        selection: &crate::history::Selection,
+    ) -> Result<()> {
+        self.view_reply_with_browser_actions(
+            state,
+            Some(&"x".repeat(96)),
+            "view",
+            false,
+            Some(browser_actions),
+            Some(selection),
+        )?;
+        Ok(())
+    }
     pub(super) fn publish(&mut self) -> Result<()> {
         self.reply_view(None, "changed", false)?;
         let subscriptions: Vec<_> = self
@@ -212,7 +279,9 @@ impl Owner {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        for (request, run) in subscriptions {
+        for (request, subscription) in subscriptions {
+            self.require_conversation(&subscription.scope)?;
+            let run = subscription.run;
             let ended = self
                 .state
                 .view
@@ -232,8 +301,21 @@ impl Owner {
         let result = self.command(&id, request.command);
         if let Err(e) = result {
             // Storage and transport failures are fatal; never continue after a failed commit.
-            if e.downcast_ref::<io::Error>().is_some() {
+            if e.downcast_ref::<io::Error>().is_some() || crate::history::is_failure(e.as_ref()) {
                 return Err(e);
+            }
+            if let Some(error) = e.downcast_ref::<crate::history_io::ReadError>() {
+                return self.emit(match error {
+                    crate::history_io::ReadError::Busy => json!({"v":crate::WIRE_VERSION,"request":id,"kind":"history_busy"}),
+                    crate::history_io::ReadError::Stale => json!({"v":crate::WIRE_VERSION,"request":id,"kind":"history_stale","observation":null}),
+                });
+            }
+            if e.downcast_ref::<crate::history::ConversationBusy>()
+                .is_some()
+            {
+                return self.emit(
+                    json!({"v":crate::WIRE_VERSION,"request":id,"kind":"conversation_busy"}),
+                );
             }
             self.emit(
                 json!({"v":crate::WIRE_VERSION,"request":id,"kind":"error","message":e.to_string()}),
@@ -243,12 +325,29 @@ impl Owner {
     }
     pub(super) fn command(&mut self, id: &str, command: Command) -> Result<()> {
         match command {
-            Command::PageText {
-                source,
-                protocol,
-                fingerprint,
-                prompt,
-            } => self.page_text_start(id, &source, protocol, &fingerprint, prompt),
+            Command::HistoryCurrent => self.history_current(id),
+            Command::ConversationChange { scope, change } => {
+                self.conversation_change(id, scope, change)
+            }
+            Command::HistoryConversations {
+                scope,
+                generation,
+                cursor,
+            } => self.history_conversations(id, scope, &generation, cursor),
+            Command::HistoryRuns {
+                scope,
+                generation,
+                cursor,
+            } => self.history_runs(id, scope, &generation, cursor),
+            Command::HistoryPin {
+                scope,
+                generation,
+                kind,
+                document,
+                revision,
+            } => self.history_pin(id, scope, &generation, kind, &document, revision),
+            Command::HistoryPage { identity, offset } => self.history_page(id, identity, offset),
+            Command::HistoryRelease { identity } => self.history_release(id, identity),
             Command::ProviderSave {
                 protocol,
                 expected_revision,
@@ -270,26 +369,6 @@ impl Owner {
                 expected_revision,
             } => self.agent_remove(id, agent, expected_revision),
             Command::AgentRefresh => self.agent_refresh(id),
-            Command::BrowserTask {
-                source,
-                text,
-                fingerprint,
-            } => self.browser_start(id, &source, &text, fingerprint.as_deref()),
-            Command::GoogleTask {
-                source,
-                text,
-                fingerprint,
-            } => self.google_start(id, &source, &text, &fingerprint),
-            Command::ResponsesTask {
-                source,
-                text,
-                fingerprint,
-            } => self.responses_start(id, &source, &text, &fingerprint),
-            Command::ChatTask {
-                source,
-                text,
-                fingerprint,
-            } => self.chat_start(id, &source, &text, &fingerprint),
             Command::BrowserReply { call, run, result } => {
                 self.browser_io_reply(&run, call, result);
                 Ok(())
@@ -304,76 +383,118 @@ impl Owner {
                 self.browser_io_event(&run, tab, session, method, params);
                 Ok(())
             }
-            Command::BrowserDecision {
+            Command::View => self.reply_view(Some(id), "view", true),
+            Command::Conversation { scope, action } => {
+                scope.validate()?;
+                if self.record_history.is_none() {
+                    return Err("record history is unavailable".into());
+                }
+                let expected = crate::history::Selection {
+                    store: scope.store,
+                    conversation: scope.conversation,
+                    epoch: scope.epoch.0,
+                };
+                self.conversation_action(id, &expected, action)
+            }
+        }
+    }
+
+    fn conversation_action(
+        &mut self,
+        id: &str,
+        scope: &crate::history::Selection,
+        action: ConversationAction,
+    ) -> Result<()> {
+        if self.replay_start(id, scope, &action)? {
+            return Ok(());
+        }
+        match action {
+            ConversationAction::Capture {
+                expected_source,
+                page,
+            } => {
+                if !self.conversation_idle() {
+                    return Err(crate::history::ConversationBusy.into());
+                }
+                let run = self.state.view.runs.last().map(|run| run.id.clone());
+                self.record_change(|edit, _| {
+                    edit.capture(scope, expected_source.as_deref(), page)?;
+                    Ok(((), Some(edit.project(scope, run.as_deref())?)))
+                })?;
+                self.reply_view(Some(id), "view", true)
+            }
+            ConversationAction::PageText {
+                source,
+                protocol,
+                fingerprint,
+                prompt,
+            } => self.page_text_start(id, scope, &source, protocol, &fingerprint, prompt),
+            ConversationAction::BrowserTask {
+                source,
+                text,
+                fingerprint,
+            } => self.browser_start(id, scope, &source, &text, fingerprint.as_deref()),
+            ConversationAction::GoogleTask {
+                source,
+                text,
+                fingerprint,
+            } => self.google_start(id, scope, &source, &text, &fingerprint),
+            ConversationAction::ResponsesTask {
+                source,
+                text,
+                fingerprint,
+            } => self.responses_start(id, scope, &source, &text, &fingerprint),
+            ConversationAction::ChatTask {
+                source,
+                text,
+                fingerprint,
+            } => self.chat_start(id, scope, &source, &text, &fingerprint),
+            ConversationAction::BrowserDecision {
                 action,
                 revision,
                 approve,
             } => {
+                self.require_conversation(scope)?;
                 self.browser_decide(&action, revision, approve)?;
                 self.reply_view(Some(id), "view", true)
             }
-            command @ (Command::PiPrompt { .. } | Command::PiFollowUp { .. }) => {
-                self.pi_start(id, command)
+            command @ (ConversationAction::PiPrompt { .. }
+            | ConversationAction::PiFollowUp { .. }) => self.pi_start(id, scope, command),
+            command @ (ConversationAction::CodexPrompt { .. }
+            | ConversationAction::CodexFollowUp { .. }) => self.codex_start(id, scope, command),
+            command @ (ConversationAction::OpenCodePrompt { .. }
+            | ConversationAction::OpenCodeFollowUp { .. }) => {
+                self.opencode_start(id, scope, command)
             }
-            command @ (Command::CodexPrompt { .. } | Command::CodexFollowUp { .. }) => {
-                self.codex_start(id, command)
-            }
-            command @ (Command::OpenCodePrompt { .. } | Command::OpenCodeFollowUp { .. }) => {
-                self.opencode_start(id, command)
-            }
-            Command::NativePermission {
+            ConversationAction::NativePermission {
                 run,
                 request,
                 option,
-            } => self.native_decide(id, &run, &request, option.as_deref()),
-            Command::PiUiReply {
-                run,
-                request,
-                answer,
-            } => self.pi_ui_reply(id, &run, &request, answer),
-            Command::CodexInputReply {
-                run,
-                request,
-                answer,
-            } => self.codex_input_reply(id, &run, &request, answer),
-            Command::View => self.reply_view(Some(id), "view", true),
-            Command::Capture {
-                expected_store,
-                expected_source,
-                page,
             } => {
-                if expected_store != self.state.view.store {
-                    return Err("store is not current".into());
-                }
-                crate::model::check_page_fields(&page)?;
-                if self.operation.is_some() {
-                    return Err("another run is active".into());
-                }
-                if let Some(source) = &self.state.view.source
-                    && source.page == page
-                {
-                    return self.reply_view(Some(id), "view", true);
-                }
-                if self
-                    .state
-                    .view
-                    .source
-                    .as_ref()
-                    .map(|source| source.id.as_str())
-                    != expected_source.as_deref()
-                {
-                    return Err("source is not current saved source".into());
-                }
-                let mut next = self.state.clone();
-                let source = Source {
-                    id: next.id()?,
-                    page,
-                };
-                next.view.source = Some(source.clone());
-                self.commit(next)?;
-                self.reply_view(Some(id), "view", true)
+                self.require_conversation(scope)?;
+                self.native_decide(id, &run, &request, option.as_deref())
             }
-            Command::Watch { run } => {
+            ConversationAction::PiUiReply {
+                run,
+                request,
+                answer,
+            } => {
+                self.require_conversation(scope)?;
+                self.pi_ui_reply(id, &run, &request, answer)
+            }
+            ConversationAction::CodexInputReply {
+                run,
+                request,
+                answer,
+            } => {
+                self.require_conversation(scope)?;
+                self.codex_input_reply(id, &run, &request, answer)
+            }
+            ConversationAction::Watch { run } => {
+                self.require_conversation(scope)?;
+                if self.record_history.is_some() {
+                    self.record_change(|edit, _| Ok(((), Some(edit.project(scope, Some(&run))?))))?;
+                }
                 let status = self
                     .state
                     .view
@@ -386,153 +507,112 @@ impl Owner {
                     if self.subscribers.len() >= 16 {
                         return Err("watch capacity reached".into());
                     }
-                    self.subscribers.insert(id.to_owned(), run);
+                    self.subscribers.insert(
+                        id.to_owned(),
+                        Subscription {
+                            scope: scope.clone(),
+                            run,
+                        },
+                    );
                 }
                 self.reply_view(Some(id), "view", status.terminal())
             }
-            Command::Stop { run } => {
-                let position = self
-                    .state
-                    .view
-                    .runs
-                    .iter()
-                    .position(|r| r.id == run)
-                    .ok_or("unknown run")?;
-                if self.state.view.runs[position].status.terminal() {
-                    return self.emit(
-                        json!({"v":crate::WIRE_VERSION,"request":id,"kind":"already_terminal","run":run}),
-                    );
-                }
-                let mut next = self.state.clone();
-                next.view.runs[position].status = Status::StopRequested;
-                next.prevent_browser(&run, "user stopped before dispatch")?;
-                let permissions = self.take_native_permissions(&run);
-                let pi_ui = self.pi_ui.clone();
-                let codex_input = self.codex_input.clone();
-                self.clear_pi_ui(&run);
-                self.clear_codex_input(&run);
-                if let Err(error) = self.commit(next) {
-                    self.native_permissions.extend(permissions);
-                    self.pi_ui = pi_ui;
-                    self.codex_input = codex_input;
-                    return Err(error);
-                }
-                if let Some(operation) = &self.operation {
-                    if operation.run == run {
-                        operation.stop.store(true, Ordering::Release);
-                    }
-                }
-                self.cancel_browser_approval(&run);
-                drop(pi_ui);
-                drop(codex_input);
-                for (_, permission) in permissions {
-                    let _ = permission.ack.send(None);
-                }
-                self.emit(json!({"v":crate::WIRE_VERSION,"request":id,"kind":"stopping","run":run}))
+            ConversationAction::Stop { run } => {
+                self.require_conversation(scope)?;
+                self.stop_run(id, &run)
             }
-            start @ (Command::Summarize { .. } | Command::Ask { .. }) => {
-                let fixture = self.fixture.as_ref().ok_or("fixture is not configured")?;
-                let origin = fixture.origin.clone();
-                let address = fixture.address;
-                let input_digest = crate::agent_model::digest(
-                    &json!({"command":&start,"origin":origin,"model":"metldr-fixture"}),
-                )?;
-                if self.duplicate(id, &input_digest)? {
-                    return Ok(());
-                }
-                if self.operation.is_some() {
-                    return Err("another run is active".into());
-                }
-                if self.state.view.runs.len() >= 16 {
-                    return Err("prototype run capacity reached".into());
-                }
-                let mut next = self.state.clone();
-                let (kind, question) = match start {
-                    Command::Summarize { page } => {
-                        check_page_fields(&page)?;
-                        if page.url != format!("{origin}/article")
-                            && page.url != format!("{origin}/decoy")
-                        {
-                            return Err("page is outside the owned fixture grant".into());
-                        }
-                        let source_id = next.id()?;
-                        next.view.source = Some(Source {
-                            id: source_id,
-                            page,
-                        });
-                        ("summary", None)
-                    }
-                    Command::Ask { source, text } => {
-                        if text.trim().is_empty() || text.len() > 1024 {
-                            return Err("invalid question".into());
-                        }
-                        if next.view.source.as_ref().is_none_or(|s| s.id != source) {
-                            return Err("source is not current saved source".into());
-                        }
-                        ("answer", Some(text))
-                    }
-                    _ => unreachable!(),
-                };
-                let source = next
-                    .view
-                    .source
-                    .as_ref()
-                    .ok_or("no selected source")?
-                    .clone();
-                let history: Vec<_> = next
-                    .view
-                    .runs
-                    .iter()
-                    .filter(|r| {
-                        r.source == source.id
-                            && r.status == Status::Complete
-                            && matches!(
-                                next.launches.get(&r.id),
-                                Some(crate::agent_model::Launch::Fixture { .. })
-                            )
-                    })
-                    .map(|r| json!({"kind":r.kind,"question":r.question,"output":r.output.text()}))
-                    .collect();
-                let run = next.id()?;
-                let body = json!({"model":"metldr-fixture","instruction":if kind == "summary" {"summarize"} else {"answer"},
-                    "source":{"title":source.page.title,"url":source.page.url,"text":source.page.text},"question":question,"history":history});
-                next.view.runs.push(Run {
-                    id: run.clone(),
-                    source: source.id,
-                    kind: kind.into(),
-                    question,
-                    status: Status::Running,
-                    output: Default::default(),
-                    error: None,
-                });
-                next.starts.insert(id.into(), run.clone());
-                next.launches.insert(
-                    run.clone(),
-                    crate::agent_model::Launch::Fixture { input_digest },
-                );
-                self.commit(next)?;
-                let stop = Arc::new(AtomicBool::new(false));
-                let worker_stop = stop.clone();
-                let worker_run = run.clone();
-                let tx = self.tx.clone();
-                let worker = thread::spawn(move || {
-                    let result = provider(address, &body, &worker_run, &worker_stop, &tx)
-                        .map_err(|e| e.to_string());
-                    let _ = tx.send(Event::Settled {
-                        run: worker_run,
-                        result,
-                    });
-                });
-                self.operation = Some(Operation {
-                    run: run.clone(),
-                    stop,
-                    worker,
-                });
-                self.emit(json!({"v":crate::WIRE_VERSION,"request":id,"kind":"started","run":run}))
+            start @ (ConversationAction::Summarize { .. } | ConversationAction::Ask { .. }) => {
+                self.fixture_start(id, scope, start)
             }
         }
     }
+
+    pub(super) fn require_conversation(&self, expected: &crate::history::Selection) -> Result<()> {
+        let current = self
+            .record_history
+            .as_ref()
+            .ok_or("record history is unavailable")?
+            .selection()?;
+        if current != *expected {
+            return Err("history selection changed".into());
+        }
+        Ok(())
+    }
+
+    pub(super) fn started_reply(
+        &self,
+        id: &str,
+        scope: &crate::history::Selection,
+        run: &str,
+    ) -> Result<serde_json::Value> {
+        let scope = crate::history_io::Scope::from(scope);
+        scope.validate()?;
+        Ok(json!({"v":crate::WIRE_VERSION,"request":id,"kind":"started","scope":scope,"run":run}))
+    }
+
+    pub(super) fn reply_stop(&mut self, id: &str, kind: &str, run: &str) -> Result<()> {
+        let scope = self
+            .record_history
+            .as_ref()
+            .map(|history| history.selection())
+            .transpose()?;
+        self.emit(json!({"v":crate::WIRE_VERSION,"request":id,"kind":kind,"scope":scope.as_ref().map(crate::history_io::Scope::from),"run":run}))
+    }
+
+    pub(super) fn stop_run(&mut self, id: &str, run: &str) -> Result<()> {
+        if self.record_history.is_some() {
+            return self.stop_record(id, run);
+        }
+        let position = self
+            .state
+            .view
+            .runs
+            .iter()
+            .position(|r| r.id == run)
+            .ok_or("unknown run")?;
+        if self.state.view.runs[position].status.terminal() {
+            return self.reply_stop(id, "already_terminal", run);
+        }
+        let mut next = self.state.clone();
+        next.view.runs[position].status = Status::StopRequested;
+        next.prevent_browser(run, "user stopped before dispatch")?;
+        let permissions = self.take_native_permissions(run);
+        let pi_ui = self.pi_ui.clone();
+        let codex_input = self.codex_input.clone();
+        self.clear_pi_ui(run);
+        self.clear_codex_input(run);
+        if let Err(error) = self.commit(next) {
+            self.native_permissions.extend(permissions);
+            self.pi_ui = pi_ui;
+            self.codex_input = codex_input;
+            return Err(error);
+        }
+        if let Some(operation) = &self.operation {
+            if operation.run == run {
+                operation.stop.store(true, Ordering::Release);
+            }
+        }
+        self.cancel_browser_approval(run);
+        drop(pi_ui);
+        drop(codex_input);
+        for (_, permission) in permissions {
+            let _ = permission.ack.send(None);
+        }
+        self.reply_stop(id, "stopping", run)
+    }
+
     pub(super) fn text(&mut self, run: &str, change: Change) -> Result<()> {
+        if self.record_history.is_some() {
+            self.record_change(|edit, selection| {
+                let mut record = edit.run(selection, run)?;
+                if record.status.terminal() || !record.output.change(change)? {
+                    return Ok(((), None));
+                }
+                edit.put_run(selection, record)?;
+                Ok(((), Some(edit.project(selection, Some(run))?)))
+            })?;
+            return Ok(());
+        }
         let mut next = self.state.clone();
         let Some(record) = next.view.runs.iter_mut().find(|r| r.id == run) else {
             return Err("provider returned unknown run".into());
@@ -563,6 +643,29 @@ impl Owner {
             .worker
             .join()
             .map_err(|_| "provider worker panicked")?;
+        if self.record_history.is_some() {
+            self.record_change(|edit, selection| {
+                edit.finish_browser(selection, run)?;
+                let mut record = edit.run(selection, run)?;
+                record.status = if result.is_ok() {
+                    Status::Complete
+                } else if disconnected {
+                    Status::Interrupted
+                } else if record.status == Status::StopRequested {
+                    Status::Cancelled
+                } else {
+                    Status::Failed
+                };
+                if record.status == Status::Failed {
+                    record.error =
+                        Some(result.err().unwrap_or_default().chars().take(200).collect());
+                }
+                edit.put_run(selection, record)?;
+                Ok(((), Some(edit.project(selection, Some(run))?)))
+            })?;
+            self.cancel_browser_approval(run);
+            return Ok(());
+        }
         let mut next = self.state.clone();
         next.finish_browser(run)?;
         self.cancel_browser_approval(run);

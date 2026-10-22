@@ -1,3 +1,15 @@
+pub(crate) fn owner_scope(owner: &crate::flow::Owner) -> crate::history::Selection {
+    if let Some(history) = &owner.record_history {
+        return history.selection().expect("record history selection");
+    }
+    let store = owner.state.view.store.clone();
+    crate::history::Selection {
+        store: store.clone(),
+        conversation: format!("{store}:1"),
+        epoch: 1,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{CONFIG_MAX, FRAME_MAX, flow::*, model::*, native::*, store::*};
@@ -107,6 +119,7 @@ mod tests {
             settings: Default::default(),
             agent_runtime: Default::default(),
             state,
+            browser_view: BTreeMap::new(),
             fixture: Some(crate::native::Fixture {
                 origin: "http://127.0.0.1:1".into(),
                 address: "127.0.0.1:1".parse().unwrap(),
@@ -130,6 +143,8 @@ mod tests {
             responses_route: None,
             google_route: None,
             chat_route: None,
+            record_history: None,
+            history_pins: Default::default(),
         };
         let Event::Text { run: id, change } = rx.recv().unwrap() else {
             panic!("chunk must precede settlement");
@@ -195,8 +210,10 @@ mod tests {
             .join(".tmp")
             .join(format!("capture-check-{}", std::process::id()));
         let _ = fs::remove_dir_all(&output);
-        let (disk, state) = Disk::open(output.join("state")).unwrap();
-        let store = state.view.store.clone();
+        let (disk, mut history) = crate::history::History::load(output.join("state")).unwrap();
+        let selection = history.selection().unwrap();
+        let state = history.edit(|edit| edit.project(&selection, None)).unwrap();
+        let scope = crate::history_io::Scope::from(&selection);
         let page = Page {
             tab: 3,
             document: "document-3".into(),
@@ -212,6 +229,7 @@ mod tests {
             settings: Default::default(),
             agent_runtime: Default::default(),
             state,
+            browser_view: BTreeMap::new(),
             fixture: None,
             subscribers: BTreeMap::new(),
             operation: None,
@@ -228,20 +246,29 @@ mod tests {
             responses_route: None,
             google_route: None,
             chat_route: None,
+            record_history: Some(history),
+            history_pins: Default::default(),
         };
-        let capture = || Command::Capture {
-            expected_store: store.clone(),
-            expected_source: None,
-            page: page.clone(),
+        let capture = || Command::Conversation {
+            scope: scope.clone(),
+            action: crate::model::ConversationAction::Capture {
+                expected_source: None,
+                page: page.clone(),
+            },
         };
         assert!(
             owner
                 .command(
                     "capture:stale",
-                    Command::Capture {
-                        expected_store: "0".repeat(32),
-                        expected_source: None,
-                        page: page.clone(),
+                    Command::Conversation {
+                        scope: crate::history_io::Scope {
+                            store: "0".repeat(32),
+                            ..scope.clone()
+                        },
+                        action: crate::model::ConversationAction::Capture {
+                            expected_source: None,
+                            page: page.clone(),
+                        },
                     }
                 )
                 .is_err()
@@ -275,12 +302,14 @@ mod tests {
             owner
                 .command(
                     "capture:cas",
-                    Command::Capture {
-                        expected_store: store.clone(),
-                        expected_source: None,
-                        page: Page {
-                            title: "Changed page".into(),
-                            ..page
+                    Command::Conversation {
+                        scope: scope.clone(),
+                        action: crate::model::ConversationAction::Capture {
+                            expected_source: None,
+                            page: Page {
+                                title: "Changed page".into(),
+                                ..page
+                            },
                         },
                     }
                 )
@@ -291,17 +320,24 @@ mod tests {
             owner
                 .command(
                     "fixture:disabled",
-                    Command::Summarize {
-                        page: captured_page
+                    Command::Conversation {
+                        scope: scope.clone(),
+                        action: crate::model::ConversationAction::Summarize {
+                            page: captured_page,
+                        },
                     }
                 )
                 .is_err()
         );
         let directory = owner.disk.directory.clone();
         drop(owner);
-        let (_disk, saved) = Disk::open(directory).unwrap();
+        let (disk, mut history) = crate::history::History::load(directory).unwrap();
+        let scope = history.selection().unwrap();
+        let saved = history.edit(|edit| edit.project_latest(&scope)).unwrap();
         assert_eq!(saved.view.source.unwrap().id, source_id);
         assert!(saved.view.runs.is_empty());
+        drop(history);
+        drop(disk);
         let _ = fs::remove_dir_all(output);
     }
 
@@ -380,6 +416,7 @@ mod tests {
             settings: Default::default(),
             agent_runtime: Default::default(),
             state,
+            browser_view: BTreeMap::new(),
             fixture: None,
             subscribers: BTreeMap::new(),
             operation: Some(Operation {
@@ -400,6 +437,8 @@ mod tests {
             responses_route: None,
             google_route: None,
             chat_route: None,
+            record_history: None,
+            history_pins: Default::default(),
         };
 
         let nonce = owner.state.next;
@@ -508,9 +547,7 @@ mod tests {
                 crate::agent::ui::Answer::Confirm(true),
             )
             .unwrap();
-        owner
-            .command("stop", Command::Stop { run: run.clone() })
-            .unwrap();
+        owner.stop_run("stop", &run).unwrap();
         assert!(stop.load(std::sync::atomic::Ordering::Acquire));
         assert!(matches!(
             queued.try_recv(),

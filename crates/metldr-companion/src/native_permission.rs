@@ -14,22 +14,16 @@ impl Owner {
         details: Value,
         ack: mpsc::SyncSender<Option<String>>,
     ) -> Result<()> {
-        let active = self.operation.as_ref().is_some_and(|op| op.run == run)
-            && self
-                .state
-                .view
-                .runs
-                .iter()
-                .any(|record| record.id == run && record.status == Status::Running)
-            && self
-                .state
-                .launches
-                .get(run)
-                .is_some_and(|launch| match launch {
-                    crate::agent_model::Launch::Codex { .. } => details["agent"] == "codex",
-                    crate::agent_model::Launch::OpenCode { .. } => details["agent"] == "opencode",
-                    _ => false,
-                });
+        let kind = match details["agent"].as_str() {
+            Some("codex") => Some(crate::agent_settings::Kind::Codex),
+            Some("opencode") => Some(crate::agent_settings::Kind::Opencode),
+            _ => None,
+        };
+        let active = if let Some(kind) = kind {
+            self.native_input_active(run, kind)?
+        } else {
+            false
+        };
         let options = details["options"].as_array();
         let canonical_shape = details.as_object().is_some_and(|object| {
             object.len() == 5
@@ -143,7 +137,15 @@ impl Owner {
                 ack,
             );
         }
-        if let Err(error) = self.commit(next) {
+        let result = if self.record_history.is_some() {
+            self.commit_native_input(run, kind.ok_or("invalid native permission agent")?, next)
+        } else {
+            self.commit(next)
+        };
+        if let Err(error) = result {
+            if self.record_history.is_some() && crate::native_input_records::fatal(error.as_ref()) {
+                return Err(error);
+            }
             let ack = self
                 .native_permissions
                 .remove(&request)
@@ -168,11 +170,30 @@ impl Owner {
         else {
             return Ok(());
         };
+        let kind = if self.record_history.is_some() {
+            Some(
+                match self.native_permissions[&request].details["agent"].as_str() {
+                    Some("codex") => crate::agent_settings::Kind::Codex,
+                    Some("opencode") => crate::agent_settings::Kind::Opencode,
+                    _ => return Err("invalid native permission agent".into()),
+                },
+            )
+        } else {
+            None
+        };
         let pending = self
             .native_permissions
             .remove(&request)
             .ok_or("resolved native permission disappeared")?;
-        if let Err(error) = self.commit(self.state.clone()) {
+        let result = if let Some(kind) = kind {
+            self.commit_native_input(run, kind, self.state.clone())
+        } else {
+            self.commit(self.state.clone())
+        };
+        if let Err(error) = result {
+            if self.record_history.is_some() && crate::native_input_records::fatal(error.as_ref()) {
+                return Err(error);
+            }
             self.native_permissions.insert(request, pending);
             return Err(error);
         }
@@ -186,6 +207,20 @@ impl Owner {
         request: &str,
         option: Option<&str>,
     ) -> Result<()> {
+        let kind = match self
+            .native_permissions
+            .get(request)
+            .ok_or("stale native permission request")?
+            .details["agent"]
+            .as_str()
+        {
+            Some("codex") => crate::agent_settings::Kind::Codex,
+            Some("opencode") => crate::agent_settings::Kind::Opencode,
+            _ => return Err("native permission agent is invalid".into()),
+        };
+        if !self.native_input_active(run, kind)? {
+            return Err("native permission is no longer accepting replies".into());
+        }
         let index = request.to_owned();
         let pending = self
             .native_permissions
@@ -206,8 +241,16 @@ impl Owner {
             .native_permissions
             .remove(&index)
             .ok_or("stale native permission request")?;
-        if let Err(error) = self.commit(self.state.clone()) {
-            self.native_permissions.insert(index, pending);
+        let result = if self.record_history.is_some() {
+            self.commit_native_input(run, kind, self.state.clone())
+        } else {
+            self.commit(self.state.clone())
+        };
+        if let Err(error) = result {
+            if self.record_history.is_none() || !crate::native_input_records::fatal(error.as_ref())
+            {
+                self.native_permissions.insert(index, pending);
+            }
             return Err(error);
         }
         let _ = pending.ack.send(option.map(str::to_owned));
@@ -242,6 +285,33 @@ impl Owner {
         reason: &str,
         ack: mpsc::SyncSender<Option<String>>,
     ) -> Result<()> {
+        if self.record_history.is_some() {
+            let kind = match self.state.launches.get(run) {
+                Some(crate::agent_model::Launch::Pi { .. }) => crate::agent_settings::Kind::Pi,
+                Some(crate::agent_model::Launch::Codex { .. }) => {
+                    crate::agent_settings::Kind::Codex
+                }
+                Some(crate::agent_model::Launch::OpenCode { .. }) => {
+                    crate::agent_settings::Kind::Opencode
+                }
+                _ => {
+                    let _ = ack.try_send(None);
+                    return Ok(());
+                }
+            };
+            if !self.native_input_active(run, kind)? {
+                let _ = ack.try_send(None);
+                return Ok(());
+            }
+            let result = self.stop_native_record_inputs(
+                run,
+                "native permission request failed",
+                Some(reason),
+                true,
+            );
+            let _ = ack.try_send(None);
+            return result;
+        }
         if self.operation.as_ref().is_none_or(|op| op.run != run)
             || self
                 .state

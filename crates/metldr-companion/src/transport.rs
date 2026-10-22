@@ -34,6 +34,8 @@ pub(crate) struct Transport {
     started: bool,
     #[cfg(test)]
     captured_frames: Option<std::sync::Arc<std::sync::Mutex<Vec<u8>>>>,
+    #[cfg(test)]
+    fail_next_emit: bool,
 }
 
 enum Mode {
@@ -51,6 +53,8 @@ impl Transport {
             started: false,
             #[cfg(test)]
             captured_frames: None,
+            #[cfg(test)]
+            fail_next_emit: false,
         }
     }
 
@@ -63,8 +67,14 @@ impl Transport {
             control_reader: None,
             started: false,
             captured_frames: Some(frames.clone()),
+            fail_next_emit: false,
         };
         (transport, frames)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_emit(&mut self) {
+        self.fail_next_emit = true;
     }
 
     pub(crate) fn socket(path: PathBuf, capability: String, origin: String) -> Result<Self> {
@@ -77,6 +87,8 @@ impl Transport {
                 started: false,
                 #[cfg(test)]
                 captured_frames: None,
+                #[cfg(test)]
+                fail_next_emit: false,
             })
         }
         #[cfg(not(unix))]
@@ -128,6 +140,10 @@ impl Transport {
     }
 
     pub(crate) fn emit(&mut self, value: Value) -> Result<()> {
+        #[cfg(test)]
+        if std::mem::take(&mut self.fail_next_emit) {
+            return Err(std::io::Error::other("synthetic transport write failure").into());
+        }
         #[cfg(test)]
         if let Some(frames) = &self.captured_frames {
             return crate::wire::write_frame(&mut *frames.lock().unwrap(), &value);

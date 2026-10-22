@@ -30,6 +30,17 @@ pub(super) fn render(doc: &Document, view: Option<&PageView>) -> Result<(), JsVa
         .flat_map(|view| &view.runs)
         .filter(|run| Some(&run.source) == source.map(|source| &source.id))
         .collect();
+    render_into(doc, &history, runs)
+}
+
+pub(super) fn render_saved(doc: &Document, run: Option<&RunView>) -> Result<(), JsValue> {
+    let history = doc
+        .get_element_by_id("saved-result")
+        .ok_or_else(|| err("Saved result is missing."))?;
+    render_into(doc, &history, run.into_iter().collect())
+}
+
+fn render_into(doc: &Document, history: &Element, runs: Vec<&RunView>) -> Result<(), JsValue> {
     let children = history.children();
     let cards: Vec<_> = (0..children.length())
         .filter_map(|i| children.item(i))
@@ -206,6 +217,7 @@ fn update_card(doc: &Document, card: &Element, run: &RunView) -> Result<(), JsVa
 }
 
 struct CopyTicket {
+    historical: bool,
     store: String,
     source: SourceId,
     run: RunId,
@@ -221,22 +233,14 @@ pub(super) fn copy(panel: &Rc<RefCell<Panel>>, button: &Element) -> Result<(), J
         .ok_or_else(|| err("Copy result missing."))?;
     let ticket = {
         let p = panel.borrow();
-        let view = p
-            .snapshot
-            .as_ref()
-            .ok_or_else(|| err("Result unavailable."))?;
-        let source = view
-            .source
-            .as_ref()
-            .ok_or_else(|| err("Source unavailable."))?;
-        let run = view
-            .runs
-            .iter()
-            .find(|run| {
-                run.source == source.id
-                    && card.get_attribute("data-run").as_deref() == Some(run.id.as_str())
-            })
-            .ok_or_else(|| err("Result unavailable."))?;
+        let historical = card
+            .parent_element()
+            .is_some_and(|parent| parent.id() == "saved-result");
+        let id = card
+            .get_attribute("data-run")
+            .ok_or_else(|| err("Result identity missing."))?;
+        let (store, run) =
+            copy_run(&p, &id, historical).ok_or_else(|| err("Result unavailable."))?;
         let attempt = button
             .get_attribute("data-copy-attempt")
             .and_then(|value| value.parse::<u64>().ok())
@@ -246,8 +250,9 @@ pub(super) fn copy(panel: &Rc<RefCell<Panel>>, button: &Element) -> Result<(), J
             .to_string();
         button.set_attribute("data-copy-attempt", &attempt)?;
         CopyTicket {
-            store: view.store.clone(),
-            source: source.id.clone(),
+            historical,
+            store: store.to_owned(),
+            source: run.source.clone(),
             run: run.id.clone(),
             text: run.output.text().to_owned(),
             attempt,
@@ -272,24 +277,17 @@ pub(super) fn copy(panel: &Rc<RefCell<Panel>>, button: &Element) -> Result<(), J
             return;
         };
         let p = panel.borrow();
-        let Some(view) = p.snapshot.as_ref() else {
+        let Some((store, run)) = copy_run(&p, ticket.run.as_str(), ticket.historical) else {
             return;
         };
-        if view.store != ticket.store
-            || view.source.as_ref().map(|source| &source.id) != Some(&ticket.source)
+        if store != ticket.store
+            || run.source != ticket.source
             || !ticket.status.is_connected()
             || !ticket.button.is_connected()
             || ticket.button.get_attribute("data-copy-attempt").as_deref() != Some(&ticket.attempt)
         {
             return;
         }
-        let Some(run) = view
-            .runs
-            .iter()
-            .find(|run| run.id == ticket.run && run.source == ticket.source)
-        else {
-            return;
-        };
         let Ok(Some(card)) = ticket.button.closest("article[data-run]") else {
             return;
         };
@@ -307,6 +305,26 @@ pub(super) fn copy(panel: &Rc<RefCell<Panel>>, button: &Element) -> Result<(), J
         write_text(&ticket.status, message);
     });
     Ok(())
+}
+
+fn copy_run<'a>(panel: &'a Panel, id: &str, historical: bool) -> Option<(&'a str, &'a RunView)> {
+    if historical {
+        let context = panel.saved_history.context.as_ref()?;
+        let run = panel
+            .saved_history
+            .detail
+            .as_ref()
+            .filter(|run| run.id.as_str() == id)?;
+        Some((&context.scope.store, run))
+    } else {
+        let view = panel.snapshot.as_ref()?;
+        let source = view.source.as_ref()?;
+        let run = view
+            .runs
+            .iter()
+            .find(|run| run.id.as_str() == id && run.source == source.id)?;
+        Some((&view.store, run))
+    }
 }
 
 fn part(card: &Element, name: &str) -> Result<Element, JsValue> {

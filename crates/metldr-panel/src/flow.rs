@@ -20,7 +20,9 @@ use crate::{
 };
 
 mod capture;
+mod history;
 mod protocol;
+pub(crate) use history::ConversationRequest;
 pub(crate) use protocol::StopReceipt;
 use protocol::{Protocol, Reply, ReplyCell, ReplyKind, WatchCell};
 type Result<T> = std::result::Result<T, FlowError>;
@@ -276,36 +278,43 @@ impl FlowClient {
     }
 
     // Start the permission request synchronously while the button still has user activation.
-    pub(crate) fn summarize_selected(&self) -> impl Future<Output = Result<RunId>> + use<> {
+    pub(crate) fn summarize_selected(
+        &self,
+        view: &PageView,
+    ) -> impl Future<Output = Result<RunId>> + use<> {
+        let scope = view.selection.clone();
         let page = capture::selected(self);
         let flow = self.clone();
         async move {
             let page = page.await?;
-            flow.start(json!({"op":"summarize","page":page})).await
+            flow.start(scope, json!({"op":"summarize","page":page}))
+                .await
         }
     }
 
-    pub(crate) fn capture_selected(&self) -> impl Future<Output = Result<PageView>> + use<> {
-        let expected = self
-            .inner
-            .protocol
-            .borrow()
-            .latest
-            .as_ref()
-            .map(|view| (view.store.clone(), view.source().cloned()));
+    pub(crate) fn capture_selected(
+        &self,
+        view: &PageView,
+    ) -> impl Future<Output = Result<PageView>> + use<> {
+        let scope = view.selection.clone();
+        let source = view.source().cloned();
         let page = capture::selected(self);
         let flow = self.clone();
         async move {
-            let (store, source) = expected.ok_or(FlowError::NoSource)?;
             let page = page.await?;
-            match flow.request(json!({"op":"capture","expected_store":store,"expected_source":source,"page":page}), ReplyKind::Page).await? {
+            match flow.request(json!({"op":"conversation","scope":scope,"action":{"op":"capture","expected_source":source,"page":page}}), ReplyKind::SelectedPage(scope)).await? {
                 Reply::Page(view) => Ok(flow.check_source(view).await),
                 _ => Err(FlowError::Protocol("Expected the saved page receipt.".into())),
             }
         }
     }
 
-    pub(crate) async fn ask(&self, source: SourceId, text: UserText) -> Result<RunId> {
+    pub(crate) async fn ask(
+        &self,
+        scope: metldr_history_pages::Scope,
+        source: SourceId,
+        text: UserText,
+    ) -> Result<RunId> {
         if self
             .inner
             .protocol
@@ -317,52 +326,60 @@ impl FlowClient {
         {
             return Err(FlowError::NoSource);
         }
-        self.start(json!({"op":"ask","source":source,"text":text.as_str()}))
-            .await
+        self.start(
+            scope,
+            json!({"op":"ask","source":source,"text":text.as_str()}),
+        )
+        .await
     }
 
     pub(crate) async fn browser_task(
         &self,
+        scope: metldr_history_pages::Scope,
         source: SourceId,
         text: UserText,
         fingerprint: Option<String>,
     ) -> Result<RunId> {
-        self.start(json!({"op":"browser_task","source":source,"text":text.as_str(),"fingerprint":fingerprint}))
+        self.start(scope, json!({"op":"browser_task","source":source,"text":text.as_str(),"fingerprint":fingerprint}))
             .await
     }
 
     pub(crate) async fn responses_task(
         &self,
+        scope: metldr_history_pages::Scope,
         source: SourceId,
         text: UserText,
         fingerprint: String,
     ) -> Result<RunId> {
-        self.start(json!({"op":"responses_task","source":source,"text":text.as_str(),"fingerprint":fingerprint}))
+        self.start(scope, json!({"op":"responses_task","source":source,"text":text.as_str(),"fingerprint":fingerprint}))
             .await
     }
 
     pub(crate) async fn chat_task(
         &self,
+        scope: metldr_history_pages::Scope,
         source: SourceId,
         text: UserText,
         fingerprint: String,
     ) -> Result<RunId> {
-        self.start(json!({"op":"chat_task","source":source,"text":text.as_str(),"fingerprint":fingerprint}))
+        self.start(scope, json!({"op":"chat_task","source":source,"text":text.as_str(),"fingerprint":fingerprint}))
             .await
     }
 
     pub(crate) async fn google_task(
         &self,
+        scope: metldr_history_pages::Scope,
         source: SourceId,
         text: UserText,
         fingerprint: String,
     ) -> Result<RunId> {
-        self.start(json!({"op":"google_task","source":source,"text":text.as_str(),"fingerprint":fingerprint}))
+        self.start(scope, json!({"op":"google_task","source":source,"text":text.as_str(),"fingerprint":fingerprint}))
             .await
     }
 
     pub(crate) async fn page_text(
         &self,
+        scope: metldr_history_pages::Scope,
         source: SourceId,
         protocol: ProviderProtocol,
         fingerprint: String,
@@ -383,11 +400,16 @@ impl FlowClient {
             PageTextPrompt::Summary => json!({"kind":"summary"}),
             PageTextPrompt::Answer(text) => json!({"kind":"answer","text":text.as_str()}),
         };
-        self.start(json!({"op":"page_text","source":source,"protocol":protocol.name(),"fingerprint":fingerprint,"prompt":prompt}))
+        self.start(scope, json!({"op":"page_text","source":source,"protocol":protocol.name(),"fingerprint":fingerprint,"prompt":prompt}))
             .await
     }
 
-    pub(crate) async fn pi_prompt(&self, source: SourceId, text: UserText) -> Result<RunId> {
+    pub(crate) async fn pi_prompt(
+        &self,
+        scope: metldr_history_pages::Scope,
+        source: SourceId,
+        text: UserText,
+    ) -> Result<RunId> {
         let latest = self.inner.protocol.borrow();
         if latest.latest.as_ref().and_then(PageView::source) != Some(&source) {
             return Err(FlowError::NoSource);
@@ -401,12 +423,16 @@ impl FlowClient {
             return Err(FlowError::InvalidInput("Pi profile is unavailable.".into()));
         }
         drop(latest);
-        self.start(json!({"op":"pi_prompt","source":source,"text":text.as_str()}))
-            .await
+        self.start(
+            scope,
+            json!({"op":"pi_prompt","source":source,"text":text.as_str()}),
+        )
+        .await
     }
 
     pub(crate) async fn codex_prompt(
         &self,
+        scope: metldr_history_pages::Scope,
         source: SourceId,
         text: UserText,
         mode: &str,
@@ -426,11 +452,19 @@ impl FlowClient {
             ));
         }
         drop(latest);
-        self.start(json!({"op":"codex_prompt","source":source,"text":text.as_str(),"mode":mode}))
-            .await
+        self.start(
+            scope,
+            json!({"op":"codex_prompt","source":source,"text":text.as_str(),"mode":mode}),
+        )
+        .await
     }
 
-    pub(crate) async fn opencode_prompt(&self, source: SourceId, text: UserText) -> Result<RunId> {
+    pub(crate) async fn opencode_prompt(
+        &self,
+        scope: metldr_history_pages::Scope,
+        source: SourceId,
+        text: UserText,
+    ) -> Result<RunId> {
         let latest = self.inner.protocol.borrow();
         if latest.latest.as_ref().and_then(PageView::source) != Some(&source) {
             return Err(FlowError::NoSource);
@@ -446,12 +480,16 @@ impl FlowClient {
             ));
         }
         drop(latest);
-        self.start(json!({"op":"opencode_prompt","source":source,"text":text.as_str()}))
-            .await
+        self.start(
+            scope,
+            json!({"op":"opencode_prompt","source":source,"text":text.as_str()}),
+        )
+        .await
     }
 
     pub(crate) async fn pi_follow_up(
         &self,
+        scope: metldr_history_pages::Scope,
         workflow: RunId,
         revision: u64,
         text: UserText,
@@ -478,12 +516,13 @@ impl FlowClient {
                 "The selected Pi session is unavailable.".into(),
             ));
         }
-        self.start(json!({"op":"pi_follow_up","workflow":workflow,"revision":revision,"text":text.as_str()}))
+        self.start(scope, json!({"op":"pi_follow_up","workflow":workflow,"revision":revision,"text":text.as_str()}))
             .await
     }
 
     pub(crate) async fn codex_follow_up(
         &self,
+        scope: metldr_history_pages::Scope,
         workflow: RunId,
         revision: u64,
         text: UserText,
@@ -511,11 +550,12 @@ impl FlowClient {
                 "The selected Codex session is unavailable.".into(),
             ));
         }
-        self.start(json!({"op":"codex_follow_up","workflow":workflow,"revision":revision,"text":text.as_str(),"mode":mode})).await
+        self.start(scope, json!({"op":"codex_follow_up","workflow":workflow,"revision":revision,"text":text.as_str(),"mode":mode})).await
     }
 
     pub(crate) async fn opencode_follow_up(
         &self,
+        scope: metldr_history_pages::Scope,
         workflow: RunId,
         revision: u64,
         text: UserText,
@@ -542,11 +582,12 @@ impl FlowClient {
                 "The selected OpenCode session is unavailable.".into(),
             ));
         }
-        self.start(json!({"op":"opencode_follow_up","workflow":workflow,"revision":revision,"text":text.as_str()})).await
+        self.start(scope, json!({"op":"opencode_follow_up","workflow":workflow,"revision":revision,"text":text.as_str()})).await
     }
 
     pub(crate) async fn native_permission(
         &self,
+        scope: metldr_history_pages::Scope,
         run: RunId,
         request: RunId,
         option: Option<String>,
@@ -573,8 +614,11 @@ impl FlowClient {
         }
         match self
             .request(
-                json!({"op":"native_permission","run":run,"request":request,"option":option}),
-                ReplyKind::Page,
+                conversation(
+                    &scope,
+                    json!({"op":"native_permission","run":run,"request":request,"option":option}),
+                ),
+                ReplyKind::SelectedPage(scope),
             )
             .await?
         {
@@ -587,6 +631,7 @@ impl FlowClient {
 
     pub(crate) async fn pi_ui_reply(
         &self,
+        scope: metldr_history_pages::Scope,
         run: RunId,
         request: RunId,
         kind: &str,
@@ -609,8 +654,11 @@ impl FlowClient {
         };
         match self
             .request(
-                json!({"op":"pi_ui_reply","run":run,"request":request,"answer":answer}),
-                ReplyKind::Page,
+                conversation(
+                    &scope,
+                    json!({"op":"pi_ui_reply","run":run,"request":request,"answer":answer}),
+                ),
+                ReplyKind::SelectedPage(scope),
             )
             .await?
         {
@@ -621,14 +669,18 @@ impl FlowClient {
 
     pub(crate) async fn codex_input_reply(
         &self,
+        scope: metldr_history_pages::Scope,
         run: RunId,
         request: RunId,
         answer: Value,
     ) -> Result<PageView> {
         match self
             .request(
-                json!({"op":"codex_input_reply","run":run,"request":request,"answer":answer}),
-                ReplyKind::Page,
+                conversation(
+                    &scope,
+                    json!({"op":"codex_input_reply","run":run,"request":request,"answer":answer}),
+                ),
+                ReplyKind::SelectedPage(scope),
             )
             .await?
         {
@@ -639,33 +691,48 @@ impl FlowClient {
         }
     }
 
-    async fn start(&self, command: Value) -> Result<RunId> {
-        match self.request(command, ReplyKind::Start).await? {
+    async fn start(&self, scope: metldr_history_pages::Scope, command: Value) -> Result<RunId> {
+        match self
+            .request(conversation(&scope, command), ReplyKind::Start(scope))
+            .await?
+        {
             Reply::Started(run) => Ok(run),
             _ => Err(FlowError::Protocol("Expected a run receipt.".into())),
         }
     }
 
-    pub(crate) async fn watch(&self, run: RunId) -> Result<Views> {
+    pub(crate) async fn watch(
+        &self,
+        scope: metldr_history_pages::Scope,
+        run: RunId,
+    ) -> Result<Views> {
         let id = self.inner.request_id()?;
-        let cell = self
-            .inner
-            .protocol
-            .borrow_mut()
-            .register_watch(id.clone(), run.clone())?;
+        let cell = self.inner.protocol.borrow_mut().register_watch(
+            id.clone(),
+            scope.clone(),
+            run.clone(),
+        )?;
         let views = Views {
             connection: Rc::downgrade(&self.inner),
             protocol: Rc::downgrade(&self.inner.protocol),
             cell,
             request: Some(id.clone()),
         };
-        self.inner.post(&id, json!({"op":"watch","run":run}))?;
+        self.inner
+            .post(&id, conversation(&scope, json!({"op":"watch","run":run})))?;
         Ok(views)
     }
 
-    pub(crate) async fn request_stop(&self, run: RunId) -> Result<StopReceipt> {
+    pub(crate) async fn request_stop(
+        &self,
+        scope: metldr_history_pages::Scope,
+        run: RunId,
+    ) -> Result<StopReceipt> {
         match self
-            .request(json!({"op":"stop","run":run}), ReplyKind::Stop(run.clone()))
+            .request(
+                conversation(&scope, json!({"op":"stop","run":run})),
+                ReplyKind::Stop(scope, run.clone()),
+            )
             .await?
         {
             Reply::Stop(receipt) => Ok(receipt),
@@ -675,6 +742,7 @@ impl FlowClient {
 
     pub(crate) async fn decide_browser_action(
         &self,
+        scope: metldr_history_pages::Scope,
         action: BrowserActionId,
         revision: u64,
         approve: bool,
@@ -718,8 +786,8 @@ impl FlowClient {
             }
         }
         match self.request(
-            json!({"op":"browser_decision","action":action,"revision":revision,"approve":approve}),
-            ReplyKind::Page,
+            conversation(&scope, json!({"op":"browser_decision","action":action,"revision":revision,"approve":approve})),
+            ReplyKind::SelectedPage(scope),
         ).await? {
             Reply::Page(view) => Ok(self.check_source(view).await),
             _ => Err(FlowError::Protocol("Expected the updated browser action view.".into())),
@@ -727,11 +795,15 @@ impl FlowClient {
     }
 
     async fn request(&self, command: Value, kind: ReplyKind) -> Result<Reply> {
+        self.request_with_id(self.inner.request_id()?, command, kind)
+            .await
+    }
+
+    async fn request_with_id(&self, id: String, command: Value, kind: ReplyKind) -> Result<Reply> {
         if self.is_closed() || (command["op"] != "view" && !self.inner.protocol.borrow().connected)
         {
             return Err(FlowError::Disconnected);
         }
-        let id = self.inner.request_id()?;
         let cell = self
             .inner
             .protocol
@@ -794,6 +866,10 @@ impl FlowClient {
         };
         view
     }
+}
+
+fn conversation(scope: &metldr_history_pages::Scope, action: Value) -> Value {
+    json!({"op":"conversation","scope":scope,"action":action})
 }
 
 pub(crate) struct Views {

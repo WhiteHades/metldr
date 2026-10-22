@@ -109,44 +109,32 @@ impl Owner {
         prompt: InputPrompt,
         answer: SyncSender<InputAnswer>,
     ) -> Result<()> {
-        let active =
-            self.operation.as_ref().is_some_and(|op| op.run == run)
-                && self
-                    .state
-                    .view
-                    .runs
-                    .iter()
-                    .any(|r| r.id == run && r.status == crate::model::Status::Running)
-                && self.state.launches.get(run).is_some_and(|launch| {
-                    matches!(launch, crate::agent_model::Launch::Codex { .. })
-                })
-                && self
-                    .operation
-                    .as_ref()
-                    .is_some_and(|op| !op.stop.load(std::sync::atomic::Ordering::Acquire));
-        if !active {
+        if !self.native_input_active(run, crate::agent_settings::Kind::Codex)? {
             let _ = answer.try_send(InputAnswer::Cancel);
             return Ok(());
         }
         let fallback_answer = answer.clone();
+        let previous = self.codex_input.clone();
         let mut next = self.state.clone();
         let request = match next.id() {
             Ok(request) => request,
-            Err(_) => return self.fail_codex_input(run, fallback_answer),
+            Err(error) => {
+                return self.fail_codex_input(run, fallback_answer, Some(&error.to_string()));
+            }
         };
         if self
             .codex_input
             .as_ref()
             .is_some_and(|state| state.run == run && state.pending.len() >= 8)
         {
-            return self.fail_codex_input(run, fallback_answer);
+            return self.fail_codex_input(run, fallback_answer, None);
         }
         if self
             .codex_input
             .as_ref()
             .is_some_and(|state| state.run == run && state.pending.values().any(|p| p.key == key))
         {
-            return self.fail_codex_input(run, fallback_answer);
+            return self.fail_codex_input(run, fallback_answer, None);
         }
         if self
             .codex_input
@@ -163,7 +151,7 @@ impl Owner {
             .as_mut()
             .ok_or("missing Codex input state")?;
         if state.pending.contains_key(&request) {
-            return self.fail_codex_input(run, fallback_answer);
+            return self.fail_codex_input(run, fallback_answer, None);
         }
         state.pending.insert(
             request.clone(),
@@ -175,28 +163,45 @@ impl Owner {
         );
         let projected = match state.public() {
             Ok(value) => value,
-            Err(_) => return self.fail_codex_input(run, fallback_answer),
+            Err(error) => {
+                return self.fail_codex_input(run, fallback_answer, Some(&error.to_string()));
+            }
         };
         drop(projected);
-        if let Err(error) = self.commit(next) {
-            if let Some(operation) = &self.operation {
-                if operation.run == run {
-                    operation
-                        .stop
-                        .store(true, std::sync::atomic::Ordering::Release);
-                }
-            }
-            self.clear_codex_input(run);
-            if error.downcast_ref::<std::io::Error>().is_some() {
+        if let Err(error) = self.commit_native_input(run, crate::agent_settings::Kind::Codex, next)
+        {
+            if crate::native_input_records::fatal(error.as_ref()) {
                 let _ = fallback_answer.try_send(InputAnswer::Cancel);
                 return Err(error);
             }
-            return self.fail_codex_input(run, fallback_answer);
+            if self.record_history.is_some() {
+                self.codex_input = previous;
+                self.stop_native_record_inputs(
+                    run,
+                    "Codex input could not be presented",
+                    Some(&error.to_string()),
+                    true,
+                )?;
+                let _ = fallback_answer.try_send(InputAnswer::Cancel);
+                return Ok(());
+            }
+            self.codex_input = previous;
+            return self.fail_codex_input(run, fallback_answer, Some(&error.to_string()));
         }
         Ok(())
     }
 
-    fn fail_codex_input(&mut self, run: &str, answer: SyncSender<InputAnswer>) -> Result<()> {
+    fn fail_codex_input(
+        &mut self,
+        run: &str,
+        answer: SyncSender<InputAnswer>,
+        error: Option<&str>,
+    ) -> Result<()> {
+        if self.record_history.is_some() {
+            self.stop_native_record_inputs(run, "Codex input could not be presented", error, true)?;
+            let _ = answer.try_send(InputAnswer::Cancel);
+            return Ok(());
+        }
         if let Some(operation) = &self.operation {
             if operation.run == run {
                 operation
@@ -221,17 +226,7 @@ impl Owner {
         request: &str,
         answer: Answer,
     ) -> Result<()> {
-        if self
-            .operation
-            .as_ref()
-            .is_none_or(|op| op.run != run || op.stop.load(std::sync::atomic::Ordering::Acquire))
-            || !self
-                .state
-                .view
-                .runs
-                .iter()
-                .any(|r| r.id == run && r.status == crate::model::Status::Running)
-        {
+        if !self.native_input_active(run, crate::agent_settings::Kind::Codex)? {
             return Err("Codex input is no longer accepting replies".into());
         }
         let state = self
@@ -256,8 +251,12 @@ impl Owner {
             .remove(request)
             .ok_or("Codex input request is stale")?;
         let previous = self.codex_input.replace(state);
-        if let Err(error) = self.commit(self.state.clone()) {
-            self.codex_input = previous;
+        if let Err(error) =
+            self.commit_native_input(run, crate::agent_settings::Kind::Codex, self.state.clone())
+        {
+            if !crate::native_input_records::fatal(error.as_ref()) {
+                self.codex_input = previous;
+            }
             return Err(error);
         }
         match pending.answer.try_send(answer) {
@@ -267,6 +266,7 @@ impl Owner {
     }
 
     pub(super) fn codex_input_withdraw(&mut self, run: &str, key: &InputId) -> Result<()> {
+        let previous = self.codex_input.clone();
         let Some(state) = self.codex_input.as_mut().filter(|state| state.run == run) else {
             return Ok(());
         };
@@ -277,6 +277,19 @@ impl Owner {
         }
         if state.pending.is_empty() {
             self.codex_input = None;
+        }
+        if self.record_history.is_some() {
+            if let Err(error) = self.commit_native_input(
+                run,
+                crate::agent_settings::Kind::Codex,
+                self.state.clone(),
+            ) {
+                if !crate::native_input_records::fatal(error.as_ref()) {
+                    self.codex_input = previous;
+                }
+                return Err(error);
+            }
+            return Ok(());
         }
         self.publish()
     }
@@ -299,6 +312,14 @@ impl Owner {
             self.clear_codex_input(&run);
             return self.publish();
         };
+        if self.record_history.is_some() {
+            return self.stop_native_record_inputs(
+                &run,
+                "Codex controller disconnected",
+                None,
+                false,
+            );
+        }
         operation
             .stop
             .store(true, std::sync::atomic::Ordering::Release);

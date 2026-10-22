@@ -17,13 +17,16 @@ const MAX_ERROR: usize = 256;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ReplyKind {
+    History(crate::history::Expected),
     Page,
-    Start,
-    Stop(RunId),
+    SelectedPage(metldr_history_pages::Scope),
+    Start(metldr_history_pages::Scope),
+    Stop(metldr_history_pages::Scope, RunId),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Reply {
+    History(crate::history::Response),
     Page(PageView),
     Started(RunId),
     Stop(StopReceipt),
@@ -71,7 +74,7 @@ impl ReplyCell {
 }
 
 pub(crate) struct WatchCell {
-    run: Option<RunId>,
+    target: Option<(metldr_history_pages::Scope, RunId)>,
     queue: Option<PageView>,
     terminal_queued: bool,
     last_observed: Option<(String, u64)>,
@@ -82,9 +85,9 @@ pub(crate) struct WatchCell {
 }
 
 impl WatchCell {
-    fn specific(run: RunId) -> Self {
+    fn specific(scope: metldr_history_pages::Scope, run: RunId) -> Self {
         Self {
-            run: Some(run),
+            target: Some((scope, run)),
             queue: None,
             terminal_queued: false,
             last_observed: None,
@@ -97,7 +100,7 @@ impl WatchCell {
 
     fn observer(latest: Option<&PageView>) -> Self {
         let mut cell = Self {
-            run: None,
+            target: None,
             queue: None,
             terminal_queued: false,
             last_observed: None,
@@ -124,7 +127,7 @@ impl WatchCell {
             return Poll::Ready(Err(error));
         }
         if let Some(view) = self.queue.take() {
-            if self.run.is_some() && self.terminal_queued {
+            if self.target.is_some() && self.terminal_queued {
                 self.closed = true;
             }
             return Poll::Ready(Ok(Some(view)));
@@ -141,7 +144,7 @@ impl WatchCell {
     }
 
     fn observe(&mut self, view: &PageView) -> Option<Waker> {
-        if self.closed || self.run.is_some() {
+        if self.closed || self.target.is_some() {
             return None;
         }
         let key = (view.store.clone(), view.sequence);
@@ -157,10 +160,15 @@ impl WatchCell {
         if self.closed || self.terminal_queued {
             return Ok(None);
         }
-        let run = self
-            .run
+        let (scope, run) = self
+            .target
             .as_ref()
             .ok_or_else(|| FlowError::Protocol("view response was routed to an observer".into()))?;
+        if scope != &view.selection {
+            return Err(FlowError::Protocol(
+                "watch selection does not match request".into(),
+            ));
+        }
         let found = view
             .runs
             .iter()
@@ -222,7 +230,7 @@ pub(crate) struct Protocol {
     pub(crate) connected: bool,
     pub(crate) closed: bool,
     pending: BTreeMap<String, (ReplyKind, Weak<RefCell<ReplyCell>>)>,
-    watches: BTreeMap<String, (RunId, Weak<RefCell<WatchCell>>)>,
+    watches: BTreeMap<String, (metldr_history_pages::Scope, RunId, Weak<RefCell<WatchCell>>)>,
     observers: Vec<Weak<RefCell<WatchCell>>>,
 }
 
@@ -268,6 +276,7 @@ impl Protocol {
     pub(crate) fn register_watch(
         &mut self,
         id: String,
+        scope: metldr_history_pages::Scope,
         run: RunId,
     ) -> Result<Rc<RefCell<WatchCell>>, FlowError> {
         self.prune();
@@ -275,13 +284,16 @@ impl Protocol {
         if self.watches.len() >= MAX_WATCHES || self.watches.contains_key(&id) {
             return Err(FlowError::Protocol("watch capacity or ID conflict".into()));
         }
-        let cell = Rc::new(RefCell::new(WatchCell::specific(run.clone())));
-        self.watches.insert(id, (run, Rc::downgrade(&cell)));
+        let cell = Rc::new(RefCell::new(WatchCell::specific(
+            scope.clone(),
+            run.clone(),
+        )));
+        self.watches.insert(id, (scope, run, Rc::downgrade(&cell)));
         Ok(cell)
     }
 
     pub(crate) fn remove_watch(&mut self, id: &str) {
-        if let Some((_, cell)) = self.watches.remove(id) {
+        if let Some((_, _, cell)) = self.watches.remove(id) {
             if let Some(cell) = cell.upgrade() {
                 cell.borrow_mut().close();
             }
@@ -339,6 +351,7 @@ impl Protocol {
                 ));
             }
             let view = decode_snapshot(&value, object, kind)?;
+            self.validate_view(&view, kind == "ready")?;
             self.connected = true;
             return Ok(self.update_view(view, kind == "ready"));
         }
@@ -350,7 +363,9 @@ impl Protocol {
         }
 
         if kind == "view" {
-            if let Some((_, cell)) = self.watches.get(request_id).cloned() {
+            if let Some((expected_scope, expected_run, cell)) =
+                self.watches.get(request_id).cloned()
+            {
                 if !exact_fields(object, &["v", "request", "kind", "view", "ended"]) {
                     return self.fail_watch(
                         request_id,
@@ -361,6 +376,9 @@ impl Protocol {
                     Ok(view) => view,
                     Err(error) => return self.fail_watch(request_id, error),
                 };
+                if let Err(error) = self.validate_view(&view, false) {
+                    return self.fail_watch(request_id, error);
+                }
                 let ended = match value.get("ended").and_then(Value::as_bool) {
                     Some(ended) => ended,
                     None => {
@@ -374,6 +392,14 @@ impl Protocol {
                     self.watches.remove(request_id);
                     return Ok(Vec::new());
                 };
+                if view.selection != expected_scope
+                    || !view.runs.iter().any(|saved| saved.id == expected_run)
+                {
+                    return self.fail_watch(
+                        request_id,
+                        FlowError::Protocol("watch snapshot does not match scope and run".into()),
+                    );
+                }
                 let delivery = { cell.borrow_mut().deliver(view.clone(), ended) };
                 let mut wakers: Vec<Waker> = match delivery {
                     Ok(waker) => waker.into_iter().collect(),
@@ -389,7 +415,7 @@ impl Protocol {
             let Some((expected, weak)) = self.pending.get(request_id).cloned() else {
                 return Ok(Vec::new());
             };
-            if expected != ReplyKind::Page {
+            if !matches!(expected, ReplyKind::Page | ReplyKind::SelectedPage(_)) {
                 return self.fail_request(
                     request_id,
                     FlowError::Protocol("reply kind does not match request".into()),
@@ -405,6 +431,15 @@ impl Protocol {
                 Ok(view) => view,
                 Err(error) => return self.fail_request(request_id, error),
             };
+            if matches!(&expected, ReplyKind::SelectedPage(scope) if *scope != view.selection) {
+                return self.fail_request(
+                    request_id,
+                    FlowError::Protocol("capture selection changed".into()),
+                );
+            }
+            if let Err(error) = self.validate_view(&view, false) {
+                return self.fail_request(request_id, error);
+            }
             self.pending.remove(request_id);
             self.connected = true;
             let mut wakers = weak
@@ -442,37 +477,70 @@ impl Protocol {
         let Some((expected, weak)) = self.pending.get(request_id).cloned() else {
             return Ok(Vec::new());
         };
+        if let ReplyKind::History(expected) = expected {
+            let response = match expected.decode(value.clone()) {
+                Ok(response) => response,
+                Err(error) => return self.fail_request(request_id, error),
+            };
+            self.pending.remove(request_id);
+            return Ok(weak
+                .upgrade()
+                .and_then(|cell| cell.borrow_mut().resolve(Ok(Reply::History(response))))
+                .into_iter()
+                .collect());
+        }
         let (reply, fields) = match (expected, kind) {
-            (ReplyKind::Start, "started") => match parse_run(&value) {
-                Ok(run) => (Reply::Started(run), &["v", "request", "kind", "run"][..]),
-                Err(error) => return self.fail_request(request_id, error),
-            },
-            (ReplyKind::Stop(expected_run), "stopping") => match parse_run(&value) {
-                Ok(run) if run == expected_run => (
-                    Reply::Stop(StopReceipt::Requested),
-                    &["v", "request", "kind", "run"][..],
+            (ReplyKind::Start(expected_scope), "started") => match parse_run(&value) {
+                Ok(run) if parse_scope(&value).as_ref() == Ok(&expected_scope) => (
+                    Reply::Started(run),
+                    &["v", "request", "kind", "scope", "run"][..],
                 ),
                 Ok(_) => {
                     return self.fail_request(
                         request_id,
-                        FlowError::Protocol("stop receipt run does not match request".into()),
+                        FlowError::Protocol("start receipt scope does not match request".into()),
                     );
                 }
                 Err(error) => return self.fail_request(request_id, error),
             },
-            (ReplyKind::Stop(expected_run), "already_terminal") => match parse_run(&value) {
-                Ok(run) if run == expected_run => (
-                    Reply::Stop(StopReceipt::AlreadyTerminal),
-                    &["v", "request", "kind", "run"][..],
-                ),
-                Ok(_) => {
-                    return self.fail_request(
-                        request_id,
-                        FlowError::Protocol("stop receipt run does not match request".into()),
-                    );
+            (ReplyKind::Stop(expected_scope, expected_run), "stopping") => {
+                match (parse_run(&value), parse_scope(&value)) {
+                    (Ok(run), Ok(scope)) if run == expected_run && scope == expected_scope => (
+                        Reply::Stop(StopReceipt::Requested),
+                        &["v", "request", "kind", "scope", "run"][..],
+                    ),
+                    (Ok(_), Ok(_)) => {
+                        return self.fail_request(
+                            request_id,
+                            FlowError::Protocol(
+                                "stop receipt scope or run does not match request".into(),
+                            ),
+                        );
+                    }
+                    (Err(error), _) | (_, Err(error)) => {
+                        return self.fail_request(request_id, error);
+                    }
                 }
-                Err(error) => return self.fail_request(request_id, error),
-            },
+            }
+            (ReplyKind::Stop(expected_scope, expected_run), "already_terminal") => {
+                match (parse_run(&value), parse_scope(&value)) {
+                    (Ok(run), Ok(scope)) if run == expected_run && scope == expected_scope => (
+                        Reply::Stop(StopReceipt::AlreadyTerminal),
+                        &["v", "request", "kind", "scope", "run"][..],
+                    ),
+                    (Ok(_), Ok(_)) => {
+                        return self.fail_request(
+                            request_id,
+                            FlowError::Protocol(
+                                "stop receipt scope or run does not match request".into(),
+                            ),
+                        );
+                    }
+                    (Err(error), _) | (_, Err(error)) => {
+                        return self.fail_request(request_id, error);
+                    }
+                }
+            }
             _ => {
                 return self.fail_request(
                     request_id,
@@ -510,7 +578,7 @@ impl Protocol {
             }
         }
         let watches = std::mem::take(&mut self.watches);
-        for (_, weak) in watches.into_values() {
+        for (_, _, weak) in watches.into_values() {
             if let Some(cell) = weak.upgrade() {
                 let mut cell = cell.borrow_mut();
                 if let Some(waker) = cell.fail(error.clone(), true) {
@@ -532,11 +600,34 @@ impl Protocol {
         wakers
     }
 
+    fn validate_view(&self, view: &PageView, ready: bool) -> Result<(), FlowError> {
+        if let Some(previous) = &self.latest {
+            if previous.store != view.store {
+                if !ready {
+                    return Err(FlowError::Protocol(
+                        "store changed without readiness".into(),
+                    ));
+                }
+            } else if (previous.selection.epoch == view.selection.epoch
+                && previous.selection != view.selection)
+                || (previous.selection.epoch.0 < view.selection.epoch.0
+                    && previous.sequence >= view.sequence)
+                || (previous.selection.epoch.0 > view.selection.epoch.0
+                    && previous.sequence <= view.sequence)
+            {
+                return Err(FlowError::Protocol(
+                    "view selection and sequence differ".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn update_view(&mut self, view: PageView, reconnect: bool) -> Vec<Waker> {
-        let accept = self
-            .latest
-            .as_ref()
-            .is_none_or(|latest| latest.store != view.store || latest.sequence < view.sequence);
+        let accept = self.latest.as_ref().is_none_or(|latest| {
+            latest.store != view.store
+                || (latest.sequence < view.sequence && !view.is_older_than(latest))
+        });
         if accept {
             self.latest = Some(view.clone());
         }
@@ -563,7 +654,7 @@ impl Protocol {
     }
 
     fn fail_watch(&mut self, id: &str, error: FlowError) -> Result<Vec<Waker>, FlowError> {
-        let Some((_, weak)) = self.watches.remove(id) else {
+        let Some((_, _, weak)) = self.watches.remove(id) else {
             return Ok(Vec::new());
         };
         Ok(weak
@@ -588,7 +679,8 @@ impl Protocol {
 
     fn prune(&mut self) {
         self.pending.retain(|_, (_, weak)| weak.strong_count() > 0);
-        self.watches.retain(|_, (_, weak)| weak.strong_count() > 0);
+        self.watches
+            .retain(|_, (_, _, weak)| weak.strong_count() > 0);
         self.observers.retain(|weak| weak.strong_count() > 0);
     }
 }
@@ -670,6 +762,16 @@ fn parse_run(value: &Value) -> Result<RunId, FlowError> {
         .map_err(|error| FlowError::Protocol(error.to_string()))
 }
 
+fn parse_scope(value: &Value) -> Result<metldr_history_pages::Scope, FlowError> {
+    value
+        .get("scope")
+        .cloned()
+        .ok_or_else(|| FlowError::Protocol("host reply missing scope".into()))
+        .and_then(|scope| {
+            serde_json::from_value(scope).map_err(|error| FlowError::Protocol(error.to_string()))
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -680,10 +782,18 @@ mod tests {
     const SOURCE: &str = "0123456789abcdef0123456789abcdef:1";
     const RUN: &str = "0123456789abcdef0123456789abcdef:2";
 
+    fn scope() -> metldr_history_pages::Scope {
+        serde_json::from_value(
+            json!({"store":STORE,"conversation":format!("{STORE}:100"),"epoch":"1"}),
+        )
+        .unwrap()
+    }
+
     fn snapshot(sequence: u64, status: &str, output: &str) -> Value {
         json!({
             "sequence": sequence,
             "store": STORE,
+            "selection": {"store":STORE,"conversation":format!("{STORE}:100"),"epoch":"1"},
             "source": {
                 "id": SOURCE, "tab": 4, "document": "doc-1",
                 "url": "http://127.0.0.1:1234/article", "title": "North report",
@@ -709,6 +819,261 @@ mod tests {
     }
 
     #[test]
+    fn capture_replies_and_live_views_keep_the_selected_scope() {
+        let mut protocol = Protocol::new();
+        let a = snapshot(1, "complete", "A");
+        protocol
+            .receive(frame(Value::Null, "ready", a.clone(), true))
+            .unwrap();
+        let scope: metldr_history_pages::Scope =
+            serde_json::from_value(a["selection"].clone()).unwrap();
+        let capture = protocol
+            .register_request("capture-a".into(), ReplyKind::SelectedPage(scope))
+            .unwrap();
+        let mut b = snapshot(2, "complete", "B");
+        b["selection"]["conversation"] = json!(format!("{STORE}:101"));
+        b["selection"]["epoch"] = json!("2");
+        protocol
+            .receive(frame(Value::Null, "changed", b.clone(), false))
+            .unwrap();
+        protocol
+            .receive(frame(json!("capture-a"), "view", b.clone(), true))
+            .unwrap();
+        assert!(matches!(
+            capture
+                .borrow_mut()
+                .poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Ready(Err(FlowError::Protocol(_)))
+        ));
+        assert_eq!(protocol.latest.as_ref().unwrap().selection.epoch.0, 2);
+        assert_eq!(protocol.latest.as_ref().unwrap().runs[0].output.text(), "B");
+        let mut impossible = a;
+        impossible["sequence"] = json!(3);
+        assert!(
+            protocol
+                .receive(frame(Value::Null, "changed", impossible, false))
+                .is_err()
+        );
+        let mut conflicting = b;
+        conflicting["selection"]["conversation"] = json!(format!("{STORE}:102"));
+        conflicting["sequence"] = json!(3);
+        assert!(
+            protocol
+                .receive(frame(Value::Null, "changed", conflicting, false))
+                .is_err()
+        );
+        assert_eq!(protocol.latest.as_ref().unwrap().selection.epoch.0, 2);
+    }
+
+    #[test]
+    fn saved_history_details_preserve_legacy_ids_and_live_controls() {
+        use crate::{
+            history::{Context as HistoryContext, Expected, Response, Scope},
+            model::RunView,
+        };
+        use metldr_history_pages::{Assembler, Counter, DocumentKind, Identity, Snapshot};
+        let mut protocol = Protocol::new();
+        protocol
+            .receive(frame(
+                Value::Null,
+                "ready",
+                snapshot(7, "running", "Live text"),
+                true,
+            ))
+            .unwrap();
+        let live: RunId = serde_json::from_value(json!(RUN)).unwrap();
+        let context = HistoryContext {
+            scope: Scope {
+                store: STORE.into(),
+                conversation: format!("{STORE}:100"),
+                epoch: Counter(9_007_199_254_740_993),
+            },
+            generation: "owned-transport".into(),
+        };
+        let current = protocol
+            .register_request(
+                "history-current".into(),
+                ReplyKind::History(Expected::Current),
+            )
+            .unwrap();
+        protocol.receive(json!({"v":crate::WIRE_VERSION,"request":"history-current","kind":"history_current","scope":context.scope,"generation":context.generation})).unwrap();
+        assert_eq!(
+            current
+                .borrow_mut()
+                .poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Ready(Ok(Reply::History(Response::Current(context.clone()))))
+        );
+        let rows: Vec<_> = (65..=80).rev().map(|n| json!({"id":format!("{STORE}:{n:03}"),"source":format!("{STORE}:01"),"source_available":true,"revision":"1","kind":"summary","status":"complete","question":null,"output":{"text":"Retained text","truncated":false}})).collect();
+        let mut list = json!({"v":crate::WIRE_VERSION,"request":"list","kind":"history_runs","generation":context.generation,"page":{"store":STORE,"conversation":context.scope.conversation,"epoch":context.scope.epoch,"sequence":"7","anchor":"100","runs":rows,"next":{"anchor":"100","before":"65"}}});
+        let request = protocol
+            .register_request(
+                "list".into(),
+                ReplyKind::History(Expected::Runs {
+                    context: context.clone(),
+                    cursor: None,
+                }),
+            )
+            .unwrap();
+        protocol.receive(list.clone()).unwrap();
+        let Poll::Ready(Ok(Reply::History(Response::Runs(page)))) = request
+            .borrow_mut()
+            .poll(&mut Context::from_waker(Waker::noop()))
+        else {
+            panic!("expected stored summaries");
+        };
+        assert_eq!(page.runs.len(), 16);
+        assert_eq!(page.runs[0].id.as_str(), format!("{STORE}:080"));
+        assert_eq!(page.runs[0].source.as_str(), format!("{STORE}:01"));
+        list["request"] = json!("oversized");
+        list["page"]["runs"].as_array_mut().unwrap().push(json!({"id":format!("{STORE}:064"),"source":SOURCE,"source_available":true,"revision":"1","kind":"summary","status":"complete","question":null,"output":{"text":"older","truncated":false}}));
+        let invalid = protocol
+            .register_request(
+                "oversized".into(),
+                ReplyKind::History(Expected::Runs {
+                    context: context.clone(),
+                    cursor: None,
+                }),
+            )
+            .unwrap();
+        protocol.receive(list).unwrap();
+        assert!(matches!(
+            invalid
+                .borrow_mut()
+                .poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Ready(Err(FlowError::Protocol(_)))
+        ));
+        assert_eq!(protocol.latest.as_ref().unwrap().sequence, 7);
+
+        let identity = Identity {
+            store: STORE.into(),
+            conversation: context.scope.conversation.clone(),
+            epoch: context.scope.epoch,
+            kind: DocumentKind::Run,
+            document: page.runs[0].id.as_str().into(),
+            revision: Counter(1),
+            generation: context.generation.clone(),
+            ticket: "owned-ticket:1".into(),
+        };
+        let output = format!("Saved \"text\" 🦀 {}", "x".repeat(7_000));
+        let mut saved = snapshot(7, "complete", &output)["runs"][0].clone();
+        saved["id"] = json!(identity.document);
+        saved["source"] = json!(page.runs[0].source);
+        let retained = Snapshot::new(identity.clone(), &saved).unwrap();
+        let pin = protocol
+            .register_request(
+                "pin".into(),
+                ReplyKind::History(Expected::Pin {
+                    context: context.clone(),
+                    kind: DocumentKind::Run,
+                    document: identity.document.clone(),
+                    revision: Counter(1),
+                }),
+            )
+            .unwrap();
+        protocol.receive(json!({"v":crate::WIRE_VERSION,"request":"pin","kind":"history_pinned","identity":identity})).unwrap();
+        assert!(matches!(
+            pin.borrow_mut()
+                .poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Ready(Ok(Reply::History(Response::Pinned(_))))
+        ));
+        let mut assembled = Assembler::new(identity.clone()).unwrap();
+        let mut fragments = 0;
+        loop {
+            let offset = assembled.next_offset();
+            let request = format!("fragment-{offset}");
+            let cell = protocol
+                .register_request(
+                    request.clone(),
+                    ReplyKind::History(Expected::Page {
+                        identity: identity.clone(),
+                        offset,
+                    }),
+                )
+                .unwrap();
+            protocol
+                .receive(serde_json::from_slice(&retained.page(&request, offset).unwrap()).unwrap())
+                .unwrap();
+            let Poll::Ready(Ok(Reply::History(Response::Detail { request, bytes }))) = cell
+                .borrow_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+            else {
+                panic!("expected detail");
+            };
+            fragments += 1;
+            if fragments == 1 {
+                let stop = protocol
+                    .register_request("stop-live".into(), ReplyKind::Stop(scope(), live.clone()))
+                    .unwrap();
+                protocol.receive(json!({"v":crate::WIRE_VERSION,"request":"stop-live","kind":"stopping","scope":scope(),"run":live})).unwrap();
+                assert_eq!(
+                    stop.borrow_mut()
+                        .poll(&mut Context::from_waker(Waker::noop())),
+                    Poll::Ready(Ok(Reply::Stop(StopReceipt::Requested)))
+                );
+                protocol
+                    .receive(frame(Value::Null, "changed", snapshot_for_live(), false))
+                    .unwrap();
+                assert_eq!(
+                    protocol.latest.as_ref().unwrap().runs[0].output.text(),
+                    "Live update"
+                );
+            }
+            if assembled.push(&bytes, &request).unwrap() {
+                break;
+            }
+        }
+        let run = RunView::decode_record(&assembled.finish().unwrap(), &page.runs[0].id).unwrap();
+        assert!(fragments >= 4);
+        assert_eq!(run.id.as_str(), identity.document);
+        assert_eq!(run.source, page.runs[0].source);
+        assert_eq!(run.output.text(), output);
+        assert_eq!(protocol.latest.as_ref().unwrap().runs[0].id, live);
+        assert_eq!(
+            protocol.latest.as_ref().unwrap().runs[0].output.text(),
+            "Live update"
+        );
+        let mut original = context.scope.clone();
+        original.conversation = format!("{STORE}:101");
+        original.epoch = Counter(context.scope.epoch.0 + 1);
+        let mut current = context.scope.clone();
+        current.epoch = Counter(context.scope.epoch.0 + 2);
+        let receipt = json!({"v":crate::WIRE_VERSION,"request":"selection-retry","kind":"conversation_changed","original":original,"current":current,"generation":"after-switch","sequence":"8"});
+        for _ in 0..2 {
+            let cell = protocol
+                .register_request(
+                    "selection-retry".into(),
+                    ReplyKind::History(Expected::Change {
+                        scope: context.scope.clone(),
+                        change: crate::history::Change::Create,
+                    }),
+                )
+                .unwrap();
+            protocol.receive(receipt.clone()).unwrap();
+            let Poll::Ready(Ok(Reply::History(Response::Changed(change)))) = cell
+                .borrow_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+            else {
+                panic!("expected the original and current selection receipt");
+            };
+            assert_eq!(change.original, original);
+            assert_eq!(change.current.scope, current);
+            assert_eq!(protocol.latest.as_ref().unwrap().sequence, 8);
+            assert_eq!(protocol.latest.as_ref().unwrap().runs[0].id, live);
+        }
+        for id in [
+            format!("{STORE}:0"),
+            format!("{STORE}:-1"),
+            format!("{STORE}:1 "),
+            format!("{STORE}:{}1", "0".repeat(49_152)),
+        ] {
+            assert!(serde_json::from_value::<RunId>(json!(id)).is_err());
+        }
+        fn snapshot_for_live() -> Value {
+            snapshot(8, "stop_requested", "Live update")
+        }
+    }
+
+    #[test]
     fn correlates_replies_and_coalesces_watch_to_one_terminal_snapshot() {
         let mut protocol = Protocol::new();
         assert!(
@@ -717,17 +1082,18 @@ mod tests {
                 .is_err()
         );
         let reply = protocol
-            .register_request("start-1".into(), ReplyKind::Start)
+            .register_request("start-1".into(), ReplyKind::Start(scope()))
             .unwrap();
         let watch = protocol
             .register_watch(
                 "watch-1".into(),
+                scope(),
                 serde_json::from_value(json!(RUN)).unwrap(),
             )
             .unwrap();
         protocol
             .receive(
-                json!({"v":crate::WIRE_VERSION,"request":"foreign","kind":"started","run":RUN}),
+                json!({"v":crate::WIRE_VERSION,"request":"foreign","kind":"started","scope":scope(),"run":RUN}),
             )
             .unwrap();
         assert!(matches!(
@@ -738,7 +1104,7 @@ mod tests {
         ));
         protocol
             .receive(
-                json!({"v":crate::WIRE_VERSION,"request":"start-1","kind":"started","run":RUN}),
+                json!({"v":crate::WIRE_VERSION,"request":"start-1","kind":"started","scope":scope(),"run":RUN}),
             )
             .unwrap();
         assert!(matches!(
@@ -784,6 +1150,7 @@ mod tests {
         let bad_watch = protocol
             .register_watch(
                 "bad-watch".into(),
+                scope(),
                 serde_json::from_value(json!(RUN)).unwrap(),
             )
             .unwrap();
@@ -803,6 +1170,90 @@ mod tests {
     }
 
     #[test]
+    fn rejects_scope_mismatches_for_start_stop_and_watch() {
+        let expected = scope();
+        let other: metldr_history_pages::Scope = serde_json::from_value(json!({
+            "store": STORE,
+            "conversation": format!("{STORE}:101"),
+            "epoch": "2"
+        }))
+        .unwrap();
+        let mut protocol = Protocol::new();
+
+        let start = protocol
+            .register_request("scoped-start".into(), ReplyKind::Start(expected.clone()))
+            .unwrap();
+        protocol
+            .receive(json!({
+                "v": crate::WIRE_VERSION,
+                "request": "scoped-start",
+                "kind": "started",
+                "scope": other,
+                "run": RUN
+            }))
+            .unwrap();
+        assert!(matches!(
+            start
+                .borrow_mut()
+                .poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Ready(Err(FlowError::Protocol(_)))
+        ));
+
+        let stop = protocol
+            .register_request(
+                "scoped-stop".into(),
+                ReplyKind::Stop(
+                    expected.clone(),
+                    serde_json::from_value(json!(RUN)).unwrap(),
+                ),
+            )
+            .unwrap();
+        let other: metldr_history_pages::Scope = serde_json::from_value(json!({
+            "store": STORE,
+            "conversation": format!("{STORE}:101"),
+            "epoch": "2"
+        }))
+        .unwrap();
+        protocol
+            .receive(json!({
+                "v": crate::WIRE_VERSION,
+                "request": "scoped-stop",
+                "kind": "stopping",
+                "scope": other,
+                "run": RUN
+            }))
+            .unwrap();
+        assert!(matches!(
+            stop.borrow_mut()
+                .poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Ready(Err(FlowError::Protocol(_)))
+        ));
+
+        let mut initial = snapshot(1, "complete", "initial");
+        protocol
+            .receive(frame(Value::Null, "ready", initial.clone(), true))
+            .unwrap();
+        let watch = protocol
+            .register_watch(
+                "scoped-watch".into(),
+                expected,
+                serde_json::from_value(json!(RUN)).unwrap(),
+            )
+            .unwrap();
+        initial["selection"]["conversation"] = json!(format!("{STORE}:101"));
+        initial["selection"]["epoch"] = json!("2");
+        initial["sequence"] = json!(2);
+        protocol
+            .receive(frame(json!("scoped-watch"), "view", initial, true))
+            .unwrap();
+        assert_eq!(protocol.latest.as_ref().unwrap().sequence, 1);
+        assert!(matches!(
+            poll(&watch),
+            Poll::Ready(Err(FlowError::Protocol(_)))
+        ));
+    }
+
+    #[test]
     fn disconnect_fails_waiters_observers_reconnect_and_removal_keeps_run() {
         let mut protocol = Protocol::new();
         protocol
@@ -818,11 +1269,11 @@ mod tests {
         let wrong_stop = protocol
             .register_request(
                 "wrong-stop".into(),
-                ReplyKind::Stop(serde_json::from_value(json!(RUN)).unwrap()),
+                ReplyKind::Stop(scope(), serde_json::from_value(json!(RUN)).unwrap()),
             )
             .unwrap();
         protocol
-            .receive(json!({"v":crate::WIRE_VERSION,"request":"wrong-stop","kind":"stopping","run":"0123456789abcdef0123456789abcdef:3"}))
+            .receive(json!({"v":crate::WIRE_VERSION,"request":"wrong-stop","kind":"stopping","scope":scope(),"run":"0123456789abcdef0123456789abcdef:3"}))
             .unwrap();
         assert!(matches!(
             wrong_stop
@@ -833,12 +1284,13 @@ mod tests {
         let reply = protocol
             .register_request(
                 "stop-1".into(),
-                ReplyKind::Stop(serde_json::from_value(json!(RUN)).unwrap()),
+                ReplyKind::Stop(scope(), serde_json::from_value(json!(RUN)).unwrap()),
             )
             .unwrap();
         let terminal_watch = protocol
             .register_watch(
                 "terminal-watch".into(),
+                scope(),
                 serde_json::from_value(json!(RUN)).unwrap(),
             )
             .unwrap();
@@ -853,6 +1305,7 @@ mod tests {
         let watch = protocol
             .register_watch(
                 "watch-1".into(),
+                scope(),
                 serde_json::from_value(json!(RUN)).unwrap(),
             )
             .unwrap();
@@ -913,6 +1366,7 @@ mod tests {
         let removed = protocol
             .register_watch(
                 "watch-2".into(),
+                scope(),
                 serde_json::from_value(json!(RUN)).unwrap(),
             )
             .unwrap();

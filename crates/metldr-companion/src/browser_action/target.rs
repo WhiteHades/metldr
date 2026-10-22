@@ -4,11 +4,21 @@ use crate::{
     model::{Page, Store},
 };
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct Target {
     pub(crate) tab: i32,
     pub(crate) document: String,
     pub(crate) url: String,
+}
+
+impl Target {
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self.tab < 0 || self.document.is_empty() || self.document.len() > 128 {
+            return Err("invalid native browser target".into());
+        }
+        crate::model::validate_page_url(&self.url)
+    }
 }
 
 impl From<&Page> for Target {
@@ -21,7 +31,37 @@ impl From<&Page> for Target {
     }
 }
 
+impl Proposal {
+    pub(crate) fn matches_position(
+        &self,
+        initial: Option<&Target>,
+        navigation: Option<(&Binding, &str)>,
+    ) -> bool {
+        if let Some((binding, url)) = navigation {
+            &self.binding == binding && self.url == url
+        } else {
+            self.binding.grant_revision == 1
+                && initial.is_none_or(|target| {
+                    self.binding.tab == target.tab
+                        && self.binding.document == target.document
+                        && self.url == target.url
+                })
+        }
+    }
+}
+
 impl Store {
+    pub(crate) fn native_browser_target_after(&self, run: &str) -> Result<Target> {
+        let initial = self.native_browser_target(run)?;
+        Ok(match self.navigation_destination(run, Some(&initial))? {
+            Some((binding, url)) => Target {
+                tab: binding.tab,
+                document: binding.document.clone(),
+                url: url.clone(),
+            },
+            None => initial,
+        })
+    }
     pub(crate) fn native_browser_target(&self, run: &str) -> Result<Target> {
         let (workflow, source) = match self.launches.get(run) {
             Some(crate::agent_model::Launch::Pi { workflow, .. }) => (
@@ -74,16 +114,10 @@ impl Store {
         proposal: &Proposal,
         source: Option<&Target>,
     ) -> Result<bool> {
-        if let Some((binding, url)) = self.navigation_destination(&proposal.run, source)? {
-            Ok(&proposal.binding == binding && &proposal.url == url)
-        } else {
-            Ok(proposal.binding.grant_revision == 1
-                && source.is_none_or(|page| {
-                    proposal.binding.tab == page.tab
-                        && proposal.binding.document == page.document
-                        && proposal.url == page.url
-                }))
-        }
+        let navigation = self
+            .navigation_destination(&proposal.run, source)?
+            .map(|(binding, url)| (binding, url.as_str()));
+        Ok(proposal.matches_position(source, navigation))
     }
 
     fn navigation_destination(

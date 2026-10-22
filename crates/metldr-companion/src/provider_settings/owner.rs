@@ -71,7 +71,7 @@ impl Owner {
         }
     }
 
-    fn set_provider_route(&mut self, protocol: Protocol, profile: Option<Profile>) {
+    pub(crate) fn set_provider_route(&mut self, protocol: Protocol, profile: Option<Profile>) {
         *match protocol {
             Protocol::Messages => &mut self.browser_route,
             Protocol::Responses => &mut self.responses_route,
@@ -81,6 +81,7 @@ impl Owner {
     }
 
     fn provider_admit(&mut self, request: &str, protocol: Protocol, revision: u64) -> Result<bool> {
+        self.refresh_saved_settings()?;
         let slot = self.state.providers.slot(protocol);
         if slot.last_request.as_deref() == Some(request) {
             self.reply_view(Some(request), "view", true)?;
@@ -159,7 +160,7 @@ impl Owner {
             connection,
         };
         next.providers.pending = Some(pending.clone());
-        self.persist(next)?;
+        self.persist_settings(next)?;
         self.settings.notice = None;
         self.settings.started = Some(std::time::Instant::now());
         self.settings.job = Some(super::worker::save(
@@ -197,7 +198,7 @@ impl Owner {
                 last_request: Some(request.into()),
             },
         );
-        self.persist(next)?;
+        self.persist_settings(next)?;
         self.set_provider_route(protocol, None);
         self.settings.notice = None;
         self.settings.states.remove(&protocol);
@@ -207,10 +208,11 @@ impl Owner {
     }
 
     pub(crate) fn provider_load(&mut self, request: Option<String>) -> Result<()> {
+        self.refresh_saved_settings()?;
         if self.settings.job.is_some() {
             return Err("provider settings are busy".into());
         }
-        self.persist(self.state.clone())?;
+        self.persist_settings(self.state.clone())?;
         for protocol in Protocol::ALL {
             if self.state.providers.managed(protocol) {
                 self.set_provider_route(protocol, None);
@@ -252,6 +254,7 @@ impl Owner {
     }
 
     pub(crate) fn provider_completed(&mut self, completion: Completion) -> Result<()> {
+        self.refresh_saved_settings()?;
         self.settings
             .job
             .take()
@@ -298,7 +301,7 @@ impl Owner {
                         (None, Some(error))
                     }
                 };
-                self.persist(next)?;
+                self.persist_settings(next)?;
                 if let Some(profile) = profile {
                     self.set_provider_route(pending.protocol, Some(profile));
                     self.settings.states.insert(pending.protocol, "ready");
@@ -313,7 +316,7 @@ impl Owner {
                 }
             }
             Completion::Loaded { request, profiles } => {
-                self.persist(self.state.clone())?;
+                self.persist_settings(self.state.clone())?;
                 for (protocol, result) in profiles {
                     match result {
                         Ok(profile) => {
@@ -336,7 +339,7 @@ impl Owner {
             Completion::Cleaned { removed, failed } => {
                 let mut next = self.state.clone();
                 next.providers.retired.retain(|id| !removed.contains(id));
-                self.persist(next)?;
+                self.persist_settings(next)?;
                 if failed {
                     self.settings.notice = Some("Credential cleanup is pending. Refresh to retry.");
                 }

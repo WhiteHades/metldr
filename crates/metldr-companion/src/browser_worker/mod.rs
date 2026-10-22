@@ -75,6 +75,7 @@ impl Owner {
     pub(super) fn browser_start(
         &mut self,
         id: &str,
+        scope: &crate::history::Selection,
         source_id: &str,
         text: &str,
         fingerprint: Option<&str>,
@@ -92,12 +93,13 @@ impl Owner {
             }
             _ => {}
         }
-        self.start_browser(id, source_id, text, Route::Messages(profile))
+        self.start_browser(id, scope, source_id, text, Route::Messages(profile))
     }
 
     pub(super) fn responses_start(
         &mut self,
         id: &str,
+        scope: &crate::history::Selection,
         source_id: &str,
         text: &str,
         fingerprint: &str,
@@ -110,12 +112,13 @@ impl Owner {
         {
             return Err("Responses route configuration changed".into());
         }
-        self.start_browser(id, source_id, text, Route::Responses(profile))
+        self.start_browser(id, scope, source_id, text, Route::Responses(profile))
     }
 
     pub(super) fn google_start(
         &mut self,
         id: &str,
+        scope: &crate::history::Selection,
         source_id: &str,
         text: &str,
         fingerprint: &str,
@@ -128,12 +131,13 @@ impl Owner {
         {
             return Err("Google route configuration changed".into());
         }
-        self.start_browser(id, source_id, text, Route::Google(profile))
+        self.start_browser(id, scope, source_id, text, Route::Google(profile))
     }
 
     pub(super) fn chat_start(
         &mut self,
         id: &str,
+        scope: &crate::history::Selection,
         source_id: &str,
         text: &str,
         fingerprint: &str,
@@ -146,10 +150,17 @@ impl Owner {
         {
             return Err("Chat Completions route configuration changed".into());
         }
-        self.start_browser(id, source_id, text, Route::Chat(profile))
+        self.start_browser(id, scope, source_id, text, Route::Chat(profile))
     }
 
-    fn start_browser(&mut self, id: &str, source_id: &str, text: &str, route: Route) -> Result<()> {
+    fn start_browser(
+        &mut self,
+        id: &str,
+        scope: &crate::history::Selection,
+        source_id: &str,
+        text: &str,
+        route: Route,
+    ) -> Result<()> {
         let identity = match &route {
             Route::Messages(Profile::Fixture { .. }) => {
                 json!({"source":source_id,"text":text,"origin":self.fixture.as_ref().map(|fixture| fixture.origin.as_str()),"model":crate::https_profile::FIXTURE_MODEL})
@@ -159,37 +170,69 @@ impl Owner {
             }
         };
         let digest = crate::agent_model::digest(&identity)?;
-        if self.duplicate(id, &digest)? {
+        if self.duplicate(scope, id, &digest)? {
             return Ok(());
         }
-        if self.operation.is_some() || self.state.view.runs.len() >= 16 {
+        if self.record_history.is_some() {
+            self.require_conversation(scope)?;
+        }
+        if self.operation.is_some()
+            || (self.record_history.is_none() && self.state.view.runs.len() >= 16)
+        {
             return Err("another run is active or prototype capacity reached".into());
         }
         if text.trim().is_empty() || text.len() > 1024 {
             return Err("invalid browser task instruction".into());
         }
-        let source = self
-            .state
-            .view
-            .source
-            .as_ref()
-            .filter(|s| s.id == source_id)
-            .ok_or("browser task source is stale")?
-            .clone();
-        let mut next = self.state.clone();
-        let run = next.id()?;
-        next.view.runs.push(Run {
-            id: run.clone(),
-            source: source.id,
-            kind: "browser".into(),
-            question: Some(text.into()),
-            status: Status::Running,
-            output: Default::default(),
-            error: None,
-        });
-        next.starts.insert(id.into(), run.clone());
-        next.launches.insert(run.clone(), route.launch(digest));
-        self.commit(next)?;
+        let (run, source) = if self.record_history.is_some() {
+            self.record_change(|edit, _| {
+                let source = edit
+                    .selected_source(scope)?
+                    .filter(|source| source.id == source_id)
+                    .ok_or("browser task source is stale")?;
+                let run = edit.id()?;
+                edit.admit(
+                    scope,
+                    id,
+                    Run {
+                        id: run.clone(),
+                        source: source.id.clone(),
+                        kind: "browser".into(),
+                        question: Some(text.into()),
+                        status: Status::Running,
+                        output: Default::default(),
+                        error: None,
+                    },
+                    route.launch(digest),
+                )?;
+                let projection = edit.project(scope, Some(&run))?;
+                Ok(((run, source), Some(projection)))
+            })?
+        } else {
+            let source = self
+                .state
+                .view
+                .source
+                .as_ref()
+                .filter(|s| s.id == source_id)
+                .ok_or("browser task source is stale")?
+                .clone();
+            let mut next = self.state.clone();
+            let run = next.id()?;
+            next.view.runs.push(Run {
+                id: run.clone(),
+                source: source.id.clone(),
+                kind: "browser".into(),
+                question: Some(text.into()),
+                status: Status::Running,
+                output: Default::default(),
+                error: None,
+            });
+            next.starts.insert(id.into(), run.clone());
+            next.launches.insert(run.clone(), route.launch(digest));
+            self.commit(next)?;
+            (run, source)
+        };
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = stop.clone();
         let client = Client {
@@ -235,7 +278,7 @@ impl Owner {
             stop,
             worker,
         });
-        self.emit(json!({"v":crate::WIRE_VERSION,"request":id,"kind":"started","run":run}))
+        self.emit(self.started_reply(id, scope, &run)?)
     }
 }
 

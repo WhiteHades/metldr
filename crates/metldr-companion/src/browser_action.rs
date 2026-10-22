@@ -74,8 +74,124 @@ pub(super) struct Action {
     pub state: Phase,
 }
 
+impl Action {
+    pub(super) fn pending(id: String, proposal: Proposal) -> Result<Self> {
+        proposal.validate()?;
+        let action = Self {
+            id,
+            revision: 1,
+            proposal,
+            state: Phase::Pending,
+        };
+        action.validate()?;
+        Ok(action)
+    }
+
+    pub(super) fn decide(&self, revision: u64, approve: bool) -> Result<Self> {
+        if self.revision != revision || self.state != Phase::Pending {
+            return Err("browser approval is stale".into());
+        }
+        self.transition(if approve {
+            Phase::Approved
+        } else {
+            Phase::Settled {
+                outcome: Outcome::Prevented {
+                    reason: "user declined".into(),
+                },
+            }
+        })
+    }
+
+    pub(super) fn dispatch(&self, revision: u64) -> Result<Self> {
+        if self.revision != revision || self.state != Phase::Approved {
+            return Err("browser dispatch requires the current approval".into());
+        }
+        self.transition(Phase::Dispatching)
+    }
+
+    pub(super) fn settle(&self, revision: u64, outcome: Outcome) -> Result<Self> {
+        if self.revision != revision || self.state != Phase::Dispatching {
+            return Err("browser result is stale or was not dispatched".into());
+        }
+        validate_outcome(&outcome, &self.proposal)?;
+        self.transition(Phase::Settled { outcome })
+    }
+
+    pub(super) fn prevent(&self, reason: &str) -> Result<Option<Self>> {
+        if !matches!(self.state, Phase::Pending | Phase::Approved) {
+            return Ok(None);
+        }
+        self.transition(Phase::Settled {
+            outcome: Outcome::Prevented {
+                reason: reason.into(),
+            },
+        })
+        .map(Some)
+    }
+
+    pub(super) fn finish(&self, before: &str, after: &str) -> Result<Option<Self>> {
+        let outcome = match &self.state {
+            Phase::Pending | Phase::Approved => Outcome::Prevented {
+                reason: before.into(),
+            },
+            Phase::Dispatching => Outcome::Uncertain {
+                reason: after.into(),
+            },
+            Phase::Settled { .. } => return Ok(None),
+        };
+        self.transition(Phase::Settled { outcome }).map(Some)
+    }
+
+    fn transition(&self, state: Phase) -> Result<Self> {
+        let action = Self {
+            revision: self
+                .revision
+                .checked_add(1)
+                .ok_or("browser revision exhausted")?,
+            state,
+            ..self.clone()
+        };
+        action.validate()?;
+        Ok(action)
+    }
+
+    pub(super) fn validate(&self) -> Result<()> {
+        self.proposal.validate()?;
+        if self.revision == 0 {
+            return Err("invalid saved browser action".into());
+        }
+        match &self.state {
+            Phase::Pending if self.revision != 1 => Err("invalid pending revision".into()),
+            Phase::Approved if self.revision != 2 => Err("invalid approval revision".into()),
+            Phase::Dispatching if self.revision != 3 => Err("invalid dispatch revision".into()),
+            Phase::Settled { outcome } => {
+                validate_outcome(outcome, &self.proposal)?;
+                let valid_revision = match outcome {
+                    Outcome::Verified { .. }
+                    | Outcome::Navigated { .. }
+                    | Outcome::Uncertain { .. } => self.revision == 4,
+                    Outcome::SelectionObserved { .. } => {
+                        self.revision == 4
+                            && matches!(&self.proposal.intent, Intent::SelectOption { .. })
+                    }
+                    Outcome::ButtonClickObserved => {
+                        self.revision == 4
+                            && matches!(&self.proposal.intent, Intent::ActivateButton { .. })
+                    }
+                    Outcome::Prevented { .. } => (2..=4).contains(&self.revision),
+                };
+                if !valid_revision {
+                    return Err("invalid settled revision".into());
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
 impl Proposal {
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         let b = &self.binding;
         if b.tab < 0
             || b.grant_revision == 0
@@ -166,12 +282,7 @@ impl Store {
         {
             return Err("another browser action is pending or capacity is reached".into());
         }
-        let action = Action {
-            id: self.id()?,
-            revision: 1,
-            proposal,
-            state: Phase::Pending,
-        };
+        let action = Action::pending(self.id()?, proposal)?;
         self.browser_actions
             .insert(action.id.clone(), action.clone());
         Ok(action)
@@ -188,21 +299,9 @@ impl Store {
             .get(id)
             .ok_or("unknown browser action")?;
         self.browser_run(&action.proposal.run)?;
-        if action.revision != revision || action.state != Phase::Pending {
-            return Err("browser approval is stale".into());
-        }
-        self.change_browser(
-            id,
-            if approve {
-                Phase::Approved
-            } else {
-                Phase::Settled {
-                    outcome: Outcome::Prevented {
-                        reason: "user declined".into(),
-                    },
-                }
-            },
-        )
+        let action = action.decide(revision, approve)?;
+        self.browser_actions.insert(id.into(), action.clone());
+        Ok(action)
     }
 
     pub(super) fn dispatch_browser(&mut self, id: &str, revision: u64) -> Result<Action> {
@@ -211,10 +310,9 @@ impl Store {
             .get(id)
             .ok_or("unknown browser action")?;
         self.browser_run(&action.proposal.run)?;
-        if action.revision != revision || action.state != Phase::Approved {
-            return Err("browser dispatch requires the current approval".into());
-        }
-        self.change_browser(id, Phase::Dispatching)
+        let action = action.dispatch(revision)?;
+        self.browser_actions.insert(id.into(), action.clone());
+        Ok(action)
     }
 
     pub(super) fn settle_browser(
@@ -227,11 +325,9 @@ impl Store {
             .browser_actions
             .get(id)
             .ok_or("unknown browser action")?;
-        if action.revision != revision || action.state != Phase::Dispatching {
-            return Err("browser result is stale or was not dispatched".into());
-        }
-        validate_outcome(&outcome, &action.proposal)?;
-        self.change_browser(id, Phase::Settled { outcome })
+        let action = action.settle(revision, outcome)?;
+        self.browser_actions.insert(id.into(), action.clone());
+        Ok(action)
     }
 
     pub(super) fn prevent_browser(&mut self, run: &str, reason: &str) -> Result<()> {
@@ -244,14 +340,9 @@ impl Store {
             .map(|a| a.id.clone())
             .collect();
         for id in ids {
-            self.change_browser(
-                &id,
-                Phase::Settled {
-                    outcome: Outcome::Prevented {
-                        reason: reason.into(),
-                    },
-                },
-            )?;
+            if let Some(action) = self.browser_actions[&id].prevent(reason)? {
+                self.browser_actions.insert(id, action);
+            }
         }
         Ok(())
     }
@@ -264,16 +355,12 @@ impl Store {
             .map(|a| a.id.clone())
             .collect();
         for id in &ids {
-            let outcome = if self.browser_actions[id].state == Phase::Dispatching {
-                Outcome::Uncertain {
-                    reason: "native host restarted after dispatch".into(),
-                }
-            } else {
-                Outcome::Prevented {
-                    reason: "native host restarted before dispatch".into(),
-                }
-            };
-            self.change_browser(id, Phase::Settled { outcome })?;
+            if let Some(action) = self.browser_actions[id].finish(
+                "native host restarted before dispatch",
+                "native host restarted after dispatch",
+            )? {
+                self.browser_actions.insert(id.clone(), action);
+            }
         }
         Ok(!ids.is_empty())
     }
@@ -286,16 +373,12 @@ impl Store {
             .map(|a| a.id.clone())
             .collect();
         for id in ids {
-            let outcome = if self.browser_actions[&id].state == Phase::Dispatching {
-                Outcome::Uncertain {
-                    reason: "worker ended without a verified browser result".into(),
-                }
-            } else {
-                Outcome::Prevented {
-                    reason: "worker ended before dispatch".into(),
-                }
-            };
-            self.change_browser(&id, Phase::Settled { outcome })?;
+            if let Some(action) = self.browser_actions[&id].finish(
+                "worker ended before dispatch",
+                "worker ended without a verified browser result",
+            )? {
+                self.browser_actions.insert(id, action);
+            }
         }
         Ok(())
     }
@@ -311,19 +394,6 @@ impl Store {
         }
         Ok(())
     }
-
-    fn change_browser(&mut self, id: &str, state: Phase) -> Result<Action> {
-        let action = self
-            .browser_actions
-            .get_mut(id)
-            .ok_or("unknown browser action")?;
-        action.revision = action
-            .revision
-            .checked_add(1)
-            .ok_or("browser revision exhausted")?;
-        action.state = state;
-        Ok(action.clone())
-    }
 }
 
 pub(super) fn validate(state: &Store, valid_id: impl Fn(&str) -> bool) -> Result<()> {
@@ -333,10 +403,8 @@ pub(super) fn validate(state: &Store, valid_id: impl Fn(&str) -> bool) -> Result
     let mut tools = std::collections::BTreeSet::new();
     let mut pending = 0;
     for (id, action) in &state.browser_actions {
-        action.proposal.validate()?;
         if id != &action.id
             || !valid_id(id)
-            || action.revision == 0
             || !state.view.runs.iter().any(|r| r.id == action.proposal.run)
             || state.view.runs.iter().any(|r| &r.id == id)
             || state.view.source.as_ref().is_some_and(|s| &s.id == id)
@@ -344,36 +412,7 @@ pub(super) fn validate(state: &Store, valid_id: impl Fn(&str) -> bool) -> Result
         {
             return Err("invalid saved browser action".into());
         }
-        match &action.state {
-            Phase::Pending if action.revision != 1 => return Err("invalid pending revision".into()),
-            Phase::Approved if action.revision != 2 => {
-                return Err("invalid approval revision".into());
-            }
-            Phase::Dispatching if action.revision != 3 => {
-                return Err("invalid dispatch revision".into());
-            }
-            Phase::Settled { outcome } => {
-                validate_outcome(outcome, &action.proposal)?;
-                let valid_revision = match outcome {
-                    Outcome::Verified { .. }
-                    | Outcome::Navigated { .. }
-                    | Outcome::Uncertain { .. } => action.revision == 4,
-                    Outcome::SelectionObserved { .. } => {
-                        action.revision == 4
-                            && matches!(&action.proposal.intent, Intent::SelectOption { .. })
-                    }
-                    Outcome::ButtonClickObserved => {
-                        action.revision == 4
-                            && matches!(&action.proposal.intent, Intent::ActivateButton { .. })
-                    }
-                    Outcome::Prevented { .. } => (2..=4).contains(&action.revision),
-                };
-                if !valid_revision {
-                    return Err("invalid settled revision".into());
-                }
-            }
-            _ => (),
-        }
+        action.validate()?;
         pending += usize::from(!matches!(action.state, Phase::Settled { .. }));
         if !matches!(action.state, Phase::Settled { .. })
             && !state

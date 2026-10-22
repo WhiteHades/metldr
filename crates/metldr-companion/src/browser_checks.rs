@@ -2,7 +2,7 @@ use crate::{
     browser_action::{Action, Binding, Intent, Outcome, Phase, Proposal},
     browser_owner::Event,
     flow::{Operation, Owner},
-    model::{Command, Page, Run, Source, Status, Store},
+    model::{Page, Run, Source, Status, Store},
     store::Disk,
 };
 use std::{
@@ -63,6 +63,7 @@ fn with_owner(check: impl FnOnce(&mut Owner, Proposal)) {
         settings: Default::default(),
         agent_runtime: Default::default(),
         state,
+        browser_view: BTreeMap::new(),
         fixture: Some(crate::native::Fixture {
             origin: "http://127.0.0.1:1".into(),
             address: "127.0.0.1:1".parse().unwrap(),
@@ -84,6 +85,8 @@ fn with_owner(check: impl FnOnce(&mut Owner, Proposal)) {
         browser_io: None,
         browser_route: None,
         responses_route: None,
+        record_history: None,
+        history_pins: Default::default(),
         google_route: None,
         chat_route: None,
     };
@@ -444,6 +447,7 @@ fn saved_fixture_start_replays_but_cannot_retarget_https() {
         owner.operation.take().unwrap().worker.join().unwrap();
         let source = owner.state.view.source.as_ref().unwrap().id.clone();
         let text = "Fill the owned field";
+        let scope = crate::tests::owner_scope(owner);
         let digest = crate::agent_model::digest(&serde_json::json!({
             "source":source,"text":text,"origin":&owner.fixture.as_ref().unwrap().origin,"model":crate::https_profile::FIXTURE_MODEL
         }))
@@ -476,7 +480,7 @@ fn saved_fixture_start_replays_but_cannot_retarget_https() {
                 .unwrap(),
         );
         owner
-            .browser_start("saved-request", &source, text, None)
+            .browser_start("saved-request", &scope, &source, text, None)
             .unwrap();
         assert!(owner.operation.is_none());
         let profile = crate::https_profile::Config::Https {
@@ -495,12 +499,18 @@ fn saved_fixture_start_replays_but_cannot_retarget_https() {
         owner.browser_route = Some(profile);
         assert!(
             owner
-                .browser_start("saved-request", &source, text, None)
+                .browser_start("saved-request", &scope, &source, text, None)
                 .is_err()
         );
         assert!(
             owner
-                .browser_start("saved-request", &source, text, Some(&"0".repeat(64)))
+                .browser_start(
+                    "saved-request",
+                    &scope,
+                    &source,
+                    text,
+                    Some(&"0".repeat(64))
+                )
                 .is_err()
         );
         assert!(owner.operation.is_none());
@@ -518,7 +528,13 @@ fn saved_fixture_start_replays_but_cannot_retarget_https() {
         owner.disk.save(&owner.state).unwrap();
         owner.state = saved(owner);
         owner
-            .browser_start("saved-request", &source, text, Some(&binding.fingerprint))
+            .browser_start(
+                "saved-request",
+                &scope,
+                &source,
+                text,
+                Some(&binding.fingerprint),
+            )
             .unwrap();
         assert!(owner.operation.is_none());
         assert_eq!(saved(owner).view.runs.len(), 1);
@@ -538,7 +554,7 @@ fn saved_fixture_start_replays_but_cannot_retarget_https() {
         owner.responses_route = Some(profile);
         assert!(
             owner
-                .responses_start("other-request", &source, text, &"0".repeat(64))
+                .responses_start("other-request", &scope, &source, text, &"0".repeat(64))
                 .is_err()
         );
         assert!(owner.operation.is_none());
@@ -556,7 +572,7 @@ fn saved_fixture_start_replays_but_cannot_retarget_https() {
         owner.disk.save(&owner.state).unwrap();
         owner.state = saved(owner);
         owner
-            .responses_start("saved-request", &source, text, &binding.fingerprint)
+            .responses_start("saved-request", &scope, &source, text, &binding.fingerprint)
             .unwrap();
         assert!(owner.operation.is_none());
         owner.responses_route = None;
@@ -597,7 +613,7 @@ fn saved_fixture_start_replays_but_cannot_retarget_https() {
         owner.google_route = Some(profile);
         assert!(
             owner
-                .google_start("stale-google", &source, text, &"0".repeat(64))
+                .google_start("stale-google", &scope, &source, text, &"0".repeat(64))
                 .is_err()
         );
         assert!(owner.operation.is_none());
@@ -615,7 +631,7 @@ fn saved_fixture_start_replays_but_cannot_retarget_https() {
         owner.disk.save(&owner.state).unwrap();
         owner.state = saved(owner);
         owner
-            .google_start("saved-request", &source, text, &google.fingerprint)
+            .google_start("saved-request", &scope, &source, text, &google.fingerprint)
             .unwrap();
         assert!(owner.operation.is_none());
         owner.google_route = None;
@@ -654,7 +670,7 @@ fn saved_fixture_start_replays_but_cannot_retarget_https() {
         owner.chat_route = Some(profile);
         assert!(
             owner
-                .chat_start("stale-chat", &source, text, &"0".repeat(64))
+                .chat_start("stale-chat", &scope, &source, text, &"0".repeat(64))
                 .is_err()
         );
         assert!(owner.operation.is_none());
@@ -672,7 +688,7 @@ fn saved_fixture_start_replays_but_cannot_retarget_https() {
         owner.disk.save(&owner.state).unwrap();
         owner.state = saved(owner);
         owner
-            .chat_start("saved-request", &source, text, &chat.fingerprint)
+            .chat_start("saved-request", &scope, &source, text, &chat.fingerprint)
             .unwrap();
         assert!(owner.operation.is_none());
         owner.chat_route = None;
@@ -785,14 +801,7 @@ fn browser_review_budget_tracks_only_the_saved_pending_approval() {
                     .unwrap();
                 assert!(rx.recv().unwrap().is_ok());
             } else {
-                owner
-                    .command(
-                        "stop",
-                        Command::Stop {
-                            run: action.proposal.run,
-                        },
-                    )
-                    .unwrap();
+                owner.stop_run("stop", &action.proposal.run).unwrap();
                 assert!(rx.recv().unwrap().is_err());
             }
             assert!(budget.review_elapsed().is_none());
@@ -821,16 +830,7 @@ fn browser_owner_saves_approval_dispatch_and_observation_before_acknowledging() 
         cached(owner, proposal.clone(), &pending);
         assert!(owner.browser_decide(&pending.id, 2, true).is_err());
         assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
-        owner
-            .command(
-                "approve-1",
-                Command::BrowserDecision {
-                    action: pending.id.clone(),
-                    revision: 1,
-                    approve: true,
-                },
-            )
-            .unwrap();
+        owner.browser_decide(&pending.id, 1, true).unwrap();
         let approved = rx.recv().unwrap().unwrap();
         assert_eq!(approved.state, Phase::Approved);
         assert_eq!(saved(owner).browser_actions[&approved.id], approved);
@@ -1076,7 +1076,7 @@ fn browser_owner_stop_prevents_dispatch_and_preserves_uncertainty_after_dispatch
             } else {
                 pending.clone()
             };
-            owner.command("stop", Command::Stop { run }).unwrap();
+            owner.stop_run("stop", &run).unwrap();
             if !after_approval {
                 assert!(rx.recv().unwrap().is_err());
             }
@@ -1095,9 +1095,7 @@ fn browser_owner_stop_prevents_dispatch_and_preserves_uncertainty_after_dispatch
         owner.browser_decide(&pending.id, 1, true).unwrap();
         let approved = rx.recv().unwrap().unwrap();
         dispatch(owner, &approved).unwrap();
-        owner
-            .command("stop", Command::Stop { run: run.clone() })
-            .unwrap();
+        owner.stop_run("stop", &run).unwrap();
         assert_eq!(
             saved(owner).browser_actions[&pending.id].state,
             Phase::Dispatching

@@ -62,6 +62,27 @@ pub(super) struct Run {
     pub(super) output: metldr_conversation::Content,
     pub(super) error: Option<String>,
 }
+impl Run {
+    pub(super) fn validate(&self, valid_id: impl Fn(&str) -> bool) -> Result<()> {
+        self.output.validate()?;
+        if !valid_id(&self.id)
+            || !valid_id(&self.source)
+            || !matches!(
+                self.kind.as_str(),
+                "summary" | "answer" | "agent" | "browser"
+            )
+            || self.output.len() > TEXT_MAX
+            || self
+                .question
+                .as_ref()
+                .is_some_and(|s| s.is_empty() || s.len() > 1024)
+            || self.error.as_ref().is_some_and(|s| s.len() > 256)
+        {
+            return Err("invalid saved run".into());
+        }
+        Ok(())
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -102,17 +123,38 @@ pub(super) struct Request {
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum Command {
-    #[serde(skip_serializing)]
-    PiUiReply {
-        run: String,
-        request: String,
-        answer: crate::agent::ui::Answer,
+    Conversation {
+        scope: crate::history_io::Scope,
+        action: ConversationAction,
     },
-    #[serde(skip_serializing)]
-    CodexInputReply {
-        run: String,
-        request: String,
-        answer: crate::codex_input::Answer,
+    HistoryCurrent,
+    ConversationChange {
+        scope: crate::history_io::Scope,
+        change: crate::history::ConversationChange,
+    },
+    HistoryConversations {
+        scope: crate::history_io::Scope,
+        generation: String,
+        cursor: Option<crate::history::Cursor>,
+    },
+    HistoryRuns {
+        scope: crate::history_io::Scope,
+        generation: String,
+        cursor: Option<crate::history::Cursor>,
+    },
+    HistoryPin {
+        scope: crate::history_io::Scope,
+        generation: String,
+        kind: metldr_history_pages::DocumentKind,
+        document: String,
+        revision: metldr_history_pages::Counter,
+    },
+    HistoryPage {
+        identity: metldr_history_pages::Identity,
+        offset: u32,
+    },
+    HistoryRelease {
+        identity: metldr_history_pages::Identity,
     },
     #[serde(skip_serializing)]
     ProviderSave {
@@ -127,12 +169,6 @@ pub(super) enum Command {
         expected_revision: u64,
     },
     ProviderRefresh,
-    PageText {
-        source: String,
-        protocol: crate::provider_settings::Protocol,
-        fingerprint: String,
-        prompt: crate::page_text::Prompt,
-    },
     AgentSave {
         expected_revision: u64,
         profile: crate::agent_settings::Profile,
@@ -142,6 +178,47 @@ pub(super) enum Command {
         expected_revision: u64,
     },
     AgentRefresh,
+    BrowserReply {
+        call: u64,
+        run: String,
+        result: crate::browser_io::WireReply,
+    },
+    BrowserEvent {
+        run: String,
+        tab: i32,
+        session: Option<String>,
+        method: String,
+        params: serde_json::Value,
+    },
+    View,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+pub(super) enum ConversationAction {
+    Capture {
+        #[serde(deserialize_with = "Option::deserialize")]
+        expected_source: Option<String>,
+        page: Page,
+    },
+    #[serde(skip_serializing)]
+    PiUiReply {
+        run: String,
+        request: String,
+        answer: crate::agent::ui::Answer,
+    },
+    #[serde(skip_serializing)]
+    CodexInputReply {
+        run: String,
+        request: String,
+        answer: crate::codex_input::Answer,
+    },
+    PageText {
+        source: String,
+        protocol: crate::provider_settings::Protocol,
+        fingerprint: String,
+        prompt: crate::page_text::Prompt,
+    },
     GoogleTask {
         source: String,
         text: String,
@@ -162,31 +239,12 @@ pub(super) enum Command {
         text: String,
         fingerprint: Option<String>,
     },
-    BrowserReply {
-        call: u64,
-        run: String,
-        result: crate::browser_io::WireReply,
-    },
-    BrowserEvent {
-        run: String,
-        tab: i32,
-        session: Option<String>,
-        method: String,
-        params: serde_json::Value,
-    },
     BrowserDecision {
         action: String,
         revision: u64,
         approve: bool,
     },
-    View,
     Summarize {
-        page: Page,
-    },
-    Capture {
-        expected_store: String,
-        #[serde(deserialize_with = "Option::deserialize")]
-        expected_source: Option<String>,
         page: Page,
     },
     Ask {
@@ -279,21 +337,8 @@ impl Store {
         let mut ids = std::collections::BTreeSet::new();
         let mut previous_run = 0;
         for run in &view.runs {
-            run.output.validate()?;
-            if !valid_id(&run.id)
-                || !valid_id(&run.source)
-                || !ids.insert(&run.id)
-                || !matches!(
-                    run.kind.as_str(),
-                    "summary" | "answer" | "agent" | "browser"
-                )
-                || run.output.len() > TEXT_MAX
-                || run
-                    .question
-                    .as_ref()
-                    .is_some_and(|s| s.is_empty() || s.len() > 1024)
-                || run.error.as_ref().is_some_and(|s| s.len() > 256)
-            {
+            run.validate(valid_id)?;
+            if !ids.insert(&run.id) {
                 return Err("invalid saved run".into());
             }
             let number = run

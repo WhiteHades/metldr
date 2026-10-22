@@ -25,7 +25,20 @@ make companion
 
 The default output is `crates/metldr-companion/target/release/metldr-companion`. Cargo uses `CARGO_TARGET_DIR` instead when it is set. The checks write their local artifacts under this crate's `.tmp` directory.
 
-Pair the executable with an extension that implements metldr's native wire version 9. The default Vue frontend and complete extension packaging are still being migrated. Linux is the verified native platform. Windows and macOS installation and runtime checks remain open.
+Process checks that require companion executables are ignored by default. To run the five current startup checks on Linux, build the executable and provide its full path:
+
+```sh
+cargo build --locked --manifest-path crates/metldr-companion/Cargo.toml
+METLDR_STARTUP_BINARY="$PWD/crates/metldr-companion/target/debug/metldr-companion" \
+  cargo test --locked --manifest-path crates/metldr-companion/Cargo.toml \
+  history::startup_checks -- --ignored --skip actual_old_private_host_upgrades_and_cannot_reopen_new_history
+```
+
+Use the actual output path if `CARGO_TARGET_DIR` is set. The two older executable compatibility checks also require fixture binaries. `METLDR_CUTOVER_OLD_BINARY` must name the earlier wire 9 companion that writes saved schema 8. `METLDR_HISTORY_OLD_BINARY` must name the wire 10 companion that writes history format 10. Run those checks explicitly with `--ignored` only when the matching fixtures are available. A skipped compatibility check does not establish upgrade support.
+
+Pair the executable with an extension that implements metldr's native wire version 12. The remaining Vue page tools and complete extension packaging are still being migrated. Linux is the verified native platform. The history loader refuses to start on Windows and macOS until their directory durability and installation checks are complete.
+
+Conversations and complete saved results are stored in a local record database. Startup preserves the original snapshot backup before installing the new format. New chat creates an empty conversation, while selecting a saved conversation restores its page and results. Switching is unavailable during active work. A lost confirmation requires an explicit Retry using the same request rather than another creation. Viewing saved work does not change or replay an active task. History search covers the loaded conversation pages, and More loads the next page.
 
 To register the companion with Chrome:
 
@@ -60,4 +73,4 @@ If an action request ends before its browser command is queued, the companion re
 
 The three files in `test-tls` are synthetic fixture material. The loopback fixture profile embeds `ca.pem`; the server certificate and server key are used only by tests. Public provider requests use their configured trust settings. None of these files grants access to a live service.
 
-Browser button actions and single-select option choices use the existing saved approval and Chromiumoxide engine. Selection receipts report the exact option observed in the local DOM; they do not claim site persistence or form submission. Native button controls in the observed main document receive one bounded Chrome mouse gesture. Selection changes emit synthetic input and change events. Approval checks the task tab and exact document even when another tab is active. Changing tabs does not redirect the action. The button receipt uses the isolated automation world and reports an observed trusted click separately from site success. A page can move a control between the check and input. Missing or conflicting evidence after admission stays uncertain, and an effect may already have occurred. Button navigation does not adopt a new document grant. Saved schema 8 migrates older stores with their exact backups; pair the host and extension wire version 9 before use.
+Browser button actions and single-select option choices use the existing saved approval and Chromiumoxide engine. Selection receipts report the exact option observed in the local DOM; they do not claim site persistence or form submission. Native button controls in the observed main document receive one bounded Chrome mouse gesture. Selection changes emit synthetic input and change events. Approval checks the task tab and exact document even when another tab is active. Changing tabs does not redirect the action. The button receipt uses the isolated automation world and reports an observed trusted click separately from site success. A page can move a control between the check and input. Missing or conflicting evidence after admission stays uncertain, and an effect may already have occurred. Button navigation does not adopt a new document grant. Pair the host and extension wire version 12 before use.

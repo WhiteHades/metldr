@@ -297,6 +297,7 @@ impl Owner {
         Ok(true)
     }
     pub(crate) fn agent_save(&mut self, id: &str, expected: u64, profile: Profile) -> Result<()> {
+        self.refresh_saved_settings()?;
         profile.validate()?;
         let k = profile.kind();
         let digest = crate::agent_model::digest(
@@ -317,12 +318,13 @@ impl Owner {
             expected_revision: expected,
             digest,
         });
-        self.persist(next)?;
+        self.persist_settings(next)?;
         self.refresh_agent_runtime(k);
         self.publish()?;
         self.reply_view(Some(id), "view", true)
     }
     pub(crate) fn agent_remove(&mut self, id: &str, k: Kind, expected: u64) -> Result<()> {
+        self.refresh_saved_settings()?;
         let digest = crate::agent_model::digest(
             &json!({"op":"agent_remove","agent":k,"expected_revision":expected}),
         )?;
@@ -340,17 +342,18 @@ impl Owner {
             expected_revision: expected,
             digest,
         });
-        self.persist(next)?;
+        self.persist_settings(next)?;
         self.set_agent_profile(k, None);
         self.agent_runtime.states.remove(&k);
         self.publish()?;
         self.reply_view(Some(id), "view", true)
     }
     pub(crate) fn agent_refresh(&mut self, id: &str) -> Result<()> {
+        self.refresh_saved_settings()?;
         if self.operation.is_some() || self.settings.job.is_some() {
             return Err("agent settings are busy".into());
         }
-        self.persist(self.state.clone())?;
+        self.persist_settings(self.state.clone())?;
         self.agent_runtime.states.clear();
         for k in [Kind::Pi, Kind::Codex, Kind::Opencode] {
             self.refresh_agent_runtime(k)
@@ -412,6 +415,7 @@ impl Owner {
     }
 
     pub(crate) fn prepare_agent(&mut self, kind: Kind) -> Result<()> {
+        self.refresh_saved_settings()?;
         if matches!(
             self.state.agent_settings.slot(kind).selection,
             Selection::Configured { .. }
@@ -419,8 +423,16 @@ impl Owner {
             let previous = self.agent_runtime.states.get(&kind).copied();
             self.refresh_agent_runtime(kind);
             if previous != self.agent_runtime.states.get(&kind).copied() {
-                self.persist(self.state.clone())?;
-                self.publish()?;
+                if self.record_history.is_some() {
+                    let current = self.state.view.runs.last().map(|run| run.id.clone());
+                    self.record_change(|edit, scope| {
+                        let state = edit.refresh_view(scope, current.as_deref())?;
+                        Ok(((), Some(state)))
+                    })?;
+                } else {
+                    self.persist(self.state.clone())?;
+                    self.publish()?;
+                }
             }
         }
         Ok(())
@@ -446,6 +458,7 @@ mod checks {
             settings: Default::default(),
             agent_runtime: Default::default(),
             state,
+            browser_view: BTreeMap::new(),
             fixture: None,
             subscribers: Default::default(),
             operation: None,
@@ -462,6 +475,8 @@ mod checks {
             responses_route: None,
             google_route: None,
             chat_route: None,
+            record_history: None,
+            history_pins: Default::default(),
         }
     }
 

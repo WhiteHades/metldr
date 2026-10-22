@@ -104,6 +104,7 @@ pub(super) fn render(
     document: &Document,
     view: &ProviderSettingsView,
     generation: u64,
+    conversation_busy: bool,
 ) -> Result<(), JsValue> {
     PANEL.with(|slot| {
         if let Some(state) = slot.borrow().as_ref() {
@@ -174,7 +175,10 @@ pub(super) fn render(
     )?;
     let busy = PANEL.with(|slot| {
         slot.borrow().as_ref().is_some_and(|state| {
-            state.mutation_busy.get() || state.server_busy.get() || state.unknown.get()
+            state.mutation_busy.get()
+                || state.server_busy.get()
+                || state.unknown.get()
+                || conversation_busy
         })
     });
     for protocol in ProviderProtocol::ALL {
@@ -191,9 +195,9 @@ pub(super) fn render(
         }
     }
     let refresh_busy = PANEL.with(|slot| {
-        slot.borrow()
-            .as_ref()
-            .is_some_and(|state| state.mutation_busy.get() || state.server_busy.get())
+        slot.borrow().as_ref().is_some_and(|state| {
+            state.mutation_busy.get() || state.server_busy.get() || conversation_busy
+        })
     });
     if let Some(button) = document.get_element_by_id("provider-refresh") {
         if refresh_busy {
@@ -210,6 +214,14 @@ pub(super) fn mutation_epoch() -> u64 {
         slot.borrow()
             .as_ref()
             .map_or(0, |state| state.mutation_epoch.get())
+    })
+}
+
+pub(super) fn interlocked() -> bool {
+    PANEL.with(|slot| {
+        slot.borrow().as_ref().is_some_and(|state| {
+            state.mutation_busy.get() || state.server_busy.get() || state.unknown.get()
+        })
     })
 }
 
@@ -275,6 +287,9 @@ fn save_connection(state: Rc<SettingsPanel>, protocol: ProviderProtocol) {
     let Some((panel, flow, generation, store)) = context(&state) else {
         return;
     };
+    if crate::conversations::settings_blocked(&panel.borrow()) {
+        return;
+    }
     state.mutation_busy.set(true);
     state
         .mutation_epoch
@@ -330,6 +345,9 @@ fn remove_connection(state: Rc<SettingsPanel>, protocol: ProviderProtocol) {
     let Some((panel, flow, generation, store)) = context(&state) else {
         return;
     };
+    if crate::conversations::settings_blocked(&panel.borrow()) {
+        return;
+    }
     state.mutation_busy.set(true);
     state
         .mutation_epoch
@@ -411,6 +429,10 @@ fn refresh(state: Rc<SettingsPanel>) {
         state.mutation_busy.set(false);
         return;
     };
+    if crate::conversations::settings_blocked(&panel.borrow()) {
+        state.mutation_busy.set(false);
+        return;
+    }
     status(&state.document, "Refreshing provider connections.");
     update_controls(&state);
     spawn_local(async move {
@@ -530,7 +552,13 @@ async fn finish(
 }
 
 fn update_controls(state: &SettingsPanel) {
-    let disabled = state.mutation_busy.get() || state.server_busy.get() || state.unknown.get();
+    let disabled = state.mutation_busy.get()
+        || state.server_busy.get()
+        || state.unknown.get()
+        || state
+            .panel
+            .upgrade()
+            .is_some_and(|panel| crate::conversations::settings_blocked(&panel.borrow()));
     for protocol in ProviderProtocol::ALL {
         for action in ["save", "remove"] {
             if let Some(button) = state

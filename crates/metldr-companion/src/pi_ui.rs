@@ -101,6 +101,19 @@ impl State {
 
 impl Owner {
     pub(super) fn pi_ui_change(&mut self, run: &str, change: Change) -> Result<()> {
+        if self.record_history.is_some() {
+            let status = self.native_input_status(run, crate::agent_settings::Kind::Pi)?;
+            if status.is_none_or(|status| {
+                !self
+                    .state
+                    .view
+                    .runs
+                    .iter()
+                    .any(|record| record.id == run && record.status == status)
+            }) {
+                return Ok(());
+            }
+        }
         let active = self.operation.as_ref().is_some_and(|op| op.run == run)
             && self
                 .state
@@ -122,12 +135,7 @@ impl Owner {
                     dialog,
                     answer,
                 } => {
-                    if !next
-                        .view
-                        .runs
-                        .iter()
-                        .any(|record| record.id == run && record.status == Status::Running)
-                    {
+                    if !self.native_input_active(run, crate::agent_settings::Kind::Pi)? {
                         return Ok(());
                     }
                     let request = next.id()?;
@@ -158,9 +166,22 @@ impl Owner {
                     .display(display)?,
             }
             self.pi_ui.as_ref().ok_or("missing Pi UI state")?.public()?;
-            self.commit(next)
+            self.commit_native_input(run, crate::agent_settings::Kind::Pi, next)
         })();
         if let Err(error) = result {
+            if crate::native_input_records::fatal(error.as_ref()) {
+                return Err(error);
+            }
+            if self.record_history.is_some() {
+                self.pi_ui = previous;
+                self.stop_native_record_inputs(
+                    run,
+                    "Pi UI could not be presented",
+                    Some(&error.to_string()),
+                    true,
+                )?;
+                return Ok(());
+            }
             if let Some(op) = &self.operation {
                 op.stop.store(true, std::sync::atomic::Ordering::Release);
             }
@@ -185,17 +206,7 @@ impl Owner {
         request: &str,
         answer: Answer,
     ) -> Result<()> {
-        if self
-            .operation
-            .as_ref()
-            .is_none_or(|op| op.run != run || op.stop.load(std::sync::atomic::Ordering::Acquire))
-            || !self
-                .state
-                .view
-                .runs
-                .iter()
-                .any(|r| r.id == run && r.status == Status::Running)
-        {
+        if !self.native_input_active(run, crate::agent_settings::Kind::Pi)? {
             return Err("Pi UI run is no longer accepting replies".into());
         }
         let ui = self
@@ -219,12 +230,16 @@ impl Owner {
             .pending
             .remove(request)
             .ok_or("stale Pi UI request")?;
-        if let Err(error) = self.commit(self.state.clone()) {
-            self.pi_ui
-                .as_mut()
-                .ok_or("missing Pi UI state")?
-                .pending
-                .insert(request.into(), pending);
+        if let Err(error) =
+            self.commit_native_input(run, crate::agent_settings::Kind::Pi, self.state.clone())
+        {
+            if !crate::native_input_records::fatal(error.as_ref()) {
+                self.pi_ui
+                    .as_mut()
+                    .ok_or("missing Pi UI state")?
+                    .pending
+                    .insert(request.into(), pending);
+            }
             return Err(error);
         }
         match pending.answer.try_send(answer) {
@@ -253,6 +268,9 @@ impl Owner {
             return Ok(());
         };
         let run = op.run.clone();
+        if self.record_history.is_some() {
+            return self.stop_native_record_inputs(&run, "Pi controller disconnected", None, false);
+        }
         // Stop must be visible to the worker before its reply channels disappear.
         op.stop.store(true, std::sync::atomic::Ordering::Release);
         let mut next = self.state.clone();

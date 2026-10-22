@@ -79,9 +79,17 @@ pub(super) fn render(panel: &Panel) -> Result<(), JsValue> {
             doc,
             &view.provider_settings,
             panel.connection_generation,
+            crate::conversations::settings_blocked(panel),
         )?;
-        crate::agent_settings::render(doc, view, panel.connection_generation, panel.start_pending)?;
+        crate::agent_settings::render(
+            doc,
+            view,
+            panel.connection_generation,
+            panel.start_pending,
+            crate::conversations::settings_blocked(panel),
+        )?;
     }
+    crate::conversations::render(panel)?;
     composer::render(panel)?;
     let connection = if panel.connected {
         "Connected"
@@ -95,7 +103,9 @@ pub(super) fn render(panel: &Panel) -> Result<(), JsValue> {
             if panel.connected { "true" } else { "false" },
         )?;
     }
-    let busy = panel.start_pending || active_run(snapshot).is_some();
+    let busy = panel.start_pending
+        || active_run(snapshot).is_some()
+        || crate::conversations::start_blocked(panel);
     for (action, disabled) in [
         ("capture", busy || !panel.connected),
         ("stop", active_run(snapshot).is_none()),
@@ -110,6 +120,7 @@ pub(super) fn render(panel: &Panel) -> Result<(), JsValue> {
     }
     status(doc, &panel.status_message);
     results::render(doc, snapshot.as_ref())
+        .and_then(|()| crate::history_ui::render(panel))
         .and_then(|()| render_browser_actions(panel))
         .and_then(|()| render_native_permissions(panel))
         .and_then(|()| crate::pi_ui::render(panel))
