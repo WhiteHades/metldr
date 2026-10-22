@@ -8,6 +8,7 @@ mod stream;
 
 pub use client::Client;
 pub use metldr_browser_tools::Invocation;
+use metldr_conversation::TextEvent;
 use serde_json::{Value, json};
 use std::sync::atomic::AtomicBool;
 
@@ -53,7 +54,7 @@ impl Conversation {
     pub async fn next(
         &mut self,
         stop: &AtomicBool,
-        emit: impl FnMut(String) -> Result<()>,
+        emit: impl FnMut(TextEvent) -> Result<()>,
     ) -> Result<Option<Invocation>> {
         match self.phase {
             Phase::Ready => {}

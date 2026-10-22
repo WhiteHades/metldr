@@ -8,6 +8,7 @@ mod stream;
 
 pub use client::Client;
 pub use metldr_browser_tools::Invocation;
+pub use metldr_conversation::TextEvent;
 use serde_json::{Value, json};
 use std::sync::atomic::AtomicBool;
 
@@ -49,11 +50,11 @@ impl Client {
 
 impl Conversation {
     /// Returns a call only after successful response and HTTP completion.
-    /// A final answer returns `None`; its text has already reached `emit`.
+    /// A final answer returns `None`; its ordered text events have reached `emit`.
     pub async fn next(
         &mut self,
         stop: &AtomicBool,
-        emit: impl FnMut(String) -> Result<()>,
+        emit: impl FnMut(TextEvent) -> Result<()>,
     ) -> Result<Option<Invocation>> {
         match self.phase {
             Phase::Ready => {}

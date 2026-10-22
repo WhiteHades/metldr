@@ -238,7 +238,7 @@ fn verifies_public_messages_tls_and_does_not_follow_redirects() {
             let model=metldr_messages::Client::new(&endpoint,FIXTURE_MODEL,"dummy-owned-browser-fixture",if trusted {Some(include_bytes!("../../test-tls/ca.pem").as_slice())} else {None}).unwrap();
             let mut conversation=model.start(metldr_messages::Prompt {instruction:"inspect",title:"Title",url:"https://example.org/",text:"Text"}).unwrap();
             let mut text=String::new();
-            let result=conversation.next(&std::sync::atomic::AtomicBool::new(false),|chunk|{text.push_str(&chunk);Ok(())}).await;
+            let result=conversation.next(&std::sync::atomic::AtomicBool::new(false),|chunk|{if let metldr_conversation::TextEvent::Delta(chunk)=chunk {text.push_str(&chunk)};Ok(())}).await;
             match expected {
                 None=>{assert!(result.unwrap().is_none());assert_eq!(text,"TLS result");}
                 Some(expected)=>{let error=result.err().unwrap().to_string();assert_eq!(error,expected);assert!(!error.contains("dummy-owned-browser-fixture"));}

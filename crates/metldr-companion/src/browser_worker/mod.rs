@@ -200,7 +200,7 @@ impl Owner {
                         kind: "browser".into(),
                         question: Some(text.into()),
                         status: Status::Running,
-                        output: Default::default(),
+                        output: metldr_conversation::Content::native(),
                         error: None,
                     },
                     route.launch(digest),
@@ -225,7 +225,7 @@ impl Owner {
                 kind: "browser".into(),
                 question: Some(text.into()),
                 status: Status::Running,
-                output: Default::default(),
+                output: metldr_conversation::Content::native(),
                 error: None,
             });
             next.starts.insert(id.into(), run.clone());
@@ -288,25 +288,10 @@ async fn execute(
     client: &Client,
     stop: &AtomicBool,
 ) -> Result<()> {
-    let mut emitted = 0usize;
+    let mut output = crate::direct_output::DirectOutput::new(&client.run, &client.tx);
     for used in 0..=MAX_TOOL_CALLS {
         let invocation = protocol
-            .next(stop, MAX_TOOL_CALLS - used, |text| {
-                emitted = emitted.saturating_add(text.len());
-                if emitted > crate::TEXT_MAX {
-                    return Err("browser output exceeds bound".into());
-                }
-                if text.is_empty() {
-                    return Ok(());
-                }
-                client
-                    .tx
-                    .try_send(Event::Text {
-                        run: client.run.clone(),
-                        change: metldr_conversation::Change::FlatAppend(text),
-                    })
-                    .map_err(|_| "owner output channel unavailable".into())
-            })
+            .next(stop, MAX_TOOL_CALLS - used, |event| output.accept(event))
             .await?;
         let Some(invocation) = invocation else {
             return Ok(());

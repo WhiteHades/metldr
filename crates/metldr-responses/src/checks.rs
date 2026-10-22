@@ -76,8 +76,10 @@ fn replay(events: &[Value], chunk_size: usize) -> Result<(Turn, String)> {
     for chunk in stream.as_bytes().chunks(chunk_size) {
         for &byte in chunk {
             if let Some((event, data)) = sse.byte(byte)? {
-                if let Some(delta) = state.frame(&event, &data)? {
-                    text.push_str(&delta);
+                for event in state.frame(&event, &data)? {
+                    if let TextEvent::Delta(delta) = event {
+                        text.push_str(&delta);
+                    }
                 }
             }
         }
@@ -183,6 +185,117 @@ fn interleaved_parts_follow_output_order() {
     let (turn, rendered) = replay(&interleaved, 1).unwrap();
     assert_eq!(turn.text, "ABXY");
     assert_eq!(rendered, turn.text);
+}
+
+#[test]
+fn emits_completed_messages_before_an_interrupted_current_message() {
+    let mut state = stream::State::default();
+    let mut sequence = 0;
+    let mut send = |state: &mut stream::State, event: Value| {
+        let mut event = event;
+        event["sequence_number"] = json!(sequence);
+        sequence += 1;
+        state
+            .frame(event["type"].as_str().unwrap(), &event.to_string())
+            .unwrap()
+    };
+    let message = |id: &str, text: &str, index| {
+        let item = json!({"type":"message","id":id,"role":"assistant",
+            "status":"completed","content":[{"type":"output_text","text":text,"annotations":[]}]});
+        let mut initial = item.clone();
+        initial["status"] = json!("in_progress");
+        initial["content"] = json!([]);
+        (index, item, initial)
+    };
+    let _ = send(
+        &mut state,
+        json!({"type":"response.created","response":{"id":"resp_owned",
+            "object":"response","model":"resolved-model-2026","store":false,"status":"in_progress"}}),
+    );
+    let (at0, item0, initial0) = message("msg_0", "Earlier", 0);
+    let (at1, item1, initial1) = message("msg_1", " completed", 1);
+    assert!(
+        send(
+            &mut state,
+            json!({"type":"response.output_item.added","output_index":at0,"item":initial0}),
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        send(
+            &mut state,
+            json!({"type":"response.output_text.delta","output_index":at0,
+            "item_id":"msg_0","content_index":0,"delta":"Earlier"}),
+        ),
+        [TextEvent::Delta("Earlier".into())]
+    );
+    assert!(
+        send(
+            &mut state,
+            json!({"type":"response.output_text.done","output_index":at0,
+            "item_id":"msg_0","content_index":0,"text":"Earlier"}),
+        )
+        .is_empty()
+    );
+    assert!(
+        send(
+            &mut state,
+            json!({"type":"response.output_item.added","output_index":at1,"item":initial1}),
+        )
+        .is_empty()
+    );
+    assert!(
+        send(
+            &mut state,
+            json!({"type":"response.output_text.delta","output_index":at1,
+            "item_id":"msg_1","content_index":0,"delta":" completed"}),
+        )
+        .is_empty()
+    );
+    assert!(
+        send(
+            &mut state,
+            json!({"type":"response.output_text.done","output_index":at1,
+            "item_id":"msg_1","content_index":0,"text":" completed"}),
+        )
+        .is_empty()
+    );
+    assert!(
+        send(
+            &mut state,
+            json!({"type":"response.output_item.done","output_index":at1,"item":item1}),
+        )
+        .is_empty()
+    );
+    let emitted = send(
+        &mut state,
+        json!({"type":"response.output_item.done","output_index":at0,"item":item0}),
+    );
+    assert_eq!(
+        emitted,
+        [
+            TextEvent::Final("Earlier".into()),
+            TextEvent::Delta(" completed".into()),
+            TextEvent::Final(" completed".into())
+        ]
+    );
+
+    let (_, _, initial2) = message("msg_2", "partial", 2);
+    assert!(
+        send(
+            &mut state,
+            json!({"type":"response.output_item.added","output_index":2,"item":initial2}),
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        send(
+            &mut state,
+            json!({"type":"response.output_text.delta","output_index":2,
+                "item_id":"msg_2","content_index":0,"delta":"partial"}),
+        ),
+        [TextEvent::Delta("partial".into())]
+    );
 }
 
 #[test]

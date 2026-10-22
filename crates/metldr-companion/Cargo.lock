@@ -958,6 +958,7 @@ name = "metldr-chat-completions"
 version = "0.1.0"
 dependencies = [
  "metldr-browser-tools",
+ "metldr-conversation",
  "reqwest",
  "serde_json",
  "tokio",
@@ -1014,6 +1015,7 @@ name = "metldr-google-interactions"
 version = "0.1.0"
 dependencies = [
  "metldr-browser-tools",
+ "metldr-conversation",
  "reqwest",
  "serde_json",
  "tokio",
@@ -1032,6 +1034,7 @@ name = "metldr-messages"
 version = "0.1.0"
 dependencies = [
  "metldr-browser-tools",
+ "metldr-conversation",
  "reqwest",
  "serde_json",
  "tokio",
@@ -1069,6 +1072,7 @@ name = "metldr-responses"
 version = "0.1.0"
 dependencies = [
  "metldr-browser-tools",
+ "metldr-conversation",
  "reqwest",
  "serde_json",
  "tokio",

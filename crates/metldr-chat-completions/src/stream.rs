@@ -1,4 +1,4 @@
-use crate::{Result, Usage, reasoning};
+use crate::{Result, TextEvent, Usage, reasoning};
 use metldr_browser_tools::{Invocation, decode_call};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
@@ -39,7 +39,7 @@ pub(super) struct Turn {
 }
 
 impl State {
-    pub fn frame(&mut self, event: &str, data: &str) -> Result<Option<String>> {
+    pub fn frame(&mut self, event: &str, data: &str) -> Result<Option<TextEvent>> {
         if !matches!(event, "" | "message") || self.done {
             return Err("invalid Chat stream event".into());
         }
@@ -185,7 +185,7 @@ impl State {
             .get("content")
             .and_then(Value::as_str)
             .filter(|s| !s.is_empty())
-            .map(str::to_owned))
+            .map(|text| TextEvent::Delta(text.to_owned())))
     }
 
     fn add_call_delta(&mut self, item: &Value) -> Result<()> {

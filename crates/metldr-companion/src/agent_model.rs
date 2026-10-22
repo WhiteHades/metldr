@@ -293,9 +293,6 @@ fn validate_text_run(run: &crate::model::Run) -> Result<()> {
     if !valid {
         return Err("invalid text task record".into());
     }
-    if run.output.is_native() {
-        return Err("text task contains native output".into());
-    }
     Ok(())
 }
 
@@ -320,16 +317,17 @@ mod text_checks {
     }
 
     #[test]
-    fn text_launch_accepts_only_flat_summary_or_answer() {
-        assert!(validate_text_run(&run("summary", None, false)).is_ok());
-        assert!(validate_text_run(&run("answer", Some("Question?"), false)).is_ok());
-        for invalid in [
-            run("summary", Some("Question?"), false),
-            run("answer", None, false),
-            run("answer", Some("  "), false),
-            run("answer", Some("Question?"), true),
-        ] {
-            assert!(validate_text_run(&invalid).is_err());
+    fn text_launch_accepts_flat_and_native_summary_or_answer() {
+        for native in [false, true] {
+            assert!(validate_text_run(&run("summary", None, native)).is_ok());
+            assert!(validate_text_run(&run("answer", Some("Question?"), native)).is_ok());
+            for invalid in [
+                run("summary", Some("Question?"), native),
+                run("answer", None, native),
+                run("answer", Some("  "), native),
+            ] {
+                assert!(validate_text_run(&invalid).is_err());
+            }
         }
     }
 }

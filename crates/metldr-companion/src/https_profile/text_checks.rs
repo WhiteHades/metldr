@@ -133,7 +133,7 @@ async fn call(
     protocol: Protocol,
     endpoint: &str,
     stop: &AtomicBool,
-    emit: impl FnMut(String) -> crate::Result<()>,
+    emit: impl FnMut(metldr_conversation::TextEvent) -> crate::Result<()>,
 ) -> crate::Result<()> {
     match protocol {
         Protocol::Messages => {
@@ -211,13 +211,18 @@ fn all_native_text_clients_accept_only_complete_tool_free_responses_over_tls() {
         ] {
             let (endpoint, server) = text_server(&frames(protocol, false, true), protocol);
             let mut output = String::new();
+            let mut finals = Vec::new();
             call(protocol, &endpoint, &AtomicBool::new(false), |part| {
-                output.push_str(&part);
+                match part {
+                    metldr_conversation::TextEvent::Delta(part) => output.push_str(&part),
+                    metldr_conversation::TextEvent::Final(part) => finals.push(part),
+                }
                 Ok(())
             })
             .await
             .unwrap();
             assert_eq!(output, OUTPUT);
+            assert_eq!(finals, [OUTPUT]);
             let requests = server.join().unwrap();
             assert_eq!(requests.len(), 1);
             assert_request(protocol, &requests[0]);
@@ -265,14 +270,25 @@ fn all_native_text_clients_accept_only_complete_tool_free_responses_over_tls() {
             };
             let (endpoint, server) = text_server(&frames(protocol, false, false), protocol);
             let mut partial = String::new();
+            let mut finals = Vec::new();
             let error = call(protocol, &endpoint, &AtomicBool::new(false), |part| {
-                partial.push_str(&part);
+                match part {
+                    metldr_conversation::TextEvent::Delta(part) => partial.push_str(&part),
+                    metldr_conversation::TextEvent::Final(part) => finals.push(part),
+                }
                 Ok(())
             })
             .await
             .unwrap_err();
             assert_eq!(error.to_string(), incomplete);
             assert_eq!(partial, OUTPUT);
+            // Only the Responses fixture closes its message before omitting the response terminal.
+            let expected_finals = if matches!(protocol, Protocol::Responses) {
+                vec![OUTPUT]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(finals, expected_finals);
             assert_eq!(server.join().unwrap().len(), 1);
 
             let (endpoint, server) =
@@ -287,7 +303,9 @@ fn all_native_text_clients_accept_only_complete_tool_free_responses_over_tls() {
             let (endpoint, server) = text_server(&oversized, protocol);
             let mut output = String::new();
             let error = call(protocol, &endpoint, &AtomicBool::new(false), |part| {
-                output.push_str(&part);
+                if let metldr_conversation::TextEvent::Delta(part) = part {
+                    output.push_str(&part);
+                }
                 Ok(())
             })
             .await

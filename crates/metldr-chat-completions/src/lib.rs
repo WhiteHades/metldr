@@ -12,6 +12,7 @@ mod stream_checks;
 pub use client::Client;
 use metldr_browser_tools::Call;
 pub use metldr_browser_tools::Invocation;
+pub use metldr_conversation::TextEvent;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -75,7 +76,7 @@ impl Conversation {
         &mut self,
         stop: &AtomicBool,
         remaining_calls: usize,
-        emit: impl FnMut(String) -> Result<()>,
+        emit: impl FnMut(TextEvent) -> Result<()>,
     ) -> Result<Option<Invocation>> {
         if let Err(error) = client::cancelled(stop) {
             self.phase = Phase::Closed;

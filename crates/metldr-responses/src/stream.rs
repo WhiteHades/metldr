@@ -1,5 +1,6 @@
 use crate::{Invocation, Result};
 use metldr_browser_tools::decode_call;
+use metldr_conversation::TextEvent;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -73,7 +74,7 @@ impl State {
         Ok(item)
     }
 
-    pub fn frame(&mut self, event: &str, data: &str) -> Result<Option<String>> {
+    pub fn frame(&mut self, event: &str, data: &str) -> Result<Vec<TextEvent>> {
         if self.terminal.is_some() {
             return Err("Responses event after completion".into());
         }
@@ -103,7 +104,7 @@ impl State {
                 return Err("invalid Responses creation envelope".into());
             }
             self.identity = Some((identity(response, "id")?, identity(response, "model")?));
-            return Ok(None);
+            return Ok(Vec::new());
         }
         if self.identity.is_none() {
             return Err("Responses event before creation".into());
@@ -279,29 +280,41 @@ impl State {
         Ok(self.emit_ready())
     }
 
-    fn emit_ready(&mut self) -> Option<String> {
-        let mut output = String::new();
+    fn emit_ready(&mut self) -> Vec<TextEvent> {
+        let mut output = Vec::new();
         while let Some(item) = self.items.get_mut(&self.emit_item) {
             if item.initial["type"] != "message" {
+                if item.done.is_none() {
+                    break;
+                }
                 self.emit_item += 1;
                 self.emit_part = 0;
                 continue;
             }
             if let Some(text) = item.text.get_mut(&self.emit_part) {
-                output.push_str(&text.value[text.emitted..]);
+                if text.emitted < text.value.len() {
+                    output.push(TextEvent::Delta(text.value[text.emitted..].to_owned()));
+                }
                 text.emitted = text.value.len();
                 if !text.done {
                     break;
                 }
                 self.emit_part += 1;
             } else if item.done.is_some() && self.emit_part >= item.text.len() as u64 {
+                let snapshot = item.text.values().fold(String::new(), |mut output, part| {
+                    output.push_str(&part.value);
+                    output
+                });
+                if !snapshot.is_empty() {
+                    output.push(TextEvent::Final(snapshot));
+                }
                 self.emit_item += 1;
                 self.emit_part = 0;
             } else {
                 break;
             }
         }
-        (!output.is_empty()).then_some(output)
+        output
     }
 
     pub fn finish(self) -> Result<Turn> {

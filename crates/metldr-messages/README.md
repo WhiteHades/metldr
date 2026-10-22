@@ -5,7 +5,7 @@ with metldr's browser tool definitions. One browser conversation owns its reques
 result. The application owns browser permissions, approval and action execution.
 
 ```no_run
-use metldr_messages::{Client, Prompt, Result};
+use metldr_messages::{Client, Prompt, Result, TextEvent};
 use std::sync::atomic::AtomicBool;
 
 # async fn example() -> Result<()> {
@@ -22,8 +22,8 @@ let mut conversation = Client::new(
     text: "Page text supplied by the application",
 })?;
 let stop = AtomicBool::new(false);
-if let Some(invocation) = conversation.next(&stop, |text| {
-    print!("{text}");
+if let Some(invocation) = conversation.next(&stop, |event| {
+    if let TextEvent::Delta(text) = event { print!("{text}"); }
     Ok(())
 }).await? {
     println!("Application must handle tool call {}", invocation.id);
@@ -36,21 +36,26 @@ For a text response, use `Client::text` instead of starting a browser conversati
 The caller supplies system instructions and input separately.
 
 ```no_run
-use metldr_messages::{Client, Result};
+use metldr_messages::{Client, Result, TextEvent};
 use std::sync::atomic::AtomicBool;
 
 # async fn example() -> Result<()> {
 let client = Client::new("https://api.anthropic.com/v1/messages", "your-supported-model-id",
     &std::env::var("ANTHROPIC_API_KEY")?, None)?;
 client.text("Answer using the supplied source.", "The report lists 17 units.",
-    &AtomicBool::new(false), |text| { print!("{text}"); Ok(()) }).await?;
+    &AtomicBool::new(false), |event| {
+        if let TextEvent::Delta(text) = event { print!("{text}"); }
+        Ok(())
+    }).await?;
 # Ok(())
 # }
 ```
 
 The text request includes no tool definitions or browser policy. It rejects tool
 calls, empty answers and incomplete streams. Partial text can arrive before an
-error. The caller owns source selection, history and the final run status.
+error. A successful nonempty response ends with one `Final` snapshot after the
+stream passes validation. The caller owns source selection, history and the
+final run status.
 The same transport bounds and cancellation behavior apply to both paths.
 
 After approving and executing a returned browser invocation, submit the actual result
@@ -70,7 +75,9 @@ preserved; the client does not enable thinking or verify its signatures.
 See the official [streaming guide](https://platform.claude.com/docs/en/build-with-claude/streaming)
 and [tool continuation guide](https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls).
 
-Text arrives incrementally. A tool call requires complete content blocks,
+Text arrives as incremental `Delta` events. A successful nonempty response ends
+with one `Final` snapshot after complete validation. A tool call requires
+complete content blocks,
 consistent successful stop reason, `message_stop` and clean HTTP completion.
 One browser call is accepted per turn. Unsupported content, incomplete output,
 refusal, malformed streams and provider errors release no call. Partial text

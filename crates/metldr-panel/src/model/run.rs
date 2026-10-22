@@ -1,4 +1,4 @@
-use metldr_conversation::{Display, Projection};
+use metldr_conversation::{Display, ProjectedEntry, Projection};
 
 use super::{
     ActivityOutcome, ActivityPhase, FlowError, MAX_ACTIVITY, MAX_PAGE_TEXT, RunId, RunKind,
@@ -62,7 +62,7 @@ impl WireRun {
                     RunRoute::Pi { .. } | RunRoute::Codex { .. } | RunRoute::OpenCode { .. }
                 ))
             || matches!(&self.route, RunRoute::Text { .. } if !self.activity.is_empty()
-            || !self.conversation.is_empty()
+            || self.conversation.iter().any(|entry| matches!(entry, ProjectedEntry::Tool { .. }))
             || match self.kind {
                 RunKind::Summary => self.question.is_some(),
                 RunKind::Answer => self.question.as_ref().is_none_or(|question| question.trim().is_empty()),

@@ -1,5 +1,6 @@
 use super::*;
 use metldr_browser_tools::Call;
+use metldr_conversation::TextEvent;
 use serde_json::json;
 
 fn events(tool: bool) -> Vec<Value> {
@@ -28,7 +29,7 @@ fn events(tool: bool) -> Vec<Value> {
     v
 }
 
-fn replay(v: &[Value], size: usize) -> Result<(stream::Turn, String)> {
+fn replay(v: &[Value], size: usize) -> Result<(stream::Turn, String, Vec<TextEvent>)> {
     let mut wire = String::new();
     for value in v {
         wire.push_str(&format!(
@@ -39,17 +40,21 @@ fn replay(v: &[Value], size: usize) -> Result<(stream::Turn, String)> {
     let mut sse = sse::Sse::default();
     let mut state = stream::State::default();
     let mut text = String::new();
+    let mut events = Vec::new();
     for chunk in wire.as_bytes().chunks(size) {
         for &byte in chunk {
             if let Some((event, data)) = sse.byte(byte)? {
-                if let Some(delta) = state.frame(&event, &data)? {
-                    text.push_str(&delta);
+                for event in state.frame(&event, &data)? {
+                    if let TextEvent::Delta(delta) = &event {
+                        text.push_str(delta);
+                    }
+                    events.push(event);
                 }
             }
         }
     }
     sse.finish()?;
-    Ok((state.finish()?, text))
+    Ok((state.finish()?, text, events))
 }
 
 fn client() -> Client {
@@ -73,8 +78,19 @@ fn prompt() -> Prompt<'static> {
 #[test]
 fn streams_unicode_and_retains_complete_stateless_steps() {
     for size in [1, 2, 7, 127, 4096] {
-        let (turn, text) = replay(&events(true), size).unwrap();
+        let (turn, text, emitted) = replay(&events(true), size).unwrap();
         assert_eq!(text, "North 🌍 ready");
+        assert_eq!(
+            emitted
+                .iter()
+                .filter(|event| matches!(event, TextEvent::Final(_)))
+                .count(),
+            1
+        );
+        assert_eq!(
+            emitted.last(),
+            Some(&TextEvent::Final("North 🌍 ready".into()))
+        );
         assert_eq!(turn.text, text);
         assert_eq!(turn.call.as_ref().unwrap().call, Call::Observe);
         let mut conversation = client().start(prompt()).unwrap();
@@ -96,7 +112,7 @@ fn streams_unicode_and_retains_complete_stateless_steps() {
             input[4],
             json!({"type":"function_result","name":"observe_page","call_id":"owned-call","result":[{"type":"text","text":result.to_string()}]})
         );
-        let (turn, text) = replay(&events(false), size).unwrap();
+        let (turn, text, _) = replay(&events(false), size).unwrap();
         assert!(turn.call.is_none());
         assert_eq!(text, turn.text);
     }
@@ -166,9 +182,50 @@ fn interleaved_model_steps_follow_step_order() {
         v.push(json!({"event_type":"step.stop","index":index}));
     }
     v.push(json!({"event_type":"interaction.completed","interaction":{"id":"owned-turn","status":"completed"}}));
-    let (turn, text) = replay(&v, 1).unwrap();
+    let (turn, text, emitted) = replay(&v, 1).unwrap();
     assert_eq!(text, "ABXY");
+    let snapshots: Vec<_> = emitted
+        .iter()
+        .filter_map(|event| match event {
+            TextEvent::Final(text) => Some(text.as_str()),
+            TextEvent::Delta(_) => None,
+        })
+        .collect();
+    assert_eq!(snapshots, ["AB", "XY"]);
     assert_eq!(turn.text, text);
+}
+
+#[test]
+fn closes_completed_output_before_leaving_later_interrupted_output_partial() {
+    let input = [
+        json!({"event_type":"interaction.created","interaction":{"id":"owned-turn"}}),
+        json!({"event_type":"step.start","index":0,"step":{"type":"thought"}}),
+        json!({"event_type":"step.start","index":1,"step":{"type":"function_call","id":"owned-call","name":"observe_page","arguments":{}}}),
+        json!({"event_type":"step.start","index":2,"step":{"type":"model_output","content":[]}}),
+        json!({"event_type":"step.delta","index":2,"delta":{"type":"text","text":"first"}}),
+        json!({"event_type":"step.stop","index":2}),
+        json!({"event_type":"step.start","index":3,"step":{"type":"model_output","content":[]}}),
+        json!({"event_type":"step.delta","index":3,"delta":{"type":"text","text":"partial"}}),
+        json!({"event_type":"step.stop","index":0}),
+        json!({"event_type":"step.stop","index":1}),
+    ];
+    let mut state = stream::State::default();
+    let mut emitted = Vec::new();
+    for value in input {
+        emitted.extend(
+            state
+                .frame(value["event_type"].as_str().unwrap(), &value.to_string())
+                .unwrap(),
+        );
+    }
+    assert_eq!(
+        emitted,
+        [
+            TextEvent::Delta("first".into()),
+            TextEvent::Final("first".into()),
+            TextEvent::Delta("partial".into()),
+        ]
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

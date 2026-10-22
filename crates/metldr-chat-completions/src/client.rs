@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::{Prompt, Result, sse, stream};
+use crate::{Prompt, Result, TextEvent, sse, stream};
 use metldr_browser_tools::{BROWSER_POLICY, definitions};
 use stream::Turn;
 
@@ -75,7 +75,7 @@ impl Client {
         system: &str,
         input: &str,
         stop: &AtomicBool,
-        emit: impl FnMut(String) -> Result<()>,
+        emit: impl FnMut(TextEvent) -> Result<()>,
     ) -> Result<()> {
         let turn = self
             .send(&self.text_request(system, input), stop, emit)
@@ -114,7 +114,7 @@ impl Client {
         &self,
         request: &Value,
         stop: &AtomicBool,
-        mut emit: impl FnMut(String) -> Result<()>,
+        mut emit: impl FnMut(TextEvent) -> Result<()>,
     ) -> Result<Turn> {
         cancelled(stop)?;
         let body = serde_json::to_vec(request)?;
@@ -164,9 +164,11 @@ impl Client {
             for byte in chunk {
                 if let Some((event, data)) = sse.byte(byte)? {
                     cancelled(stop)?;
-                    if let Some(text) = state.frame(&event, &data)? {
-                        rendered.push_str(&text);
-                        emit(text)?;
+                    if let Some(event) = state.frame(&event, &data)? {
+                        if let TextEvent::Delta(text) = &event {
+                            rendered.push_str(text);
+                        }
+                        emit(event)?;
                     }
                 }
             }
@@ -176,6 +178,9 @@ impl Client {
         let turn = state.finish()?;
         if rendered != turn.text {
             return Err("Chat streamed text differs from completed output".into());
+        }
+        if !turn.text.is_empty() {
+            emit(TextEvent::Final(turn.text.clone()))?;
         }
         Ok(turn)
     }

@@ -1,5 +1,6 @@
 use crate::{Invocation, Result};
 use metldr_browser_tools::decode_call;
+use metldr_conversation::TextEvent;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -58,7 +59,7 @@ fn parts_text(value: &Value) -> Result<String> {
 }
 
 impl State {
-    pub fn frame(&mut self, event: &str, data: &str) -> Result<Option<String>> {
+    pub fn frame(&mut self, event: &str, data: &str) -> Result<Vec<TextEvent>> {
         self.events += 1;
         if self.events > 4096 {
             return Err("Google event count exceeds bound".into());
@@ -68,7 +69,7 @@ impl State {
                 return Err("unexpected Google DONE trailer".into());
             }
             self.done = true;
-            return Ok(None);
+            return Ok(Vec::new());
         }
         if self.terminal.is_some() {
             return Err("Google event after completion".into());
@@ -94,7 +95,7 @@ impl State {
                 return Err("invalid Google creation status".into());
             }
             self.identity = Some((identity(interaction, "id")?, model));
-            return Ok(None);
+            return Ok(Vec::new());
         }
         if self.identity.is_none() {
             return Err("Google event before creation".into());
@@ -336,19 +337,26 @@ impl State {
         Ok(())
     }
 
-    fn emit_ready(&mut self) -> Option<String> {
-        let mut text = String::new();
+    fn emit_ready(&mut self) -> Vec<TextEvent> {
+        let mut events = Vec::new();
         while let Some(step) = self.steps.get_mut(&self.cursor) {
             if step.value["type"] == "model_output" {
-                text.push_str(&step.text[step.emitted..]);
+                if step.emitted < step.text.len() {
+                    events.push(TextEvent::Delta(step.text[step.emitted..].to_owned()));
+                }
                 step.emitted = step.text.len();
                 if !step.closed {
                     break;
                 }
+                if !step.text.is_empty() {
+                    events.push(TextEvent::Final(step.text.clone()));
+                }
+            } else if !step.closed {
+                break;
             }
             self.cursor += 1;
         }
-        (!text.is_empty()).then_some(text)
+        events
     }
 
     pub fn finish(self) -> Result<Turn> {

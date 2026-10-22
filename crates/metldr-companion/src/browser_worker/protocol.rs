@@ -81,7 +81,7 @@ impl Protocol {
         &mut self,
         stop: &AtomicBool,
         remaining_calls: usize,
-        emit: impl FnMut(String) -> Result<()>,
+        emit: impl FnMut(metldr_conversation::TextEvent) -> Result<()>,
     ) -> Result<Option<Invocation>> {
         let invocation = match self {
             Self::Messages { conversation } => conversation.next(stop, emit).await,

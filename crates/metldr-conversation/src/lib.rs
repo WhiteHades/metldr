@@ -8,6 +8,13 @@ pub use content::{Change, Completion, Content, Ending};
 pub use key::{MessageKey, ToolId};
 pub use projection::{Display, EntryRef, ProjectedEntry, Projection};
 
+/// Ordered assistant text. A final snapshot closes the current message.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TextEvent {
+    Delta(String),
+    Final(String),
+}
+
 const MAX_MESSAGES: usize = 64;
 const MAX_TOOLS: usize = 64;
 const MAX_ENTRIES: usize = 128;

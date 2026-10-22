@@ -138,7 +138,7 @@ impl Owner {
                     .into(),
                     question: prompt.question().map(str::to_owned),
                     status: Status::Running,
-                    output: Default::default(),
+                    output: metldr_conversation::Content::native(),
                     error: None,
                 };
                 edit.admit(
@@ -180,7 +180,7 @@ impl Owner {
                 .into(),
                 question: prompt.question().map(str::to_owned),
                 status: Status::Running,
-                output: Default::default(),
+                output: metldr_conversation::Content::native(),
                 error: None,
             };
             next.view.runs.push(record);
@@ -209,13 +209,8 @@ impl Owner {
                     .enable_all()
                     .build()?;
                 runtime.block_on(async {
-                    let emit = |text: String| -> Result<()> {
-                        tx.try_send(Event::Text {
-                            run: worker_run.clone(),
-                            change: metldr_conversation::Change::FlatAppend(text),
-                        })
-                        .map_err(|_| "owner output channel unavailable".into())
-                    };
+                    let mut output = crate::direct_output::DirectOutput::new(&worker_run, &tx);
+                    let emit = |event| output.accept(event);
                     match protocol {
                         Protocol::Messages => {
                             profile

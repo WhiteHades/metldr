@@ -135,7 +135,9 @@ fn consume(profile: &Profile) {
     assert!(
         runtime
             .block_on(conversation.next(&stop, |chunk| {
-                output.push_str(&chunk);
+                if let metldr_conversation::TextEvent::Delta(chunk) = chunk {
+                    output.push_str(&chunk);
+                }
                 Ok(())
             }))
             .unwrap()

@@ -366,8 +366,8 @@ impl Edit<'_> {
             || run.id != format!("{}:{number}", self.profile.store)
             || run.status != Status::Running
             || run.error.is_some()
-            || run.output.len() != 0
-            || run.output.is_native()
+            || (run.output != Default::default()
+                && run.output != metldr_conversation::Content::native())
             || launch.input_digest().is_none()
         {
             return Err("invalid new run admission".into());

@@ -1,7 +1,7 @@
-use crate::stream::State;
+use crate::{TextEvent, stream::State};
 use serde_json::{Value, json};
 
-fn frame(state: &mut State, value: Value) -> Option<String> {
+fn frame(state: &mut State, value: Value) -> Option<TextEvent> {
     if value.as_str() == Some("[DONE]") {
         state.frame("", "[DONE]").unwrap()
     } else {
@@ -33,9 +33,12 @@ fn ordered_calls_wait_for_done_and_keep_usage() {
     ];
     let mut incomplete = State::default();
     let mut state = State::default();
+    let mut text_events = Vec::new();
     for part in parts {
         frame(&mut incomplete, part.clone());
-        frame(&mut state, part);
+        if let Some(event) = frame(&mut state, part) {
+            text_events.push(event);
+        }
     }
     assert_eq!(
         incomplete.finish().err().unwrap().to_string(),
@@ -44,6 +47,10 @@ fn ordered_calls_wait_for_done_and_keep_usage() {
     frame(&mut state, json!("[DONE]"));
     let turn = state.finish().unwrap();
     assert_eq!(turn.calls.len(), 2);
+    assert_eq!(
+        text_events,
+        [TextEvent::Delta("o".into()), TextEvent::Delta("k".into())]
+    );
     assert_eq!(turn.calls[0].id, "call-a");
     assert_eq!(turn.calls[1].id, "call-b");
     assert_eq!(turn.text, "ok");

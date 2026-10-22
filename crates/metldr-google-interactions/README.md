@@ -6,6 +6,7 @@ tool result. The application owns browser permissions, approvals and actions.
 
 ```no_run
 use metldr_google_interactions::{Client, Prompt, Result};
+use metldr_conversation::TextEvent;
 use std::sync::atomic::AtomicBool;
 
 # async fn example() -> Result<()> {
@@ -22,8 +23,10 @@ let mut conversation = Client::new(
     text: "Page text supplied by the application",
 })?;
 let stop = AtomicBool::new(false);
-let invocation = conversation.next(&stop, |text| {
-    print!("{text}");
+let invocation = conversation.next(&stop, |event| {
+    if let TextEvent::Delta(text) = event {
+        print!("{text}");
+    }
     Ok(())
 }).await?;
 if let Some(invocation) = invocation {
@@ -38,13 +41,17 @@ The caller supplies system instructions and input separately.
 
 ```no_run
 use metldr_google_interactions::{Client, Result};
+use metldr_conversation::TextEvent;
 use std::sync::atomic::AtomicBool;
 
 # async fn example() -> Result<()> {
 let client = Client::new("https://generativelanguage.googleapis.com/v1/interactions", "your-supported-model",
     &std::env::var("GEMINI_API_KEY")?, None)?;
 client.text("Answer using the supplied source.", "The report lists 17 units.",
-    &AtomicBool::new(false), |text| { print!("{text}"); Ok(()) }).await?;
+    &AtomicBool::new(false), |event| {
+        if let TextEvent::Delta(text) = event { print!("{text}"); }
+        Ok(())
+    }).await?;
 # Ok(())
 # }
 ```

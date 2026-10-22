@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::{Prompt, Result, sse, stream};
 use metldr_browser_tools::{BROWSER_POLICY, definitions};
+use metldr_conversation::TextEvent;
 use stream::Turn;
 
 pub struct Client {
@@ -77,7 +78,7 @@ impl Client {
         system: &str,
         input: &str,
         stop: &AtomicBool,
-        emit: impl FnMut(String) -> Result<()>,
+        emit: impl FnMut(TextEvent) -> Result<()>,
     ) -> Result<()> {
         let turn = self
             .send(&self.text_request(system, input), stop, emit)
@@ -112,7 +113,7 @@ impl Client {
         &self,
         request: &Value,
         stop: &AtomicBool,
-        mut emit: impl FnMut(String) -> Result<()>,
+        mut emit: impl FnMut(TextEvent) -> Result<()>,
     ) -> Result<Turn> {
         cancelled(stop)?;
         let body = serde_json::to_vec(request)?;
@@ -162,9 +163,11 @@ impl Client {
             for byte in chunk {
                 if let Some((event, data)) = sse.byte(byte)? {
                     cancelled(stop)?;
-                    if let Some(text) = state.frame(&event, &data)? {
-                        rendered.push_str(&text);
-                        emit(text)?;
+                    for text_event in state.frame(&event, &data)? {
+                        if let TextEvent::Delta(text) = &text_event {
+                            rendered.push_str(text);
+                        }
+                        emit(text_event)?;
                     }
                 }
             }

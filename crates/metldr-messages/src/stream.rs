@@ -1,4 +1,4 @@
-use crate::{Invocation, Result};
+use crate::{Invocation, Result, TextEvent};
 use metldr_browser_tools::decode_call;
 use serde_json::{Value, json};
 
@@ -73,7 +73,7 @@ impl State {
         }
     }
 
-    pub fn frame(&mut self, event: &str, data: &str) -> Result<Option<String>> {
+    pub fn frame(&mut self, event: &str, data: &str) -> Result<Option<TextEvent>> {
         self.events += 1;
         if self.events > 4096 {
             return Err("Messages event count exceeds bound".into());
@@ -311,7 +311,7 @@ impl State {
         Ok(())
     }
 
-    fn emit_ready(&mut self) -> Option<String> {
+    fn emit_ready(&mut self) -> Option<TextEvent> {
         let mut text = String::new();
         while let Some(block) = self.blocks.get_mut(self.cursor) {
             if block.value["type"] == "text" {
@@ -321,10 +321,12 @@ impl State {
                 if !block.closed {
                     break;
                 }
+            } else if !block.closed {
+                break;
             }
             self.cursor += 1;
         }
-        (!text.is_empty()).then_some(text)
+        (!text.is_empty()).then_some(TextEvent::Delta(text))
     }
 
     pub fn finish(self) -> Result<Turn> {

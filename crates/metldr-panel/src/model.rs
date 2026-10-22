@@ -2602,7 +2602,7 @@ mod tests {
     }
 
     #[test]
-    fn accepts_only_flat_summary_or_question_text_runs_with_strict_routes() {
+    fn accepts_flat_and_native_text_runs_with_strict_routes() {
         let mut view: serde_json::Value = serde_json::from_str(VALID).unwrap();
         view["runs"][0]["route"] = serde_json::json!({
             "kind":"text", "protocol":"responses", "endpoint":"https://api.example/v1",
@@ -2618,6 +2618,22 @@ mod tests {
                 ..
             }
         ));
+
+        let mut native = view.clone();
+        native["runs"][0]["conversation"] = serde_json::json!([{
+            "kind":"message", "key":{"kind":"observed","ordinal":1},
+            "start":0, "end":native["runs"][0]["output"].as_str().unwrap().len(),
+            "completion":"final_snapshot"
+        }]);
+        let decoded = PageView::decode(&serde_json::to_vec(&native).unwrap()).unwrap();
+        let run = &decoded.runs[0];
+        assert_eq!(run.output.entries().count(), 1);
+        assert_eq!(
+            RunView::decode_record(&serde_json::to_vec(&native["runs"][0]).unwrap(), &run.id)
+                .unwrap()
+                .output,
+            run.output
+        );
 
         for (path, value) in [
             (

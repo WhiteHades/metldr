@@ -5,7 +5,7 @@ Responses protocol. A browser conversation keeps request history and finalized
 reasoning. The application owns browser permissions, approvals and actions.
 
 ```no_run
-use metldr_responses::{Client, Prompt, Result};
+use metldr_responses::{Client, Prompt, Result, TextEvent};
 use std::sync::atomic::AtomicBool;
 
 # async fn example() -> Result<()> {
@@ -23,8 +23,8 @@ let mut conversation = client.start(Prompt {
     text: "Page text supplied by the application",
 })?;
 let stop = AtomicBool::new(false);
-let invocation = conversation.next(&stop, |text| {
-    print!("{text}");
+let invocation = conversation.next(&stop, |event| {
+    if let TextEvent::Delta(text) = event { print!("{text}"); }
     Ok(())
 }).await?;
 if let Some(invocation) = invocation {
@@ -38,14 +38,17 @@ For a text response, use `Client::text` instead of starting a browser conversati
 The caller supplies system instructions and input separately.
 
 ```no_run
-use metldr_responses::{Client, Result};
+use metldr_responses::{Client, Result, TextEvent};
 use std::sync::atomic::AtomicBool;
 
 # async fn example() -> Result<()> {
 let client = Client::new("https://api.openai.com/v1/responses", "your-supported-model",
     &std::env::var("OPENAI_API_KEY")?, None)?;
 client.text("Answer using the supplied source.", "The report lists 17 units.",
-    &AtomicBool::new(false), |text| { print!("{text}"); Ok(()) }).await?;
+    &AtomicBool::new(false), |event| {
+        if let TextEvent::Delta(text) = event { print!("{text}"); }
+        Ok(())
+    }).await?;
 # Ok(())
 # }
 ```
@@ -60,8 +63,8 @@ After approving and executing a returned invocation, pass the actual browser
 result to `conversation.submit_tool_result(&result)`, then call `next` again.
 The conversation appends the finalized output and matching call identifier
 before the result. A second submission or another request while a result is
-pending fails. A final answer returns `None`, with its text already delivered
-to the callback. Cancellation or a request failure closes the conversation.
+pending fails. A final answer returns `None`, after its ordered text events
+reach the callback. Cancellation or a request failure closes the conversation.
 Partial text can be visible before a failure, so the application must show the
 failure and must not treat partial text as a completed task.
 

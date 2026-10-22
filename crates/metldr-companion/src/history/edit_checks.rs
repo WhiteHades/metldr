@@ -100,6 +100,21 @@ fn actual_records_commit_update_retry_abort_and_reopen() -> Result<()> {
     assert_eq!(counts(&history)?, (0, 0, 0, 0, 0));
     assert_eq!(serde_json::to_value(profile(&history)?)?, before);
 
+    let mut populated = metldr_conversation::Content::native();
+    populated.change(metldr_conversation::Change::Begin(
+        metldr_conversation::MessageKey::observed(1)?,
+    ))?;
+    assert!(
+        history
+            .edit(|tx| {
+                let mut draft = run(tx.id()?);
+                draft.output = populated;
+                tx.admit(&selection, "prefilled:1", draft, launch())
+            })
+            .is_err()
+    );
+    assert_eq!(serde_json::to_value(profile(&history)?)?, before);
+
     let id = history.edit(|tx| {
         let id = tx.id()?;
         tx.admit(&selection, "start:1", run(id.clone()), launch())?;
@@ -227,10 +242,14 @@ fn actual_records_commit_update_retry_abort_and_reopen() -> Result<()> {
         };
         let id = history.edit(|tx| {
             let id = tx.id()?;
+            let mut draft = run(id.clone());
+            if n == 0 {
+                draft.output = metldr_conversation::Content::native();
+            }
             tx.admit(
                 &selection,
                 &format!("text-{n}"),
-                run(id.clone()),
+                draft,
                 Launch::Text {
                     input_digest: "b".repeat(64),
                     protocol,
@@ -250,7 +269,14 @@ fn actual_records_commit_update_retry_abort_and_reopen() -> Result<()> {
         })?;
         history.edit(|tx| {
             let mut saved = tx.run(&selection, &id)?;
-            saved.output = metldr_conversation::Content::flat(format!("route{n}"))?;
+            if saved.output.is_native() {
+                saved.output.change(metldr_conversation::Change::Append {
+                    key: metldr_conversation::MessageKey::observed(1)?,
+                    text: format!("route{n}"),
+                })?;
+            } else {
+                saved.output = metldr_conversation::Content::flat(format!("route{n}"))?;
+            }
             saved.status = if n == 11 {
                 Status::Failed
             } else {

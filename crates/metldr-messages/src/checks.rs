@@ -53,7 +53,7 @@ fn replay(events: &[Value], chunk: usize) -> Result<(stream::Turn, String)> {
     for bytes in bytes.chunks(chunk) {
         for &b in bytes {
             if let Some((event, data)) = parser.byte(b)? {
-                if let Some(text) = state.frame(&event, &data)? {
+                if let Some(TextEvent::Delta(text)) = state.frame(&event, &data)? {
                     visible.push_str(&text);
                 }
             }
@@ -168,7 +168,7 @@ fn emits_visible_text_before_terminal_and_in_content_order() {
     let events = text_and_call();
     let mut partial = String::new();
     for e in &events[..15] {
-        if let Some(s) = state
+        if let Some(TextEvent::Delta(s)) = state
             .frame(e["type"].as_str().unwrap(), &e.to_string())
             .unwrap()
         {
@@ -188,6 +188,33 @@ fn emits_visible_text_before_terminal_and_in_content_order() {
     ];
     events.extend(stop("end_turn"));
     assert_eq!(replay(&events, 1).unwrap().1, "ABXY");
+
+    let mut state = stream::State::new("fixture-model");
+    assert!(
+        state
+            .frame("message_start", &initial().to_string())
+            .unwrap()
+            .is_none()
+    );
+    for event in [
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"private","signature":"sig"}}),
+        json!({"type":"content_block_start","index":1,"content_block":{"type":"text","text":"A"}}),
+        json!({"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"B"}}),
+    ] {
+        assert!(
+            state
+                .frame(event["type"].as_str().unwrap(), &event.to_string())
+                .unwrap()
+                .is_none()
+        );
+    }
+    let close = json!({"type":"content_block_stop","index":0});
+    assert_eq!(
+        state
+            .frame("content_block_stop", &close.to_string())
+            .unwrap(),
+        Some(TextEvent::Delta("AB".into()))
+    );
 }
 
 #[test]
