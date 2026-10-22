@@ -1,64 +1,25 @@
-# Privacy Policy for metldr
+# Privacy
 
-**Effective Date:** January 11, 2026
+Updated 22 October 2026.
 
-## 1. Introduction
+## Where content goes
 
-**metldr** is a comprehensive, privacy-first AI productivity extension for Chrome. It enhances your browsing workflow by providing:
+Local models process content on your computer. Ollama can also offer cloud models, so check the model you select.
 
-- **Email Intelligence:** Automatically summarises emails and suggests replies directly within Gmail.
-- **Page Intelligence:** Generates concise bullet-point summaries of web articles and allows you to "Chat with Page" to ask questions about the content.
-- **Dictionary:** Instant definitions for selected words, working offline.
-- **Local RAG (Retrieval-Augmented Generation):** Indexes your viewed content locally to provide answers based on your content.
+Provider connections send task instructions, page content and relevant prior answers to your configured endpoint. Installed agents receive task instructions and supplied page context, using their configured accounts and models. Their tools and metldr's browser tools can provide additional access, subject to the agent's permissions and metldr's browser approvals. Your provider's and agent's policies apply to that processing.
 
-All these features are built on a "Local-First" architecture. We believe your data belongs to you, which is why metldr is designed to run its AI models entirely on your device (via Chrome Built-in AI or a local Ollama instance).
+Dictionary lookups can send selected words to dictionaryapi.dev. Downloads contact the services that supply the requested files.
 
-## 2. Data Collection and Usage
+## What stays saved
 
-### 2.1. Local Processing (No Cloud Collection)
+The extension saves settings, cached summaries and page context in your browser. The companion saves conversations, results and recovery records on your computer. Installed agents can keep their own sessions and files.
 
-metldr processes data locally on your computer.
+Provider keys are managed by the companion's credential store, outside page scripts. Installed agents keep their own authentication.
 
-- **AI Processing:** All text analysis (summarisation, reply generation, chat) happens on your device using either Chrome's Gemini Nano or your local Ollama setup.
-- **Vector Database:** Your "Chat with Page" context is stored in a local vector database (Voy) inside your browser.
-- **No Analytics:** We do not track your usage behavior, clicks, or browsing history for analytics purposes.
+Clearing the extension's cache or browser data does not remove companion records or agent files. Remove those separately using their storage locations and tools. See [companion setup](crates/metldr-companion/README.md) for its data location.
 
-**We do not operate any servers that receive, store, or analyse your content.**
+## Browser access
 
-### 2.2. Permissions Usage
+Page permissions let metldr add its controls and read content for its features. The browser agent asks for approval before supported page changes. Installed agents also have their own permission rules.
 
-To function, metldr requires specific permissions:
-
-- **Read Content (`<all_urls>`):** This permission is used _only_ when you explicitly use the extension (e.g., open the specific email summary or sidebar). It allows the extension to read the text of the page to generate the summary. This text remains in your browser's memory and is not sent to us.
-- **Storage:** Used to save your settings, cached summaries, and offline dictionary components.
-
-### 2.3. Third-Party Services
-
-metldr connects to the following third-party services only for specific resource retrieval:
-
-- **GitHub (`media.githubusercontent.com`):**
-  - **Purpose:** Used to download **offline dictionary packs**.
-  - **Data:** No user data is sent. The extension only performs GET requests to fetch these static public files.
-
-- **Dictionary API (`api.dictionaryapi.dev`):**
-  - **Purpose:** Used for the word meaning lookup.
-  - **Data:** Only the single word you are defining is sent. No context or user attributes are transmitted.
-
-### 2.4. Ollama (Optional Local Connection)
-
-If you choose to use Ollama, metldr connects to `http://localhost:11434`. This is a connection to **your own computer**, not the internet. Your data remains strictly local.
-
-## 3. Data Retention
-
-Since we do not collect your data, we do not retain it.
-
-- **Browser Cache:** Summaries and chat history stored in `IndexedDB` on your device can be cleared via the extension's "Clear Cache" button in settings or by clearing browser data.
-- **Vector Index:** The search index for "Chat with Page" persists locally but can be reset at any time.
-
-## 4. Updates to this Policy
-
-We may update this privacy policy to reflect changes in our practices. If we make significant changes, we will notify you through the extension's update notes.
-
-## 5. Contact
-
-If you have questions about this policy or the extension's practices, please contact the developer via the support link on the Chrome Web Store listing.
+Review your selected connection and permissions before sharing private content. For questions, use the support contact on the [Chrome Web Store listing](https://chromewebstore.google.com/detail/kbfdmfgmmibkdnbfdaeganjckfgbfjlh).
