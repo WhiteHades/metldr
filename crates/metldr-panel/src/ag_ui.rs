@@ -3,13 +3,13 @@ use std::collections::HashSet;
 use metldr_conversation::{Completion, EntryRef};
 use serde::{Deserialize, Serialize};
 
-use crate::model::{RunStatus, RunView};
+use crate::model::{RunId, RunStatus, RunView};
 
 const MAX_FRAME: usize = 65_536;
 const MAX_MESSAGES: usize = 64;
 const MAX_TEXT: usize = 8_192;
 const MAX_ID: usize = 512;
-const MAX_HISTORY_MESSAGES: usize = 16 * (MAX_MESSAGES + 1);
+pub(crate) const MAX_HISTORY_MESSAGES: usize = 16 * (MAX_MESSAGES + 1);
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -75,6 +75,30 @@ pub(crate) struct RunStream {
 }
 
 impl RunStream {
+    pub(crate) fn accept_question(&mut self, native: &RunId) -> Result<(), String> {
+        let index = self
+            .prior_messages
+            .len()
+            .checked_sub(1)
+            .ok_or("the submitted question is missing")?;
+        let id = format!("{native}:question");
+        if self.started
+            || self.prior_messages[index].role != MessageRole::User
+            || !valid_id(&id)
+            || self.prior_messages[..index]
+                .iter()
+                .any(|message| message.id == id)
+        {
+            return Err("the submitted question cannot bind to this native run".into());
+        }
+        let previous = std::mem::replace(&mut self.prior_messages[index].id, id);
+        let result = self.check_frame_bound();
+        if result.is_err() {
+            self.prior_messages[index].id = previous;
+        }
+        result
+    }
+
     pub(crate) fn new(
         thread_id: String,
         ui_run_id: String,
@@ -351,6 +375,41 @@ mod tests {
             content: content.into(),
             completion,
         }
+    }
+
+    #[test]
+    fn binds_the_submitted_question_to_its_saved_identity_before_streaming() {
+        let native: RunId =
+            serde_json::from_value(serde_json::json!("0123456789abcdef0123456789abcdef:7"))
+                .unwrap();
+        let mut stream = RunStream::new(
+            "thread".into(),
+            "ui-run".into(),
+            vec![
+                AgUiMessage {
+                    id: "earlier".into(),
+                    role: MessageRole::Assistant,
+                    content: "Saved answer".into(),
+                },
+                AgUiMessage {
+                    id: "submitted".into(),
+                    role: MessageRole::User,
+                    content: "Next question".into(),
+                },
+            ],
+        )
+        .unwrap();
+        stream.accept_question(&native).unwrap();
+        let events = stream
+            .push_messages(vec![], RunStatus::Running, None)
+            .unwrap();
+        let Event::MessagesSnapshot { messages } = &events[1] else {
+            panic!("the first update must include saved history");
+        };
+        assert_eq!(messages[0].id, "earlier");
+        assert_eq!(messages[1].id, format!("{native}:question"));
+        assert_eq!(messages[1].content, "Next question");
+        assert!(stream.accept_question(&native).is_err());
     }
 
     #[test]

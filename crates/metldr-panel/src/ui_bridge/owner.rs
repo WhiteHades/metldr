@@ -22,6 +22,10 @@ pub(super) enum Stop {
 }
 
 impl Owner {
+    pub(super) fn stop_pending(&self) -> bool {
+        matches!(self, Self::Starting { stop: true, .. })
+    }
+
     pub(super) fn begin(&mut self, ui: &str) -> Result<(), FlowError> {
         self.idle()?;
         *self = Self::Starting {
@@ -115,10 +119,13 @@ mod checks {
                 .unwrap();
         let mut owner = Owner::Idle;
         owner.begin("first").unwrap();
+        assert!(!owner.stop_pending());
         assert!(owner.begin("second").is_err());
         assert!(owner.stop("wrong").is_err());
         assert!(matches!(owner.stop("first").unwrap(), Stop::Pending));
+        assert!(owner.stop_pending());
         assert!(owner.accepted(native.clone()));
+        assert!(!owner.stop_pending());
         assert!(matches!(owner.stop("first").unwrap(), Stop::Native(id) if id == native));
         owner.finished(&native);
         owner.begin("second").unwrap();

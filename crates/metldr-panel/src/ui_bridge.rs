@@ -1,4 +1,9 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::RefCell,
+    future::Future,
+    rc::Rc,
+    task::{Poll, Waker},
+};
 
 use js_sys::{Function, Promise};
 use metldr_history_pages::Scope;
@@ -67,6 +72,7 @@ struct Core {
     scope: Scope,
     view: RefCell<PageView>,
     owner: RefCell<Owner>,
+    preparing: RefCell<Option<Waker>>,
 }
 
 #[derive(Serialize)]
@@ -89,6 +95,7 @@ pub async fn connect_ui_bridge(capture: Function) -> Result<UiBridge, JsValue> {
             flow,
             view: RefCell::new(view),
             owner: RefCell::new(Owner::Idle),
+            preparing: RefCell::new(None),
         }),
     })
 }
@@ -104,7 +111,9 @@ impl UiBridge {
         let view = self.core.current().await.map_err(js_error)?;
         let snapshot = Snapshot {
             thread_id: self.thread_id(),
-            messages: history::messages(&view),
+            messages: history::messages(&self.core.flow, &self.core.scope)
+                .await
+                .map_err(js_error)?,
             running: view.runs.iter().any(|run| !run.status.is_terminal()),
             source_available: view.source().is_some(),
         };
@@ -142,7 +151,9 @@ impl UiBridge {
             let source = view.source().cloned().ok_or(FlowError::NoSource)?;
             let destination =
                 composer::resolve(&view, &request.destination).map_err(FlowError::InvalidInput)?;
-            let mut messages = history::messages(&view);
+            let Some(mut messages) = self.core.prepare_history().await? else {
+                return Ok(None);
+            };
             messages.push(AgUiMessage {
                 id: request.message.clone(),
                 role: MessageRole::User,
@@ -150,11 +161,15 @@ impl UiBridge {
             });
             let stream = RunStream::new(request.thread, request.id.clone(), messages)
                 .map_err(FlowError::InvalidInput)?;
-            Ok::<_, FlowError>((source, destination, stream))
+            Ok::<_, FlowError>(Some((source, destination, stream)))
         }
         .await;
         let (source, destination, mut stream) = match prepared {
-            Ok(value) => value,
+            Ok(Some(value)) => value,
+            Ok(None) => {
+                self.core.owner.borrow_mut().not_sent();
+                return Ok(());
+            }
             Err(error) => {
                 self.core.owner.borrow_mut().not_sent();
                 return Err(js_error(error));
@@ -208,7 +223,13 @@ impl UiBridge {
     pub async fn stop(&self, id: String) -> Result<String, JsValue> {
         let stop = self.core.owner.borrow_mut().stop(&id).map_err(js_error)?;
         match stop {
-            Stop::Pending => Ok("pending".into()),
+            Stop::Pending => {
+                let preparing = self.core.preparing.borrow_mut().take();
+                if let Some(waker) = preparing {
+                    waker.wake();
+                }
+                Ok("pending".into())
+            }
             Stop::Native(native) => {
                 match self
                     .core
@@ -226,6 +247,23 @@ impl UiBridge {
 }
 
 impl Core {
+    async fn prepare_history(&self) -> Result<Option<Vec<AgUiMessage>>, FlowError> {
+        let mut history = std::pin::pin!(history::messages(&self.flow, &self.scope));
+        let result = std::future::poll_fn(|context| {
+            if self.owner.borrow().stop_pending() {
+                return Poll::Ready(Ok(None));
+            }
+            self.preparing.replace(Some(context.waker().clone()));
+            history
+                .as_mut()
+                .poll(context)
+                .map(|result| result.map(Some))
+        })
+        .await;
+        self.preparing.borrow_mut().take();
+        result
+    }
+
     fn accept(&self, view: PageView) -> Result<PageView, FlowError> {
         if view.selection != self.scope {
             return Err(FlowError::HistoryStale);
@@ -244,6 +282,9 @@ impl Core {
         stream: &mut RunStream,
         emit: &Function,
     ) -> Result<(), FlowError> {
+        stream
+            .accept_question(native)
+            .map_err(FlowError::Protocol)?;
         let mut views = self.flow.watch(self.scope.clone(), native.clone()).await?;
         while let Some(view) = views.changed().await? {
             let view = self.accept(view)?;
