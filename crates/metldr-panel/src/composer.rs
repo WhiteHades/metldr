@@ -7,9 +7,10 @@ use web_sys::{
     KeyboardEvent,
 };
 
+use crate::flow::FlowClient;
 use crate::model::{
     AgentSessionView, BrowserRouteView, ChatRouteView, FlowError, GoogleRouteView, PageView,
-    ProviderProtocol, ResponsesRouteView, RunId, RunView, UserText,
+    ProviderProtocol, ResponsesRouteView, RunId, RunView, SourceId, UserText,
 };
 use crate::{Panel, active_run, begin_start, err, follow_start, js_message, set_panel_status};
 
@@ -69,7 +70,7 @@ pub(super) fn install(panel: &Rc<RefCell<Panel>>) -> Result<(), JsValue> {
     Ok(())
 }
 
-pub(super) enum Destination {
+pub(crate) enum Destination {
     Model,
     Browser {
         fingerprint: Option<String>,
@@ -198,77 +199,78 @@ pub(super) fn selected(panel: &Panel) -> Result<Destination, FlowError> {
     let value = select(panel)
         .map_err(|error| FlowError::Host(js_message(&error)))?
         .value();
-    match value.as_str() {
-        "" => Err(FlowError::InvalidInput(
-            "Choose a destination before sending.".into(),
-        )),
-        "model"
-            if panel
-                .snapshot
-                .as_ref()
-                .is_some_and(|view| view.fixture_available) =>
-        {
-            Ok(Destination::Model)
+    let view = panel
+        .snapshot
+        .as_ref()
+        .ok_or_else(|| FlowError::InvalidInput(unavailable_destination(&value)))?;
+    resolve(view, &value).map_err(FlowError::InvalidInput)
+}
+
+fn unavailable_destination(value: &str) -> String {
+    match value {
+        "" => "Choose a destination before sending.".into(),
+        "model" => "The test model is unavailable. Choose a configured destination.".into(),
+        "browser" => "The browser task is unavailable.".into(),
+        "responses" => "The OpenAI Responses destination is unavailable.".into(),
+        "chat" => "Chat Completions is unavailable.".into(),
+        "google" => "Google Interactions is unavailable.".into(),
+        "pi" => "Pi is unavailable. Choose another destination or configure Pi.".into(),
+        "codex" => {
+            "Codex configuration is unavailable. Choose another destination or configure Codex."
+                .into()
         }
-        "model" => Err(FlowError::InvalidInput(
-            "The test model is unavailable. Choose a configured destination.".into(),
-        )),
-        "browser" => match panel
-            .snapshot
-            .as_ref()
-            .and_then(|view| view.browser_route.as_ref())
-        {
+        "opencode" => "OpenCode is unavailable. Configure an OpenCode profile first.".into(),
+        value if value.starts_with("page:") => {
+            "The selected page questions provider is unavailable.".into()
+        }
+        value if value.starts_with("opencode:") => {
+            "The selected OpenCode session is unavailable. Choose a destination before sending."
+                .into()
+        }
+        value if value.starts_with("codex:") => {
+            "The selected Codex session is unavailable. Choose a destination before sending.".into()
+        }
+        _ => "The selected Pi session is unavailable. Choose a destination before sending.".into(),
+    }
+}
+
+pub(crate) fn resolve(view: &PageView, value: &str) -> Result<Destination, String> {
+    match value {
+        "" => Err("Choose a destination before sending.".into()),
+        "model" if view.fixture_available => Ok(Destination::Model),
+        "model" => Err("The test model is unavailable. Choose a configured destination.".into()),
+        "browser" => match view.browser_route.as_ref() {
             Some(BrowserRouteView::Messages { .. }) => {
                 Ok(Destination::Browser { fingerprint: None })
             }
             Some(BrowserRouteView::HttpsMessages { fingerprint, .. }) => Ok(Destination::Browser {
                 fingerprint: Some(fingerprint.clone()),
             }),
-            None => Err(FlowError::InvalidInput(
-                "The browser task is unavailable.".into(),
-            )),
+            None => Err("The browser task is unavailable.".into()),
         },
-        "responses" => match panel
-            .snapshot
-            .as_ref()
-            .and_then(|view| view.responses_route.as_ref())
-        {
+        "responses" => match view.responses_route.as_ref() {
             Some(ResponsesRouteView::HttpsResponses { fingerprint, .. }) => {
                 Ok(Destination::Responses {
                     fingerprint: fingerprint.clone(),
                 })
             }
-            None => Err(FlowError::InvalidInput(
-                "The OpenAI Responses destination is unavailable.".into(),
-            )),
+            None => Err("The OpenAI Responses destination is unavailable.".into()),
         },
-        "chat" => match panel
-            .snapshot
-            .as_ref()
-            .and_then(|view| view.chat_route.as_ref())
-        {
+        "chat" => match view.chat_route.as_ref() {
             Some(ChatRouteView::HttpsChatCompletions { fingerprint, .. }) => {
                 Ok(Destination::Chat {
                     fingerprint: fingerprint.clone(),
                 })
             }
-            None => Err(FlowError::InvalidInput(
-                "Chat Completions is unavailable.".into(),
-            )),
+            None => Err("Chat Completions is unavailable.".into()),
         },
-        "google" => match panel
-            .snapshot
-            .as_ref()
-            .and_then(|view| view.google_route.as_ref())
-        {
+        "google" => match view.google_route.as_ref() {
             Some(GoogleRouteView::HttpsGoogleInteractions { fingerprint, .. }) => {
                 Ok(Destination::Google {
                     fingerprint: fingerprint.clone(),
                 })
             }
-            None => Err(FlowError::InvalidInput(
-                "Google Interactions is unavailable.".into(),
-            )),
+            None => Err("Google Interactions is unavailable.".into()),
         },
         value if value.starts_with("page:") => {
             let protocol = match value {
@@ -277,85 +279,110 @@ pub(super) fn selected(panel: &Panel) -> Result<Destination, FlowError> {
                 "page:chat_completions" => ProviderProtocol::ChatCompletions,
                 "page:google_interactions" => ProviderProtocol::GoogleInteractions,
                 _ => {
-                    return Err(FlowError::InvalidInput(
-                        "The selected page questions provider is unavailable.".into(),
-                    ));
+                    return Err("The selected page questions provider is unavailable.".into());
                 }
             };
-            let fingerprint = panel
-                .snapshot
-                .as_ref()
-                .and_then(|view| page_route(view, protocol))
+            let fingerprint = page_route(view, protocol)
                 .map(|(_, _, fingerprint)| fingerprint.to_owned())
                 .ok_or_else(|| {
-                    FlowError::InvalidInput(format!(
+                    format!(
                         "{} page questions are unavailable.",
                         provider_name(protocol)
-                    ))
+                    )
                 })?;
             Ok(Destination::PageText {
                 protocol,
                 fingerprint,
             })
         }
-        "pi" if panel
-            .snapshot
-            .as_ref()
-            .is_some_and(|view| view.pi_profile.is_some()) =>
-        {
-            Ok(Destination::Pi)
-        }
-        "pi" => Err(FlowError::InvalidInput(
-            "Pi is unavailable. Choose another destination or configure Pi.".into(),
-        )),
-        "codex"
-            if panel
-                .snapshot
-                .as_ref()
-                .is_some_and(|view| view.codex_profile.is_some()) =>
-        {
-            Ok(Destination::Codex)
-        }
-        "codex" => Err(FlowError::InvalidInput(
+        "pi" if view.pi_profile.is_some() => Ok(Destination::Pi),
+        "pi" => Err("Pi is unavailable. Choose another destination or configure Pi.".into()),
+        "codex" if view.codex_profile.is_some() => Ok(Destination::Codex),
+        "codex" => Err(
             "Codex configuration is unavailable. Choose another destination or configure Codex."
                 .into(),
-        )),
-        "opencode"
-            if panel
-                .snapshot
-                .as_ref()
-                .is_some_and(|view| view.opencode_profile.is_some()) =>
-        {
-            Ok(Destination::OpenCode)
-        }
-        "opencode" => Err(FlowError::InvalidInput(
-            "OpenCode is unavailable. Configure an OpenCode profile first.".into(),
-        )),
+        ),
+        "opencode" if view.opencode_profile.is_some() => Ok(Destination::OpenCode),
+        "opencode" => Err("OpenCode is unavailable. Configure an OpenCode profile first.".into()),
         _ => {
             if let Some(id) = value.strip_prefix("opencode:") {
-                let session = panel.snapshot.as_ref().and_then(|view| view.opencode_sessions.iter().find(|session| session.workflow.as_str() == id && opencode_ready(view, session)))
-                    .ok_or_else(|| FlowError::InvalidInput("The selected OpenCode session is unavailable. Choose a destination before sending.".into()))?;
+                let session = view.opencode_sessions.iter().find(|session| session.workflow.as_str() == id && opencode_ready(view, session))
+                    .ok_or_else(|| "The selected OpenCode session is unavailable. Choose a destination before sending.".to_owned())?;
                 return Ok(Destination::ContinueOpenCode {
                     workflow: session.workflow.clone(),
                     revision: session.revision,
                 });
             }
             if let Some(id) = value.strip_prefix("codex:") {
-                let session = panel.snapshot.as_ref().and_then(|view| {
-                    view.codex_sessions.iter().find(|session| session.workflow.as_str() == id && codex_ready(view, session))
-                }).ok_or_else(|| FlowError::InvalidInput("The selected Codex session is unavailable. Choose a destination before sending.".into()))?;
+                let session = view.codex_sessions.iter().find(|session| session.workflow.as_str() == id && codex_ready(view, session))
+                    .ok_or_else(|| "The selected Codex session is unavailable. Choose a destination before sending.".to_owned())?;
                 return Ok(Destination::ContinueCodex {
                     workflow: session.workflow.clone(),
                     revision: session.revision,
                 });
             }
-            let session = panel.snapshot.as_ref().and_then(|view| {
-                view.agent_sessions.iter().find(|session| session.workflow.as_str() == value && ready(view, session))
-            }).ok_or_else(|| FlowError::InvalidInput("The selected Pi session is unavailable. Choose a destination before sending.".into()))?;
+            let session = view
+                .agent_sessions
+                .iter()
+                .find(|session| session.workflow.as_str() == value && ready(view, session))
+                .ok_or_else(|| {
+                    "The selected Pi session is unavailable. Choose a destination before sending."
+                        .to_owned()
+                })?;
             Ok(Destination::Continue {
                 workflow: session.workflow.clone(),
                 revision: session.revision,
             })
+        }
+    }
+}
+
+pub(crate) async fn dispatch(
+    flow: &FlowClient,
+    scope: metldr_history_pages::Scope,
+    source: SourceId,
+    destination: Destination,
+    text: UserText,
+    codex_mode: &str,
+) -> Result<RunId, FlowError> {
+    match destination {
+        Destination::Model => flow.ask(scope, source, text).await,
+        Destination::Browser { fingerprint } => {
+            flow.browser_task(scope, source, text, fingerprint).await
+        }
+        Destination::Responses { fingerprint } => {
+            flow.responses_task(scope, source, text, fingerprint).await
+        }
+        Destination::Chat { fingerprint } => flow.chat_task(scope, source, text, fingerprint).await,
+        Destination::Google { fingerprint } => {
+            flow.google_task(scope, source, text, fingerprint).await
+        }
+        Destination::PageText {
+            protocol,
+            fingerprint,
+        } => {
+            flow.page_text(
+                scope,
+                source,
+                protocol,
+                fingerprint,
+                crate::flow::PageTextPrompt::Answer(text),
+            )
+            .await
+        }
+        Destination::Pi => flow.pi_prompt(scope, source, text).await,
+        Destination::Codex => flow.codex_prompt(scope, source, text, codex_mode).await,
+        Destination::OpenCode => flow.opencode_prompt(scope, source, text).await,
+        Destination::Continue { workflow, revision } => {
+            flow.pi_follow_up(scope, workflow, revision, text).await
+        }
+        Destination::ContinueCodex { workflow, revision } => {
+            flow.codex_follow_up(scope, workflow, revision, text, codex_mode)
+                .await
+        }
+        Destination::ContinueOpenCode { workflow, revision } => {
+            flow.opencode_follow_up(scope, workflow, revision, text)
+                .await
         }
     }
 }
@@ -531,56 +558,7 @@ fn submit(panel: &Rc<RefCell<Panel>>) -> Result<(), FlowError> {
     begin_start(panel);
     let panel = Rc::clone(panel);
     spawn_local(async move {
-        let start = match destination {
-            Destination::Model => flow.ask(scope.clone(), source, text).await,
-            Destination::Browser { fingerprint } => {
-                flow.browser_task(scope.clone(), source, text, fingerprint)
-                    .await
-            }
-            Destination::Responses { fingerprint } => {
-                flow.responses_task(scope.clone(), source, text, fingerprint)
-                    .await
-            }
-            Destination::Chat { fingerprint } => {
-                flow.chat_task(scope.clone(), source, text, fingerprint)
-                    .await
-            }
-            Destination::Google { fingerprint } => {
-                flow.google_task(scope.clone(), source, text, fingerprint)
-                    .await
-            }
-            Destination::PageText {
-                protocol,
-                fingerprint,
-            } => {
-                flow.page_text(
-                    scope.clone(),
-                    source,
-                    protocol,
-                    fingerprint,
-                    crate::flow::PageTextPrompt::Answer(text),
-                )
-                .await
-            }
-            Destination::Pi => flow.pi_prompt(scope.clone(), source, text).await,
-            Destination::Codex => {
-                flow.codex_prompt(scope.clone(), source, text, codex_mode)
-                    .await
-            }
-            Destination::OpenCode => flow.opencode_prompt(scope.clone(), source, text).await,
-            Destination::Continue { workflow, revision } => {
-                flow.pi_follow_up(scope.clone(), workflow, revision, text)
-                    .await
-            }
-            Destination::ContinueCodex { workflow, revision } => {
-                flow.codex_follow_up(scope.clone(), workflow, revision, text, codex_mode)
-                    .await
-            }
-            Destination::ContinueOpenCode { workflow, revision } => {
-                flow.opencode_follow_up(scope.clone(), workflow, revision, text)
-                    .await
-            }
-        };
+        let start = dispatch(&flow, scope.clone(), source, destination, text, codex_mode).await;
         if start.is_ok() {
             let state = panel.borrow();
             if state.connection_generation == generation

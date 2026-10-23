@@ -8,6 +8,7 @@ use wasm_bindgen::{JsCast, JsValue, closure::Closure, prelude::*};
 use wasm_bindgen_futures::{JsFuture, spawn_local};
 use web_sys::{Document, Element, Event};
 
+mod ag_ui;
 mod agent_settings;
 mod appearance;
 mod browser_background;
@@ -27,6 +28,7 @@ mod readiness;
 mod results;
 mod site;
 mod summary;
+mod ui_bridge;
 mod view;
 use flow::{FlowClient, StopReceipt};
 use model::{
