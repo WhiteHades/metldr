@@ -603,7 +603,10 @@ async fn correction_history(
     }
     let page = flow.history_runs(&context, None).await.ok()?;
     let summary = page.runs.iter().find(|summary| &summary.id == run)?;
-    let saved = flow.history_run(&context, summary).await.ok()?;
+    let saved = flow
+        .history_run(&context, &summary.reference())
+        .await
+        .ok()?;
     (saved.corrections.entries.len() == usize::from(saved.corrections.total))
         .then_some((view, saved))
 }

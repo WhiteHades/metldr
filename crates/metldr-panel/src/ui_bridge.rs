@@ -1,5 +1,5 @@
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     future::Future,
     rc::Rc,
     task::{Poll, Waker},
@@ -72,14 +72,24 @@ struct Core {
     scope: Scope,
     view: RefCell<PageView>,
     owner: RefCell<Owner>,
+    history_loading: Cell<bool>,
     preparing: RefCell<Option<Waker>>,
+}
+
+struct HistoryRead<'a>(&'a Cell<bool>);
+
+impl Drop for HistoryRead<'_> {
+    fn drop(&mut self) {
+        self.0.set(false);
+    }
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Snapshot {
     thread_id: String,
-    messages: Vec<AgUiMessage>,
+    #[serde(flatten)]
+    history: history::Page,
     running: bool,
     source_available: bool,
 }
@@ -95,6 +105,7 @@ pub async fn connect_ui_bridge(capture: Function) -> Result<UiBridge, JsValue> {
             flow,
             view: RefCell::new(view),
             owner: RefCell::new(Owner::Idle),
+            history_loading: Cell::new(false),
             preparing: RefCell::new(None),
         }),
     })
@@ -111,13 +122,16 @@ impl UiBridge {
         let view = self.core.current().await.map_err(js_error)?;
         let snapshot = Snapshot {
             thread_id: self.thread_id(),
-            messages: history::messages(&self.core.flow, &self.core.scope)
-                .await
-                .map_err(js_error)?,
+            history: self.core.history(None).await.map_err(js_error)?,
             running: view.runs.iter().any(|run| !run.status.is_terminal()),
             source_available: view.source().is_some(),
         };
         bounded_json(&snapshot).map_err(js_error)
+    }
+
+    pub async fn load_older(&self, cursor: String) -> Result<String, JsValue> {
+        let page = self.core.history(Some(&cursor)).await.map_err(js_error)?;
+        bounded_json(&page).map_err(js_error)
     }
 
     pub fn capture(&self) -> Result<Promise, JsValue> {
@@ -144,21 +158,20 @@ impl UiBridge {
             .begin(&request.id)
             .map_err(js_error)?;
         let prepared = async {
-            let view = self.core.current().await?;
+            let Some(view) = self.core.prepare_current().await? else {
+                return Ok(None);
+            };
             if view.runs.iter().any(|run| !run.status.is_terminal()) {
                 return Err(FlowError::HistoryBusy);
             }
             let source = view.source().cloned().ok_or(FlowError::NoSource)?;
             let destination =
                 composer::resolve(&view, &request.destination).map_err(FlowError::InvalidInput)?;
-            let Some(mut messages) = self.core.prepare_history().await? else {
-                return Ok(None);
-            };
-            messages.push(AgUiMessage {
+            let messages = vec![AgUiMessage {
                 id: request.message.clone(),
                 role: MessageRole::User,
                 content: request.text.as_str().into(),
-            });
+            }];
             let stream = RunStream::new(request.thread, request.id.clone(), messages)
                 .map_err(FlowError::InvalidInput)?;
             Ok::<_, FlowError>(Some((source, destination, stream)))
@@ -247,14 +260,14 @@ impl UiBridge {
 }
 
 impl Core {
-    async fn prepare_history(&self) -> Result<Option<Vec<AgUiMessage>>, FlowError> {
-        let mut history = std::pin::pin!(history::messages(&self.flow, &self.scope));
+    async fn prepare_current(&self) -> Result<Option<PageView>, FlowError> {
+        let mut current = std::pin::pin!(self.current());
         let result = std::future::poll_fn(|context| {
             if self.owner.borrow().stop_pending() {
                 return Poll::Ready(Ok(None));
             }
             self.preparing.replace(Some(context.waker().clone()));
-            history
+            current
                 .as_mut()
                 .poll(context)
                 .map(|result| result.map(Some))
@@ -262,6 +275,14 @@ impl Core {
         .await;
         self.preparing.borrow_mut().take();
         result
+    }
+
+    async fn history(&self, cursor: Option<&str>) -> Result<history::Page, FlowError> {
+        if self.history_loading.replace(true) {
+            return Err(FlowError::HistoryBusy);
+        }
+        let _read = HistoryRead(&self.history_loading);
+        history::page(&self.flow, &self.scope, cursor).await
     }
 
     fn accept(&self, view: PageView) -> Result<PageView, FlowError> {

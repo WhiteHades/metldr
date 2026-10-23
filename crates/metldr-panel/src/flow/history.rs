@@ -1,8 +1,8 @@
 use super::{FlowClient, Reply, ReplyKind, Result};
 use crate::{
     history::{
-        Change, Changed, Context, ConversationPage, Cursor, Expected, Response, RunPage, Scope,
-        Summary,
+        Change, Changed, Context, ConversationPage, Cursor, Expected, Response, RunPage,
+        RunReference, Scope, validate_reference,
     },
     model::{FlowError, RunView},
 };
@@ -102,8 +102,9 @@ impl FlowClient {
     pub(crate) async fn history_run(
         &self,
         context: &Context,
-        summary: &Summary,
+        summary: &RunReference,
     ) -> Result<RunView> {
+        validate_reference(context, summary)?;
         let document = summary.id.as_str();
         let pin = self.history_request(json!({"op":"history_pin","scope":context.scope,"generation":context.generation,"kind":"run","document":document,"revision":summary.revision}), Expected::Pin {context:context.clone(),kind:DocumentKind::Run,document:document.to_owned(),revision:summary.revision}).await?;
         let Response::Pinned(identity) = pin else {

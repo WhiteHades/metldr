@@ -44,6 +44,64 @@ pub(crate) struct Summary {
     pub(crate) output: Preview,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RunReference {
+    pub(crate) id: RunId,
+    pub(crate) source: SourceId,
+    pub(crate) revision: Counter,
+    pub(crate) kind: RunKind,
+    pub(crate) status: RunStatus,
+}
+
+impl Summary {
+    pub(crate) fn reference(&self) -> RunReference {
+        RunReference {
+            id: self.id.clone(),
+            source: self.source.clone(),
+            revision: self.revision,
+            kind: self.kind,
+            status: self.status,
+        }
+    }
+}
+
+pub(crate) fn validate_read_position(context: &Context, cursor: &Cursor) -> Result<(), FlowError> {
+    validate_context(context)?;
+    if cursor.anchor.0 == 0 || cursor.before.0 == 0 || cursor.before.0 > cursor.anchor.0 {
+        return Err(protocol("invalid history cursor"));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_reference(
+    context: &Context,
+    reference: &RunReference,
+) -> Result<u64, FlowError> {
+    validate_context(context)?;
+    let number = validate_document_id(reference.id.as_str(), &context.scope.store)?;
+    validate_document_id(reference.source.as_str(), &context.scope.store)?;
+    if reference.revision.0 == 0 {
+        return Err(protocol("invalid history run reference"));
+    }
+    Ok(number)
+}
+
+pub(crate) fn before_run(
+    context: &Context,
+    anchor: Counter,
+    reference: &RunReference,
+) -> Result<Cursor, FlowError> {
+    let number = validate_reference(context, reference)?;
+    if anchor.0 == 0 || number > anchor.0 {
+        return Err(protocol("invalid history run reference"));
+    }
+    Ok(Cursor {
+        anchor,
+        before: Counter(number),
+    })
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RunPage {

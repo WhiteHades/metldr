@@ -1,7 +1,7 @@
 use crate::{
     Panel, err,
     flow::FlowClient,
-    history::{Context, Cursor, RunPage},
+    history::{Context, Cursor, RunPage, RunReference},
     model::{FlowError, RunView},
     results,
 };
@@ -90,7 +90,7 @@ pub(super) fn handle_click(
                         .find(|run| Some(run.id.as_str()) == id.as_deref())
                         .cloned()
                 }))
-                .map(|(context, summary)| Request::Run(context, summary))
+                .map(|(context, summary)| Request::Run(context, summary.reference()))
         }
         Some("history-earlier") => {
             let p = panel.borrow();
@@ -156,7 +156,7 @@ pub(super) fn handle_click(
 
 enum Request {
     Page(Option<(Context, Cursor)>),
-    Run(Context, crate::history::Summary),
+    Run(Context, RunReference),
 }
 enum Read {
     Page(Context, RunPage),
