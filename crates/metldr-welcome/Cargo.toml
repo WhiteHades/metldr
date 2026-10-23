@@ -26,3 +26,6 @@ opt-level = "s"
 lto = true
 codegen-units = 1
 panic = "abort"
+
+[lints.rust]
+unsafe_code = "forbid"

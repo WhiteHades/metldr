@@ -63,3 +63,6 @@ web-sys = { version = "=0.3.105", features = [
   "Url",
   "Window",
 ] }
+
+[lints.rust]
+unsafe_code = "forbid"
