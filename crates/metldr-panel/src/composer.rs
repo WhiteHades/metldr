@@ -14,6 +14,8 @@ use crate::model::{
 };
 use crate::{Panel, active_run, begin_start, err, follow_start, js_message, set_panel_status};
 
+pub(crate) mod choices;
+
 pub(super) fn install(panel: &Rc<RefCell<Panel>>) -> Result<(), JsValue> {
     let document = panel.borrow().document.clone();
     let form = document
@@ -616,235 +618,60 @@ pub(super) fn render(panel: &Panel) -> Result<(), JsValue> {
     let select = select(panel)?;
     let value = select.value();
     let view = panel.snapshot.as_ref();
-    let sessions: Vec<_> = view
-        .into_iter()
-        .flat_map(|view| &view.agent_sessions)
-        .filter(|session| view.is_some_and(|view| ready(view, session)))
-        .collect();
-    let codex_sessions: Vec<_> = view
-        .into_iter()
-        .flat_map(|view| &view.codex_sessions)
-        .filter(|session| view.is_some_and(|view| codex_ready(view, session)))
-        .collect();
-    let opencode_sessions: Vec<_> = view
-        .into_iter()
-        .flat_map(|view| &view.opencode_sessions)
-        .filter(|session| view.is_some_and(|view| opencode_ready(view, session)))
-        .collect();
+    let choices = choices::list(view);
     let options: Vec<_> = (0..select.children().length())
         .filter_map(|index| select.children().item(index))
         .filter(|option| option.has_attribute("data-session"))
         .collect();
     for option in options {
         let id = option.get_attribute("value").unwrap_or_default();
-        let provider = option
-            .get_attribute("data-provider")
-            .unwrap_or_else(|| "pi".into());
-        let available = if provider == "opencode" {
-            opencode_sessions
-                .iter()
-                .any(|session| format!("opencode:{}", session.workflow.as_str()) == id)
-        } else if provider == "codex" {
-            codex_sessions
-                .iter()
-                .any(|session| format!("codex:{}", session.workflow.as_str()) == id)
-        } else {
-            sessions
-                .iter()
-                .any(|session| session.workflow.as_str() == id)
-        };
-        if !available {
+        if !choices.iter().any(|choice| choice.value == id) {
             if id == value {
-                option.set_text_content(Some(if provider == "codex" {
-                    "Codex session unavailable"
-                } else if provider == "opencode" {
-                    "OpenCode session unavailable"
-                } else {
-                    "Pi session unavailable"
-                }));
+                option.set_text_content(Some(
+                    match option.get_attribute("data-provider").as_deref() {
+                        Some("codex") => "Codex session unavailable",
+                        Some("opencode") => "OpenCode session unavailable",
+                        _ => "Pi session unavailable",
+                    },
+                ));
                 option.set_attribute("disabled", "")?;
             } else {
                 select.remove_child(&option)?;
             }
         }
     }
-    for session in sessions {
-        let id = session.workflow.as_str();
-        let existing = (0..select.children().length())
-            .filter_map(|index| select.children().item(index))
-            .find(|option| option.get_attribute("value").as_deref() == Some(id));
-        let option = match existing {
-            Some(option) => option,
-            None => {
-                let option = panel.document.create_element("option")?;
-                option.set_attribute("value", id)?;
-                option.set_attribute("data-session", "")?;
-                option.set_attribute("data-provider", "pi")?;
-                select.append_child(&option)?;
+    for choice in choices {
+        let option = match choice.kind {
+            choices::Kind::Fixed(id) => panel
+                .document
+                .get_element_by_id(id)
+                .ok_or_else(|| err("Execution option missing."))?,
+            choices::Kind::Session { agent, revision } => {
+                let existing = (0..select.children().length())
+                    .filter_map(|index| select.children().item(index))
+                    .find(|option| {
+                        option.get_attribute("value").as_deref() == Some(choice.value.as_str())
+                    });
+                let option = match existing {
+                    Some(option) => option,
+                    None => {
+                        let option = panel.document.create_element("option")?;
+                        option.set_attribute("value", &choice.value)?;
+                        option.set_attribute("data-session", "")?;
+                        option.set_attribute("data-provider", agent.name())?;
+                        select.append_child(&option)?;
+                        option
+                    }
+                };
+                option.set_attribute("data-revision", &revision.to_string())?;
                 option
             }
-        };
-        option.set_text_content(Some(&format!(
-            "Continue Pi session {}",
-            id.rsplit(':').next().unwrap_or(id)
-        )));
-        option.set_attribute("data-revision", &session.revision.to_string())?;
-        option.remove_attribute("disabled")?;
-    }
-    for session in codex_sessions {
-        let id = format!("codex:{}", session.workflow.as_str());
-        let existing = (0..select.children().length())
-            .filter_map(|index| select.children().item(index))
-            .find(|option| option.get_attribute("value").as_deref() == Some(id.as_str()));
-        let option = match existing {
-            Some(option) => option,
-            None => {
-                let option = panel.document.create_element("option")?;
-                option.set_attribute("value", &id)?;
-                option.set_attribute("data-session", "")?;
-                option.set_attribute("data-provider", "codex")?;
-                select.append_child(&option)?;
-                option
-            }
-        };
-        option.set_text_content(Some(&format!(
-            "Continue Codex session {}",
-            session
-                .workflow
-                .as_str()
-                .rsplit(':')
-                .next()
-                .unwrap_or(session.workflow.as_str())
-        )));
-        option.set_attribute("data-revision", &session.revision.to_string())?;
-        option.remove_attribute("disabled")?;
-    }
-    for session in opencode_sessions {
-        let id = format!("opencode:{}", session.workflow.as_str());
-        let existing = (0..select.children().length())
-            .filter_map(|index| select.children().item(index))
-            .find(|option| option.get_attribute("value").as_deref() == Some(id.as_str()));
-        let option = match existing {
-            Some(option) => option,
-            None => {
-                let option = panel.document.create_element("option")?;
-                option.set_attribute("value", &id)?;
-                option.set_attribute("data-session", "")?;
-                option.set_attribute("data-provider", "opencode")?;
-                select.append_child(&option)?;
-                option
-            }
-        };
-        option.set_text_content(Some(&format!(
-            "Continue OpenCode session {}",
-            session
-                .workflow
-                .as_str()
-                .rsplit(':')
-                .next()
-                .unwrap_or(session.workflow.as_str())
-        )));
-        option.set_attribute("data-revision", &session.revision.to_string())?;
-        option.remove_attribute("disabled")?;
-    }
-    let pi = panel
-        .document
-        .get_element_by_id("execution-pi")
-        .ok_or_else(|| err("Pi option missing."))?
+        }
         .dyn_into::<HtmlOptionElement>()?;
-    pi.set_disabled(view.is_none_or(|view| view.pi_profile.is_none()));
-    let codex = panel
-        .document
-        .get_element_by_id("execution-codex")
-        .ok_or_else(|| err("Codex option missing."))?
-        .dyn_into::<HtmlOptionElement>()?;
-    codex.set_disabled(view.is_none_or(|view| view.codex_profile.is_none()));
-    if let Some(option) = panel.document.get_element_by_id("execution-opencode") {
-        option
-            .dyn_into::<HtmlOptionElement>()?
-            .set_disabled(view.is_none_or(|view| view.opencode_profile.is_none()));
-    }
-    if let Some(option) = panel.document.get_element_by_id("execution-model") {
-        option
-            .dyn_into::<HtmlOptionElement>()?
-            .set_disabled(view.is_none_or(|view| !view.fixture_available));
-    }
-    if let Some(option) = panel.document.get_element_by_id("execution-browser") {
-        let option = option.dyn_into::<HtmlOptionElement>()?;
-        match view.and_then(|view| view.browser_route.as_ref()) {
-            Some(BrowserRouteView::Messages { model }) => {
-                option.set_text_content(Some(&format!("Browser task, Messages, {model}")))
-            }
-            Some(BrowserRouteView::HttpsMessages {
-                endpoint, model, ..
-            }) => option.set_text_content(Some(&format!(
-                "Browser task, Messages, {model}, {endpoint}"
-            ))),
-            None => option.set_text_content(Some("Browser task, Messages")),
+        if option.text() != choice.label {
+            option.set_text(&choice.label);
         }
-        option.set_disabled(view.is_none_or(|view| view.browser_route.is_none()));
-    }
-    if let Some(option) = panel.document.get_element_by_id("execution-responses") {
-        let option = option.dyn_into::<HtmlOptionElement>()?;
-        match view.and_then(|view| view.responses_route.as_ref()) {
-            Some(ResponsesRouteView::HttpsResponses {
-                endpoint, model, ..
-            }) => option.set_text_content(Some(&format!(
-                "Browser task, OpenAI Responses, {model}, {endpoint}"
-            ))),
-            None => option.set_text_content(Some("Browser task, OpenAI Responses")),
-        }
-        option.set_disabled(view.is_none_or(|view| view.responses_route.is_none()));
-    }
-    if let Some(option) = panel.document.get_element_by_id("execution-chat") {
-        let option = option.dyn_into::<HtmlOptionElement>()?;
-        match view.and_then(|view| view.chat_route.as_ref()) {
-            Some(ChatRouteView::HttpsChatCompletions {
-                endpoint, model, ..
-            }) => option.set_text_content(Some(&format!(
-                "Browser task, Chat Completions, {model}, {endpoint}"
-            ))),
-            None => option.set_text_content(Some("Browser task, Chat Completions")),
-        }
-        option.set_disabled(view.is_none_or(|view| view.chat_route.is_none()));
-    }
-    if let Some(option) = panel.document.get_element_by_id("execution-google") {
-        let option = option.dyn_into::<HtmlOptionElement>()?;
-        match view.and_then(|view| view.google_route.as_ref()) {
-            Some(GoogleRouteView::HttpsGoogleInteractions {
-                endpoint, model, ..
-            }) => option.set_text_content(Some(&format!(
-                "Browser task, Google Interactions, {model}, {endpoint}"
-            ))),
-            None => option.set_text_content(Some("Browser task, Google Interactions")),
-        }
-        option.set_disabled(view.is_none_or(|view| view.google_route.is_none()));
-    }
-    for (id, protocol) in [
-        ("execution-page-messages", ProviderProtocol::Messages),
-        ("execution-page-responses", ProviderProtocol::Responses),
-        ("execution-page-chat", ProviderProtocol::ChatCompletions),
-        (
-            "execution-page-google",
-            ProviderProtocol::GoogleInteractions,
-        ),
-    ] {
-        if let Some(option) = panel.document.get_element_by_id(id) {
-            let option = option.dyn_into::<HtmlOptionElement>()?;
-            if let Some((endpoint, model, _)) = view.and_then(|view| page_route(view, protocol)) {
-                option.set_text_content(Some(&format!(
-                    "Page questions, {}, {model}, {endpoint}",
-                    provider_name(protocol)
-                )));
-                option.set_disabled(false);
-            } else {
-                option.set_text_content(Some(&format!(
-                    "Page questions, {}",
-                    provider_name(protocol)
-                )));
-                option.set_disabled(true);
-            }
-        }
+        option.set_disabled(!choice.enabled);
     }
     select.set_value(&value);
     if let Some(mode) = panel.document.get_element_by_id("codex-mode-wrap") {

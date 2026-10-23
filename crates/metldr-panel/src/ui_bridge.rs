@@ -21,9 +21,11 @@ use crate::{
 
 mod active;
 mod conversations;
+mod destinations;
 mod history;
 mod owner;
 pub use active::UiActiveRun;
+pub use destinations::UiDestination;
 use owner::{NavigationWork, Owner, Stop};
 
 #[wasm_bindgen]
@@ -138,6 +140,15 @@ impl UiBridge {
             .iter()
             .find(|run| !run.status.is_terminal())
             .map(|run| UiActiveRun::new(Rc::clone(&self.core), run)))
+    }
+
+    pub async fn execution_choices(&self) -> Result<Vec<UiDestination>, JsValue> {
+        let _read = self.core.begin_read().map_err(js_error)?;
+        let view = self.core.current().await.map_err(js_error)?;
+        Ok(composer::choices::list(Some(&view))
+            .into_iter()
+            .map(UiDestination::from)
+            .collect())
     }
 
     pub async fn snapshot(&self) -> Result<String, JsValue> {
