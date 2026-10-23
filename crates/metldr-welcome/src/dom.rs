@@ -61,30 +61,31 @@ pub fn render(document: &Document, setup: &Setup, downloading: bool) -> Result<(
         ("download-progress", setup.status == Status::Downloading),
         ("model-choice", !setup.models.is_empty()),
         ("model-choice-label", !setup.models.is_empty()),
+        ("preview-panel", setup.preview),
     ] {
         flag(document, id, "hidden", !visible)?;
     }
     for (id, disabled) in [
         (
             "check-button",
-            setup.saving || setup.status == Status::Checking || downloading,
+            setup.preview || setup.saving || setup.status == Status::Checking || downloading,
         ),
         (
             "download-button",
-            setup.saving || downloading || setup.status != Status::Downloadable,
+            setup.preview || setup.saving || downloading || setup.status != Status::Downloadable,
         ),
-        ("cancel-button", !downloading),
+        ("cancel-button", setup.preview || !downloading),
         (
             "open-agent-panel",
-            setup.saving || !matches!(setup.panel, Panel::Ready(_)),
+            setup.preview || setup.saving || !matches!(setup.panel, Panel::Ready(_)),
         ),
         (
             "continue-button",
-            setup.loading || setup.saving || setup.theme_saving || !setup.ready(),
+            setup.preview || setup.loading || setup.saving || setup.theme_saving || !setup.ready(),
         ),
         (
             "explore-button",
-            setup.loading || setup.saving || setup.theme_saving,
+            setup.preview || setup.loading || setup.saving || setup.theme_saving,
         ),
         ("theme-choice", setup.saving),
         ("model-choice", setup.saving || setup.models.is_empty()),

@@ -46,12 +46,22 @@ pub fn mount() -> Result<(), JsValue> {
     let document = window
         .document()
         .ok_or_else(|| JsValue::from_str("Document unavailable"))?;
+    let preview = window.location().protocol()? != "chrome-extension:";
     guide_view::mount(&document)?;
-    setup_view::mount(&document)?;
+    setup_view::mount(&document, preview)?;
     scene::mount(&document)?;
     let app = Rc::new(RefCell::new(App {
         document: document.clone(),
-        setup: Setup::default(),
+        setup: Setup {
+            preview,
+            loading: !preview,
+            panel: if preview {
+                Panel::Unavailable
+            } else {
+                Panel::Preparing
+            },
+            ..Setup::default()
+        },
         download: None,
         alive: true,
         theme_changed: false,
@@ -112,8 +122,14 @@ pub fn mount() -> Result<(), JsValue> {
     window.add_event_listener_with_callback("pageshow", pageshow.as_ref().unchecked_ref())?;
     pageshow.forget();
     app.borrow().paint();
-    spawn_local(prepare_panel(app.clone()));
-    spawn_local(load(app));
+    if preview {
+        app.borrow().notice(
+            "This webpage previews metldr. Open the installed Chrome extension to set it up.",
+        );
+    } else {
+        spawn_local(prepare_panel(app.clone()));
+        spawn_local(load(app));
+    }
     Ok(())
 }
 
@@ -131,7 +147,8 @@ fn open_panel(app: Shared) {
     let Panel::Ready(tab) = current.setup.panel else {
         return;
     };
-    if !current.alive
+    if current.setup.preview
+        || !current.alive
         || current.setup.saving
         || !matches!(current.setup.choice, Choice::Provider | Choice::Agent)
     {
@@ -236,6 +253,9 @@ fn handle_click(app: Shared, id: &str) {
         app.paint();
         return;
     }
+    if app.borrow().setup.preview {
+        return;
+    }
     match id {
         "check-button" => check(app),
         "download-button" => {
@@ -273,7 +293,7 @@ fn handle_change(app: Shared, id: &str, value: String) {
             current.theme_changed = true;
             current.theme_revision += 1;
             current.setup.theme = value;
-            if !current.setup.theme_saving {
+            if !current.setup.preview && !current.setup.theme_saving {
                 current.setup.theme_saving = true;
                 spawn_local(save_theme(app.clone()));
             }

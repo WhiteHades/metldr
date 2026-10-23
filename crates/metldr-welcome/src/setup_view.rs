@@ -35,7 +35,14 @@ impl CopyView {
     }
 }
 
-pub fn mount(document: &Document) -> Result<(), JsValue> {
+pub fn mount(document: &Document, preview: bool) -> Result<(), JsValue> {
+    if preview {
+        return dom::text(
+            document,
+            "setup-copy-status",
+            "Open the installed extension to copy setup commands for your extension ID.",
+        );
+    }
     let origin = browser::runtime_id()
         .ok()
         .and_then(|id| ExtensionOrigin::from_id(&id));

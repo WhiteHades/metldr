@@ -26,6 +26,7 @@ pub enum Panel {
 }
 
 pub struct Setup {
+    pub preview: bool,
     pub panel: Panel,
     pub choice: Choice,
     pub status: Status,
@@ -44,6 +45,7 @@ pub struct Setup {
 impl Default for Setup {
     fn default() -> Self {
         Self {
+            preview: false,
             panel: Panel::Preparing,
             choice: Choice::Provider,
             status: Status::Idle,
@@ -122,7 +124,8 @@ impl Setup {
     }
 
     pub fn ready(&self) -> bool {
-        self.status == Status::Ready
+        !self.preview
+            && self.status == Status::Ready
             && match self.choice {
                 Choice::Chrome => true,
                 Choice::Ollama => self.models.contains(&self.model),
@@ -181,6 +184,9 @@ mod tests {
         assert!(!setup.ready());
         setup.model = "model:latest".into();
         assert!(setup.ready());
+        setup.preview = true;
+        assert!(!setup.ready());
+        setup.preview = false;
         setup.choose(Choice::Provider);
         setup.panel = Panel::Ready(7);
         setup.status = Status::Ready;
