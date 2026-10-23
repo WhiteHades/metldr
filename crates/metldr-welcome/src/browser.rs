@@ -86,6 +86,19 @@ pub async fn load_settings() -> Result<JsValue, JsValue> {
     await_call(&local, "get", &[keys.into()]).await
 }
 
+pub fn saved_destination() -> Result<Option<String>, JsValue> {
+    let storage = get(&js_sys::global(), "localStorage")?;
+    let value = call(&storage, "getItem", &["metldr.composer.destination".into()])?;
+    if value.is_null() {
+        return Ok(None);
+    }
+    value
+        .as_string()
+        .filter(|value| value.len() <= 1024)
+        .map(Some)
+        .ok_or_else(|| JsValue::from_str("Saved destination is invalid"))
+}
+
 pub async fn save_settings(value: &JsValue) -> Result<(), JsValue> {
     let settings = Object::new();
     for key in SETTINGS_KEYS {

@@ -137,6 +137,7 @@ fn open_panel(app: Shared) {
     {
         return;
     }
+    current.cancel();
     // Start Chrome's call before yielding so it retains the trusted click.
     let result = browser::start_panel_open(tab);
     current.setup.panel = Panel::Opening;
@@ -165,30 +166,39 @@ fn open_panel(app: Shared) {
 }
 
 async fn load(app: Shared) {
+    let destination = browser::saved_destination();
     let result = browser::load_settings().await;
     let mut app = app.borrow_mut();
     if !app.alive {
         return;
     }
+    if app.setup.generation == 0 {
+        let saved = |key| {
+            result
+                .as_ref()
+                .ok()
+                .and_then(|settings| browser::get(settings, key).ok())
+                .and_then(|value| value.as_string())
+        };
+        let local = saved("preferredProvider");
+        if let Some(model) =
+            saved("selectedModel").filter(|model| !model.is_empty() && model.len() <= 512)
+        {
+            app.setup.model = model;
+        }
+        match destination {
+            Ok(destination) => app
+                .setup
+                .restore_choice(destination.as_deref(), local.as_deref()),
+            Err(_) => {
+                app.setup.detail =
+                    "Your saved destination could not be read. Review it in the panel before connecting."
+                        .into();
+            }
+        }
+    }
     match result {
         Ok(settings) => {
-            if app.setup.generation == 0 {
-                if browser::get(&settings, "preferredProvider")
-                    .ok()
-                    .and_then(|v| v.as_string())
-                    .as_deref()
-                    == Some("ollama")
-                {
-                    app.setup.choose(Choice::Ollama);
-                }
-                if let Some(model) = browser::get(&settings, "selectedModel")
-                    .ok()
-                    .and_then(|v| v.as_string())
-                    .filter(|v| !v.is_empty() && v.len() <= 512)
-                {
-                    app.setup.model = model;
-                }
-            }
             if !app.theme_changed {
                 if let Some(theme) = browser::get(&settings, "theme")
                     .ok()
