@@ -15,6 +15,8 @@ impl Edit<'_> {
             }
             self.require_browser_finalized(scope, &task.run)?;
             let before = self.native_task(scope, &task.run.id)?;
+            crate::native_correction::validate_update(&before.run, &task.run)?;
+            crate::native_correction::validate_route(&task.run, &task.launch)?;
             if task.versions != before.versions {
                 return Err("native task draft is stale".into());
             }

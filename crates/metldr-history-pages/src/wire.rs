@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Identity, Result, valid_token};
 
-pub(crate) const WIRE_VERSION: u8 = 12;
+pub const WIRE_VERSION: u8 = 13;
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

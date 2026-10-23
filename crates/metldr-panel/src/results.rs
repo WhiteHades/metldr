@@ -125,6 +125,50 @@ fn update_card(doc: &Document, card: &Element, run: &RunView) -> Result<(), JsVa
     update_part(card, "route", Some(&route))?;
     update_part(card, "question", run.question.as_deref())?;
     update_part(card, "error", run.error.as_deref())?;
+    let corrections = part(card, "corrections")?;
+    let correction_rows = part(card, "correction-rows")?;
+    correction_rows.set_text_content(None);
+    if run.corrections.total == 0 {
+        corrections.set_attribute("hidden", "")?;
+    } else {
+        corrections.remove_attribute("hidden")?;
+        write_text(
+            &part(card, "correction-count")?,
+            &format!("Corrections: {}", run.corrections.total),
+        );
+        for receipt in &run.corrections.entries {
+            let row = doc.create_element("p")?;
+            let meaning = match &receipt.state {
+                crate::model::CorrectionState::Pending => "Saved and waiting to send".to_owned(),
+                crate::model::CorrectionState::Dispatching => {
+                    "Sending to native session".to_owned()
+                }
+                crate::model::CorrectionState::CodexAccepted => {
+                    "Codex accepted this correction; model use is not confirmed".to_owned()
+                }
+                crate::model::CorrectionState::PiQueued => {
+                    "Pi queued this correction; model use is not confirmed".to_owned()
+                }
+                crate::model::CorrectionState::PiHandled => {
+                    "Pi handled this correction; model use is not confirmed".to_owned()
+                }
+                crate::model::CorrectionState::Rejected { message } => {
+                    format!("Rejected: {message}")
+                }
+                crate::model::CorrectionState::NotSent { message } => {
+                    format!("Not sent: {message}")
+                }
+                crate::model::CorrectionState::Uncertain { message } => {
+                    format!("Uncertain: {message}")
+                }
+            };
+            row.set_text_content(Some(&format!(
+                "Correction {}: {}. {}",
+                receipt.ordinal, receipt.text.text, meaning
+            )));
+            correction_rows.append_child(&row)?;
+        }
+    }
     if assistant::render(doc, card, run)? {
         write_text(&part(card, "copy-status")?, "");
     }

@@ -56,6 +56,7 @@ fn run(id: String) -> Run {
         status: Status::Running,
         output: Default::default(),
         error: None,
+        corrections: Vec::new(),
     }
 }
 

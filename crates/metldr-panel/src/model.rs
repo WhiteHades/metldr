@@ -14,6 +14,7 @@ const MAX_ACTIVITY: usize = 64;
 const MAX_BROWSER_ACTIONS: usize = 16;
 const MAX_PAGE_TEXT: usize = 8_192;
 const MAX_PI_UI: usize = 32_768;
+const MAX_CORRECTIONS: usize = 16;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RunId(String);
@@ -165,6 +166,7 @@ pub(crate) struct PageView {
     pub(crate) selection: metldr_history_pages::Scope,
     pub(crate) source: Option<SourceView>,
     pub(crate) runs: Vec<RunView>,
+    pub(crate) native_correction: Option<NativeCorrectionView>,
     pub(crate) pi_profile: Option<PiProfileView>,
     pub(crate) agent_sessions: Vec<AgentSessionView>,
     pub(crate) codex_profile: Option<CodexProfileView>,
@@ -639,6 +641,66 @@ pub(crate) struct RunView {
     pub(crate) error: Option<String>,
     pub(crate) route: RunRoute,
     pub(crate) activity: Vec<ActivityView>,
+    pub(crate) corrections: CorrectionHistory,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NativeCorrectionView {
+    pub(crate) run: RunId,
+    pub(crate) available: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CorrectionHistory {
+    pub(crate) total: u8,
+    pub(crate) entries: Vec<CorrectionReceipt>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CorrectionReceipt {
+    pub(crate) ordinal: u8,
+    pub(crate) request: String,
+    pub(crate) text: crate::history::Preview,
+    pub(crate) state: CorrectionState,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum CorrectionState {
+    Pending,
+    Dispatching,
+    CodexAccepted,
+    PiQueued,
+    PiHandled,
+    Rejected { message: String },
+    NotSent { message: String },
+    Uncertain { message: String },
+}
+
+pub(crate) fn valid_correction_receipt(
+    receipt: &CorrectionReceipt,
+    max_text: usize,
+    require_complete_text: bool,
+) -> bool {
+    !receipt.request.is_empty()
+        && receipt.request.len() <= 96
+        && receipt
+            .request
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'_' | b'-'))
+        && !receipt.text.text.trim().is_empty()
+        && receipt.text.text.len() <= max_text
+        && (!require_complete_text || !receipt.text.truncated)
+        && !matches!(
+            &receipt.state,
+            CorrectionState::Rejected { message }
+                | CorrectionState::NotSent { message }
+                | CorrectionState::Uncertain { message }
+                if message.trim().is_empty() || message.len() > 256
+        )
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -1101,6 +1163,8 @@ struct WireView {
     source: Option<WireSource>,
     runs: Vec<WireRun>,
     #[serde(deserialize_with = "Option::deserialize")]
+    native_correction: Option<NativeCorrectionView>,
+    #[serde(deserialize_with = "Option::deserialize")]
     pi_profile: Option<PiProfileView>,
     agent_sessions: Vec<AgentSessionView>,
     #[serde(default, deserialize_with = "Option::deserialize")]
@@ -1195,6 +1259,7 @@ struct WireRun {
     error: Option<String>,
     route: RunRoute,
     activity: Vec<ActivityView>,
+    corrections: CorrectionHistory,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1206,6 +1271,7 @@ pub(crate) enum FlowError {
     InvalidInput(String),
     Protocol(String),
     Host(String),
+    HostRejected(String),
     Timeout,
 }
 
@@ -1219,9 +1285,10 @@ impl fmt::Display for FlowError {
             Self::Timeout => {
                 f.write_str("Request timed out. Reconnect to check saved work before trying again.")
             }
-            Self::InvalidInput(message) | Self::Protocol(message) | Self::Host(message) => {
-                f.write_str(message)
-            }
+            Self::InvalidInput(message)
+            | Self::Protocol(message)
+            | Self::Host(message)
+            | Self::HostRejected(message) => f.write_str(message),
         }
     }
 }
@@ -1356,7 +1423,7 @@ impl PageView {
         let mut active = false;
         let mut runs = Vec::with_capacity(wire.runs.len());
         for run in wire.runs {
-            let run = run.into_view(&wire.store)?;
+            let run = run.into_view(&wire.store, false)?;
             if !ids.insert(run.id.as_str().to_owned()) {
                 return Err(FlowError::Protocol("invalid saved run".into()));
             }
@@ -1367,6 +1434,29 @@ impl PageView {
                 active = true;
             }
             runs.push(run);
+        }
+        if let Some(correction) = &wire.native_correction {
+            let Some(run) = runs.iter().find(|run| run.id == correction.run) else {
+                return Err(FlowError::Protocol(
+                    "native correction run is missing".into(),
+                ));
+            };
+            if run.status.is_terminal()
+                || !matches!(&run.route, RunRoute::Codex { .. } | RunRoute::Pi { .. })
+                || (correction.available
+                    && (run.status != RunStatus::Running
+                        || run.corrections.total >= MAX_CORRECTIONS as u8
+                        || run.corrections.entries.iter().any(|entry| {
+                            matches!(
+                                &entry.state,
+                                CorrectionState::Pending | CorrectionState::Dispatching
+                            )
+                        })))
+            {
+                return Err(FlowError::Protocol(
+                    "invalid native correction availability".into(),
+                ));
+            }
         }
         let run_ids: std::collections::BTreeSet<_> =
             runs.iter().map(|run| run.id.as_str()).collect();
@@ -1713,6 +1803,7 @@ impl PageView {
             selection: wire.selection,
             source,
             runs,
+            native_correction: wire.native_correction,
             pi_profile: wire.pi_profile,
             agent_sessions: wire.agent_sessions,
             codex_profile: wire.codex_profile,
@@ -1872,7 +1963,7 @@ mod tests {
     use super::*;
 
     const STORE: &str = "0123456789abcdef0123456789abcdef";
-    const VALID: &str = r#"{"sequence":2,"store":"0123456789abcdef0123456789abcdef","selection":{"store":"0123456789abcdef0123456789abcdef","conversation":"0123456789abcdef0123456789abcdef:100","epoch":"1"},"source":{"id":"0123456789abcdef0123456789abcdef:1","tab":4,"document":"doc-1","url":"http://127.0.0.1:43123/article","title":"North report","text":"The North project reports an amount of 17 units."},"runs":[{"id":"0123456789abcdef0123456789abcdef:2","source":"0123456789abcdef0123456789abcdef:1","kind":"summary","question":null,"status":"complete","output":"North reports 17 units.","conversation":[],"error":null,"route":{"kind":"fixture"},"activity":[]}],"pi_profile":null,"agent_sessions":[],"browser_route":null}"#;
+    const VALID: &str = r#"{"sequence":2,"store":"0123456789abcdef0123456789abcdef","selection":{"store":"0123456789abcdef0123456789abcdef","conversation":"0123456789abcdef0123456789abcdef:100","epoch":"1"},"source":{"id":"0123456789abcdef0123456789abcdef:1","tab":4,"document":"doc-1","url":"http://127.0.0.1:43123/article","title":"North report","text":"The North project reports an amount of 17 units."},"runs":[{"id":"0123456789abcdef0123456789abcdef:2","source":"0123456789abcdef0123456789abcdef:1","kind":"summary","question":null,"status":"complete","output":"North reports 17 units.","conversation":[],"error":null,"route":{"kind":"fixture"},"activity":[],"corrections":{"total":0,"entries":[]}}],"native_correction":null,"pi_profile":null,"agent_sessions":[],"browser_route":null}"#;
 
     #[test]
     fn decodes_host_view_and_rejects_invalid_boundary_data() {
@@ -1930,6 +2021,34 @@ mod tests {
             assert!(PageView::decode(&serde_json::to_vec(&absent).unwrap()).is_err());
         }
         assert!(PageView::decode(&vec![b' '; MAX_FRAME + 1]).is_err());
+    }
+
+    #[test]
+    fn native_correction_history_enforces_its_receipt_limit() {
+        let mut view: serde_json::Value = serde_json::from_str(VALID).unwrap();
+        view["runs"][0]["corrections"]["total"] = serde_json::json!(17);
+        assert!(PageView::decode(&serde_json::to_vec(&view).unwrap()).is_err());
+    }
+
+    #[test]
+    fn native_correction_outcomes_match_the_saved_agent_route() {
+        let mut view: serde_json::Value = serde_json::from_str(VALID).unwrap();
+        view["runs"][0]["kind"] = serde_json::json!("agent");
+        view["runs"][0]["route"] = serde_json::json!({
+            "kind":"codex", "workflow":format!("{STORE}:3"), "provider":null, "model":null
+        });
+        view["runs"][0]["corrections"] = serde_json::json!({
+            "total":1,
+            "entries":[{
+                "ordinal":1, "request":"correction-1",
+                "text":{"text":"Exact text","truncated":false},
+                "state":{"kind":"pi_queued"}
+            }]
+        });
+        assert!(PageView::decode(&serde_json::to_vec(&view).unwrap()).is_err());
+        view["runs"][0]["corrections"]["entries"][0]["state"] =
+            serde_json::json!({"kind":"codex_accepted"});
+        assert!(PageView::decode(&serde_json::to_vec(&view).unwrap()).is_ok());
     }
 
     #[test]

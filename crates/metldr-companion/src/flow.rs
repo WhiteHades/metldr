@@ -15,6 +15,24 @@ use std::{
 };
 
 pub(super) enum Event {
+    CorrectionReady {
+        run: String,
+        target: crate::native_correction::Target,
+    },
+    CorrectionDispatch {
+        run: String,
+        request: String,
+        target: crate::native_correction::Target,
+        ack: SyncSender<bool>,
+    },
+    CorrectionFinished {
+        run: String,
+        request: String,
+        outcome: crate::native_correction::Phase,
+    },
+    CorrectionClosed {
+        run: String,
+    },
     Provider(crate::provider_settings::Completion),
     BrowserIo(crate::browser_io::Call),
     Browser(crate::browser_owner::Event),
@@ -112,6 +130,7 @@ pub(super) struct Operation {
     pub(super) run: String,
     pub(super) stop: Arc<AtomicBool>,
     pub(super) worker: JoinHandle<()>,
+    pub(super) correction: Option<crate::native_correction::Slot>,
 }
 #[derive(Clone)]
 pub(super) struct Subscription {
@@ -264,6 +283,7 @@ impl Owner {
             }
         }
         view["selection"] = serde_json::to_value(selection.map(crate::history_io::Scope::from))?;
+        view["native_correction"] = self.correction_public(state);
         view["provider_settings"] = self.settings.public(&state.providers);
         view["agent_settings"] = self.agent_runtime.public(
             &state.agent_settings,
@@ -457,6 +477,10 @@ impl Owner {
             return Ok(());
         }
         match action {
+            ConversationAction::NativeCorrection { run, text } => {
+                self.require_conversation(scope)?;
+                self.correct_native(id, scope, &run, &text)
+            }
             ConversationAction::Capture {
                 expected_source,
                 page,

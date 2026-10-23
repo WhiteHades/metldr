@@ -360,7 +360,46 @@ pub(in crate::history) fn backfill(write: &WriteTransaction, profile: &Profile) 
     if write.open_table(NATIVE_CHOICES)?.len()? != 0 {
         return Err("native choices upgrade index is not empty".into());
     }
+    visit_index(write, profile, |key, head, id| {
+        if write
+            .open_table(NATIVE_CHOICES)?
+            .insert((key, head), id)?
+            .is_some()
+        {
+            return Err("native choices upgrade index collision".into());
+        }
+        Ok(())
+    })?;
+    Ok(())
+}
+
+pub(in crate::history) fn validate_index(
+    write: &WriteTransaction,
+    profile: &Profile,
+) -> Result<()> {
+    let count = visit_index(write, profile, |key, head, id| {
+        if write
+            .open_table(NATIVE_CHOICES)?
+            .get((key, head))?
+            .is_none_or(|value| value.value() != id)
+        {
+            return Err("native choices upgrade index is absent or changed".into());
+        }
+        Ok(())
+    })?;
+    if write.open_table(NATIVE_CHOICES)?.len()? != count {
+        return Err("native choices upgrade index has unowned entries".into());
+    }
+    Ok(())
+}
+
+fn visit_index(
+    write: &WriteTransaction,
+    profile: &Profile,
+    mut visit: impl FnMut(&str, u64, &str) -> Result<()>,
+) -> Result<u64> {
     let reader = Reader::Staged(write);
+    let mut count = 0u64;
     for kind in KINDS {
         let mut after: Option<String> = None;
         loop {
@@ -386,16 +425,13 @@ pub(in crate::history) fn backfill(write: &WriteTransaction, profile: &Profile) 
                     kind,
                     &entry.choice.profile,
                 )?;
-                if write
-                    .open_table(NATIVE_CHOICES)?
-                    .insert((key.as_str(), entry.head), id.as_str())?
-                    .is_some()
-                {
-                    return Err("native choices upgrade index collision".into());
-                }
+                visit(key.as_str(), entry.head, id.as_str())?;
+                count = count
+                    .checked_add(1)
+                    .ok_or("native choices index count exhausted")?;
             }
             after = ids.last().cloned();
         }
     }
-    Ok(())
+    Ok(count)
 }

@@ -85,8 +85,17 @@ fn refused(mut host: Running) -> Result<()> {
     Ok(())
 }
 
+fn index_rows(read: &redb::ReadTransaction) -> Result<Value> {
+    let mut rows = Vec::new();
+    for row in read.open_table(NATIVE_CHOICES)?.iter()? {
+        let (key, value) = row?;
+        rows.push(json!([key.value(), value.value()]));
+    }
+    Ok(json!(rows))
+}
+
 #[test]
-#[ignore = "requires METLDR_STARTUP_BINARY and METLDR_HISTORY_OLD_BINARY with history format 10 or 11"]
+#[ignore = "requires METLDR_STARTUP_BINARY and METLDR_HISTORY_OLD_BINARY with history format 10, 11 or 12"]
 fn actual_old_private_host_upgrades_and_cannot_reopen_new_history() -> Result<()> {
     let directory = Directory::new()?;
     let mut legacy = crate::history::fixture::legacy();
@@ -112,7 +121,7 @@ fn actual_old_private_host_upgrades_and_cannot_reopen_new_history() -> Result<()
     let old_format = before["profile"]["format"]
         .as_u64()
         .ok_or("old format absent")?;
-    assert!(matches!(old_format, 10 | 11));
+    assert!(matches!(old_format, 10 | 11 | 12));
     assert_eq!(ready["v"], if old_format == 10 { 10 } else { 12 });
     assert_eq!(before["tables"]["runs"].as_array().unwrap().len(), 11);
     assert_eq!(before["tables"]["starts"].as_array().unwrap().len(), 11);
@@ -121,6 +130,12 @@ fn actual_old_private_host_upgrades_and_cannot_reopen_new_history() -> Result<()
         1
     );
     let marker = fs::read(directory.0.join("snapshot.json"))?;
+    let original_index = if old_format == 12 {
+        let db = redb::Database::open(directory.0.join("history.redb"))?;
+        Some(index_rows(&db.begin_read()?)?)
+    } else {
+        None
+    };
     for damage in [
         "missing table",
         "origin digest",
@@ -131,7 +146,7 @@ fn actual_old_private_host_upgrades_and_cannot_reopen_new_history() -> Result<()
         for name in ["snapshot.json", "snapshot.v8.json", "history.redb"] {
             fs::copy(directory.0.join(name), broken.0.join(name))?;
         }
-        let before_profile = {
+        let (before_profile, before_index) = {
             let db = redb::Database::open(broken.0.join("history.redb"))?;
             let write = db.begin_write()?;
             if damage == "missing table" {
@@ -164,7 +179,15 @@ fn actual_old_private_host_upgrades_and_cannot_reopen_new_history() -> Result<()
             write.commit()?;
             let read = db.begin_read()?;
             let meta = read.open_table(META)?;
-            meta.get("profile")?.unwrap().value().to_vec()
+            let bytes = meta.get("profile")?.unwrap().value().to_vec();
+            (
+                bytes,
+                if old_format == 12 {
+                    Some(index_rows(&read)?)
+                } else {
+                    None
+                },
+            )
         };
         refused(Running::start(&broken.0)?)?;
         let db = redb::Database::open(broken.0.join("history.redb"))?;
@@ -181,7 +204,13 @@ fn actual_old_private_host_upgrades_and_cannot_reopen_new_history() -> Result<()
             before_profile,
             "refused upgrade changed {damage}"
         );
-        if damage == "index collision" {
+        if let Some(before_index) = before_index {
+            assert_eq!(
+                index_rows(&read)?,
+                before_index,
+                "refused upgrade changed existing index"
+            );
+        } else if damage == "index collision" {
             assert_eq!(read.open_table(NATIVE_CHOICES)?.len()?, 1);
         } else {
             assert!(
@@ -201,6 +230,9 @@ fn actual_old_private_host_upgrades_and_cannot_reopen_new_history() -> Result<()
     {
         let db = redb::Database::open(directory.0.join("history.redb"))?;
         assert_eq!(db.begin_read()?.open_table(NATIVE_CHOICES)?.len()?, 3);
+        if let Some(original_index) = original_index {
+            assert_eq!(index_rows(&db.begin_read()?)?, original_index);
+        }
     }
     assert_eq!(fs::read(directory.0.join("snapshot.v8.json"))?, original);
     assert_eq!(fs::read(directory.0.join("snapshot.json"))?, marker);

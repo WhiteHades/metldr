@@ -12,10 +12,13 @@ pub(super) fn run(db: &Database) -> Result<()> {
     )?;
     match profile.format {
         FORMAT => return Ok(()),
-        10 | 11 => (),
+        10 | 11 | 12 => (),
         _ => return Err("unsupported history profile format".into()),
     }
     require_base_tables(&read)?;
+    if profile.format == 12 {
+        read.open_table(NATIVE_CHOICES)?;
+    }
     drop(meta);
     drop(read);
 
@@ -31,7 +34,7 @@ pub(super) fn run(db: &Database) -> Result<()> {
         )?;
         match profile.format {
             FORMAT => return Ok(()),
-            10 | 11 => (),
+            10 | 11 | 12 => (),
             _ => return Err("unsupported history profile format".into()),
         }
         let format = profile.format;
@@ -70,7 +73,11 @@ pub(super) fn run(db: &Database) -> Result<()> {
         drop(order);
         drop(selections);
 
-        edit::native_choices::backfill(&write, &profile)?;
+        if format < 12 {
+            edit::native_choices::backfill(&write, &profile)?;
+        } else {
+            edit::native_choices::validate_index(&write, &profile)?;
+        }
         profile.format = FORMAT;
         profile.validate()?;
         meta.insert("profile", encode(&profile)?.as_slice())?;

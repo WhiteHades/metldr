@@ -61,10 +61,13 @@ pub(super) struct Run {
     pub(super) status: Status,
     pub(super) output: metldr_conversation::Content,
     pub(super) error: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) corrections: Vec<crate::native_correction::Receipt>,
 }
 impl Run {
     pub(super) fn validate(&self, valid_id: impl Fn(&str) -> bool) -> Result<()> {
         self.output.validate()?;
+        crate::native_correction::validate(self)?;
         if !valid_id(&self.id)
             || !valid_id(&self.source)
             || !matches!(
@@ -196,6 +199,10 @@ pub(super) enum Command {
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum ConversationAction {
+    NativeCorrection {
+        run: String,
+        text: String,
+    },
     Capture {
         #[serde(deserialize_with = "Option::deserialize")]
         expected_source: Option<String>,
@@ -338,6 +345,14 @@ impl Store {
         let mut previous_run = 0;
         for run in &view.runs {
             run.validate(valid_id)?;
+            if !run.corrections.is_empty() {
+                crate::native_correction::validate_route(
+                    run,
+                    self.launches
+                        .get(&run.id)
+                        .ok_or("correction has no native launch")?,
+                )?;
+            }
             if !ids.insert(&run.id) {
                 return Err("invalid saved run".into());
             }

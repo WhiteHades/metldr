@@ -34,6 +34,11 @@ impl Edit<'_> {
                     Launch::Pi { .. } | Launch::Codex { .. } | Launch::OpenCode { .. }
                 ) {
                     let mut task = self.native_task(scope, &id)?;
+                    crate::native_correction::finish(
+                        &mut task.run,
+                        "The host restarted before the correction was sent.",
+                        "The host restarted after dispatch. Delivery is unknown.",
+                    )?;
                     task.run.status = Status::Interrupted;
                     task.run.error =
                         Some("native host restarted; native session ownership is unknown".into());

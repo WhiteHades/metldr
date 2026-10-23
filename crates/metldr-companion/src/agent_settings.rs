@@ -502,6 +502,7 @@ mod checks {
             run: "active".into(),
             stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             worker: std::thread::spawn(|| {}),
+            correction: None,
         });
         assert!(
             owner

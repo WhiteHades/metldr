@@ -18,6 +18,10 @@ pub struct ToolCall {
 }
 
 pub enum Event {
+    SteerResult {
+        request: crate::SteerId,
+        outcome: crate::SteerOutcome,
+    },
     TextDelta {
         item_id: String,
         text: String,
@@ -46,6 +50,9 @@ pub enum Event {
 
 impl CodexSession {
     pub(crate) async fn event(&mut self, value: Value) -> Result<Option<Event>> {
+        if value.get("method").is_none() {
+            return self.steer_result(value).map(Some);
+        }
         let method = field(&value, "method")?;
         let params = &value["params"];
         let approval = matches!(

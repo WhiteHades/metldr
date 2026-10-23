@@ -59,6 +59,7 @@ impl Owner {
             run: run.clone(),
             stop,
             worker,
+            correction: None,
         });
         self.emit(self.started_reply(request, scope, &run)?)
     }

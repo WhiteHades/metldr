@@ -9,7 +9,7 @@ use web_sys::{
 
 use crate::model::{
     AgentSessionView, BrowserRouteView, ChatRouteView, FlowError, GoogleRouteView, PageView,
-    ProviderProtocol, ResponsesRouteView, RunId, UserText,
+    ProviderProtocol, ResponsesRouteView, RunId, RunView, UserText,
 };
 use crate::{Panel, active_run, begin_start, err, follow_start, js_message, set_panel_status};
 
@@ -362,11 +362,145 @@ pub(super) fn selected(panel: &Panel) -> Result<Destination, FlowError> {
 
 fn submit(panel: &Rc<RefCell<Panel>>) -> Result<(), FlowError> {
     let state = panel.borrow();
-    if !state.connected
-        || state.start_pending
-        || active_run(&state.snapshot).is_some()
-        || crate::conversations::start_blocked(&state)
-    {
+    if !state.connected || state.start_pending {
+        return Ok(());
+    }
+    if let Some(run) = active_run(&state.snapshot) {
+        let Some(native) = state
+            .snapshot
+            .as_ref()
+            .and_then(|view| view.native_correction.as_ref())
+            .filter(|native| native.available && native.run == *run)
+        else {
+            return Ok(());
+        };
+        if state.correction_pending.is_some() {
+            return Err(FlowError::InvalidInput(
+                "A correction submission is unresolved. Check the saved run before sending again."
+                    .into(),
+            ));
+        }
+        let element = state
+            .document
+            .get_element_by_id("question")
+            .and_then(|element| element.dyn_into::<HtmlTextAreaElement>().ok())
+            .ok_or_else(|| FlowError::Host("Composer missing.".into()))?;
+        let text = element.value();
+        let text = UserText::try_from(text.as_str())?;
+        let request = state.flow.correction_request_id()?;
+        let scope = state
+            .snapshot
+            .as_ref()
+            .ok_or(FlowError::NoSource)?
+            .selection
+            .clone();
+        let run = native.run.clone();
+        let flow = state.flow.clone();
+        let generation = state.connection_generation;
+        drop(state);
+        panel.borrow_mut().correction_pending = Some(crate::CorrectionSubmission {
+            request: request.clone(),
+            scope: scope.clone(),
+            run: run.clone(),
+            text: text.as_str().into(),
+        });
+        set_panel_status(panel, "Sending correction to the active native run.");
+        let panel = Rc::clone(panel);
+        spawn_local(async move {
+            match flow
+                .correct(request.clone(), scope.clone(), run.clone(), text)
+                .await
+            {
+                Ok(()) => {
+                    let mut state = panel.borrow_mut();
+                    if state.connection_generation == generation
+                        && state
+                            .correction_pending
+                            .as_ref()
+                            .is_some_and(|pending| pending.request == request)
+                    {
+                        if let Some(input) = state
+                            .document
+                            .get_element_by_id("question")
+                            .and_then(|node| node.dyn_into::<HtmlTextAreaElement>().ok())
+                            && input.value() == state.correction_pending.as_ref().unwrap().text
+                        {
+                            input.set_value("");
+                        }
+                        state.correction_pending = None;
+                        state.status_message = "Correction saved to the active run.".into();
+                        crate::view::status(&state.document, &state.status_message);
+                    }
+                }
+                Err(error) => {
+                    let history = correction_history(&flow, &scope, &run, &request).await;
+                    let mut state = panel.borrow_mut();
+                    if state.connection_generation == generation
+                        && state
+                            .correction_pending
+                            .as_ref()
+                            .is_some_and(|pending| pending.request == request)
+                    {
+                        let (fresh, saved_run) = history
+                            .map(|(view, saved)| (Some(view), Some(saved)))
+                            .unwrap_or((None, None));
+                        let same_run = fresh.as_ref().is_some_and(|view| view.selection == scope)
+                            && saved_run.as_ref().is_some_and(|saved| saved.id == run);
+                        let admitted = same_run
+                            && saved_run.as_ref().is_some_and(|saved| {
+                                saved
+                                    .corrections
+                                    .entries
+                                    .iter()
+                                    .any(|receipt| receipt.request == request)
+                            });
+                        let fully_absent = matches!(&error, FlowError::HostRejected(_))
+                            && same_run
+                            && saved_run.as_ref().is_some_and(|saved| {
+                                saved.corrections.entries.len()
+                                    == usize::from(saved.corrections.total)
+                                    && !saved
+                                        .corrections
+                                        .entries
+                                        .iter()
+                                        .any(|receipt| receipt.request == request)
+                            });
+                        if let Some(view) = fresh {
+                            state.snapshot = Some(view);
+                        }
+                        if admitted || fully_absent {
+                            if let Some(input) = state
+                                .document
+                                .get_element_by_id("question")
+                                .and_then(|node| node.dyn_into::<HtmlTextAreaElement>().ok())
+                                && admitted
+                                && state
+                                    .correction_pending
+                                    .as_ref()
+                                    .is_some_and(|pending| input.value() == pending.text)
+                            {
+                                input.set_value("");
+                            }
+                            state.correction_pending = None;
+                            state.status_message = if admitted {
+                                "Correction receipt found in saved run history.".into()
+                            } else {
+                                "Correction was rejected before admission. The draft is still available to send again.".into()
+                            };
+                            crate::view::status(&state.document, &state.status_message);
+                        } else {
+                            state.status_message = format!(
+                                "Correction status is unresolved: {error}. Saved history was checked; do not resend until this submission is resolved."
+                            );
+                            crate::view::status(&state.document, &state.status_message);
+                        }
+                    }
+                }
+            }
+        });
+        return Ok(());
+    }
+    if crate::conversations::start_blocked(&state) {
         return Ok(());
     }
     let destination = selected(&state)?;
@@ -377,6 +511,7 @@ fn submit(panel: &Rc<RefCell<Panel>>) -> Result<(), FlowError> {
         .map(|element| element.value())
         .unwrap_or_default();
     let text = UserText::try_from(text.as_str())?;
+    let submitted = text.as_str().to_owned();
     let source = state
         .snapshot
         .as_ref()
@@ -446,9 +581,53 @@ fn submit(panel: &Rc<RefCell<Panel>>) -> Result<(), FlowError> {
                     .await
             }
         };
+        if start.is_ok() {
+            let state = panel.borrow();
+            if state.connection_generation == generation
+                && let Some(input) = state
+                    .document
+                    .get_element_by_id("question")
+                    .and_then(|node| node.dyn_into::<HtmlTextAreaElement>().ok())
+                && input.value() == submitted
+            {
+                input.set_value("");
+            }
+        }
         follow_start(panel, flow, scope, generation, start, "Request failed").await;
     });
     Ok(())
+}
+
+async fn correction_history(
+    flow: &crate::flow::FlowClient,
+    scope: &metldr_history_pages::Scope,
+    run: &RunId,
+    request: &str,
+) -> Option<(PageView, RunView)> {
+    let view = flow.current_page().await.ok()?;
+    if &view.selection != scope {
+        return None;
+    }
+    let current = view.runs.iter().find(|entry| &entry.id == run)?;
+    if current
+        .corrections
+        .entries
+        .iter()
+        .any(|receipt| receipt.request == request)
+        || current.corrections.entries.len() == usize::from(current.corrections.total)
+    {
+        let saved = current.clone();
+        return Some((view, saved));
+    }
+    let context = flow.history_current().await.ok()?;
+    if &context.scope != scope {
+        return None;
+    }
+    let page = flow.history_runs(&context, None).await.ok()?;
+    let summary = page.runs.iter().find(|summary| &summary.id == run)?;
+    let saved = flow.history_run(&context, summary).await.ok()?;
+    (saved.corrections.entries.len() == usize::from(saved.corrections.total))
+        .then_some((view, saved))
 }
 
 pub(super) fn render(panel: &Panel) -> Result<(), JsValue> {

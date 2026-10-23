@@ -35,6 +35,7 @@ pub(super) fn legacy() -> Store {
             status,
             output: Default::default(),
             error: None,
+            corrections: Vec::new(),
         });
         launches.insert(id, launch);
     };

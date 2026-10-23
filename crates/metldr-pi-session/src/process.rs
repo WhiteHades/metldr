@@ -3,20 +3,26 @@ use serde_json::Value;
 use std::{
     io::{self, Write},
     process::{Child, ChildStdin, Command, Stdio},
-    sync::mpsc::{self, Receiver},
+    sync::mpsc::{self, Receiver, SyncSender, TrySendError},
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
 
 pub(crate) struct Session {
     child: Child,
-    stdin: Option<ChildStdin>,
+    stdin: Option<SyncSender<WriteRequest>>,
+    writer: Option<JoinHandle<()>>,
     rx: Receiver<Result<Value>>,
     stdout: Option<JoinHandle<()>>,
     stderr: Option<JoinHandle<()>>,
     closed: bool,
     forced: bool,
     registration: Option<Registration>,
+}
+
+struct WriteRequest {
+    bytes: Vec<u8>,
+    ack: mpsc::SyncSender<io::Result<()>>,
 }
 
 impl Session {
@@ -61,13 +67,16 @@ impl Session {
             .take()
             .ok_or_else(|| io::Error::other("Pi stderr was not piped"))?;
         let (tx, rx) = mpsc::channel();
+        let (stdin_tx, stdin_rx) = mpsc::sync_channel(1);
+        let writer = thread::spawn(move || write_stdin(stdin, stdin_rx));
         let stdout = thread::spawn(move || crate::rpc::read_stdout(out, tx));
         let stderr = thread::spawn(move || {
             let _ = io::copy(&mut io::BufReader::new(err), &mut io::sink());
         });
         Ok(Self {
             child,
-            stdin: Some(stdin),
+            stdin: Some(stdin_tx),
+            writer: Some(writer),
             rx,
             stdout: Some(stdout),
             stderr: Some(stderr),
@@ -80,7 +89,7 @@ impl Session {
     pub(crate) fn send(&mut self, value: Value) -> Result<()> {
         let stdin = self
             .stdin
-            .as_mut()
+            .as_ref()
             .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "Pi session is closed"))?;
         let mut bytes = serde_json::to_vec(&value)?;
         if bytes.len() > 32 * 1024 {
@@ -89,10 +98,33 @@ impl Session {
             );
         }
         bytes.push(b'\n');
-        // shortcut: synchronous writes rely on the owned OS deadline until companion supervision is integrated.
-        stdin.write_all(&bytes)?;
-        stdin.flush()?;
-        Ok(())
+        let (ack, result) = mpsc::sync_channel(1);
+        match stdin.try_send(WriteRequest { bytes, ack }) {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => {
+                return Err(
+                    io::Error::new(io::ErrorKind::WouldBlock, "Pi stdin writer is busy").into(),
+                );
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                return self.poison_writer(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "Pi stdin writer stopped",
+                ));
+            }
+        }
+        match result.recv_timeout(Duration::from_millis(250)) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => self.poison_writer(error),
+            Err(mpsc::RecvTimeoutError::Timeout) => self.poison_writer(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "timed out writing to Pi stdin; session was terminated",
+            )),
+            Err(mpsc::RecvTimeoutError::Disconnected) => self.poison_writer(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "Pi stdin writer stopped before acknowledging the command",
+            )),
+        }
     }
 
     pub(crate) fn recv(&self, timeout: Duration) -> Result<Value> {
@@ -113,6 +145,18 @@ impl Session {
         self.child.id()
     }
 
+    fn poison_writer<T>(&mut self, error: io::Error) -> Result<T> {
+        self.stdin.take();
+        self.forced = true;
+        if self.child.try_wait()?.is_none() {
+            self.child.kill()?;
+            self.child.wait()?;
+        }
+        self.closed = true;
+        self.registration.take();
+        Err(error.into())
+    }
+
     pub(crate) fn close(&mut self) -> Result<ProcessExit> {
         self.stdin.take();
         let deadline = Instant::now() + Duration::from_secs(3);
@@ -131,7 +175,7 @@ impl Session {
         self.closed = true;
         self.registration.take();
         let deadline = Instant::now() + Duration::from_millis(200);
-        while [&self.stdout, &self.stderr]
+        while [&self.writer, &self.stdout, &self.stderr]
             .iter()
             .any(|reader| reader.as_ref().is_some_and(|t| !t.is_finished()))
             && Instant::now() < deadline
@@ -139,7 +183,7 @@ impl Session {
             thread::sleep(Duration::from_millis(5));
         }
         let mut drained = true;
-        for reader in [&mut self.stdout, &mut self.stderr] {
+        for reader in [&mut self.writer, &mut self.stdout, &mut self.stderr] {
             if reader.as_ref().is_some_and(|thread| thread.is_finished()) {
                 reader
                     .take()
@@ -165,6 +209,20 @@ impl Drop for Session {
             self.stdin.take();
             let _ = self.child.kill();
             let _ = self.child.wait();
+            if self.writer.as_ref().is_some_and(JoinHandle::is_finished) {
+                let _ = self.writer.take().unwrap().join();
+            }
+        }
+    }
+}
+
+fn write_stdin(mut stdin: ChildStdin, commands: Receiver<WriteRequest>) {
+    while let Ok(command) = commands.recv() {
+        let result = stdin.write_all(&command.bytes).and_then(|()| stdin.flush());
+        let failed = result.is_err();
+        let _ = command.ack.send(result);
+        if failed {
+            break;
         }
     }
 }
@@ -197,6 +255,7 @@ mod tests {
         let mut session = Session {
             child,
             stdin: None,
+            writer: None,
             rx,
             stdout: Some(reader),
             stderr: None,
@@ -213,5 +272,60 @@ mod tests {
         assert!(third.drained && third.forced);
         let fourth = session.close().unwrap();
         assert!(fourth.drained && fourth.forced);
+    }
+
+    #[test]
+    fn stalled_stdin_times_out_poisons_and_kills_the_child() {
+        if std::env::var_os("METLDR_PI_STDIN_STALL_FIXTURE").is_some() {
+            thread::sleep(Duration::from_secs(2));
+            return;
+        }
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "process::tests::stalled_stdin_times_out_poisons_and_kills_the_child",
+            ])
+            .env("METLDR_PI_STDIN_STALL_FIXTURE", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let stdin = child.stdin.take().unwrap();
+        let (writer_tx, writer_rx) = mpsc::sync_channel(1);
+        let writer = thread::spawn(move || write_stdin(stdin, writer_rx));
+        let mut session = Session {
+            child,
+            stdin: Some(writer_tx),
+            writer: Some(writer),
+            rx: mpsc::channel().1,
+            stdout: None,
+            stderr: None,
+            closed: false,
+            forced: false,
+            registration: None,
+        };
+        let empty = serde_json::to_vec(&serde_json::json!({"payload":""}))
+            .unwrap()
+            .len();
+        let command = serde_json::json!({"payload":"x".repeat(32 * 1024 - empty)});
+        assert_eq!(serde_json::to_vec(&command).unwrap().len(), 32 * 1024);
+        let started = Instant::now();
+        let error = (0..64)
+            .find_map(|_| session.send(command.clone()).err())
+            .expect("stalled pipe accepted every bounded command");
+        assert_eq!(
+            error.downcast_ref::<io::Error>().unwrap().kind(),
+            io::ErrorKind::TimedOut
+        );
+        assert!(started.elapsed() < Duration::from_millis(1500));
+        assert!(
+            session
+                .send(serde_json::json!({"type":"get_state"}))
+                .is_err()
+        );
+        let exit = session.close().unwrap();
+        assert!(exit.forced && exit.drained);
+        assert!(session.child.try_wait().unwrap().is_some());
     }
 }

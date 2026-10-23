@@ -202,6 +202,7 @@ impl Owner {
                         status: Status::Running,
                         output: metldr_conversation::Content::native(),
                         error: None,
+                        corrections: Vec::new(),
                     },
                     route.launch(digest),
                 )?;
@@ -227,6 +228,7 @@ impl Owner {
                 status: Status::Running,
                 output: metldr_conversation::Content::native(),
                 error: None,
+                corrections: Vec::new(),
             });
             next.starts.insert(id.into(), run.clone());
             next.launches.insert(run.clone(), route.launch(digest));
@@ -277,6 +279,7 @@ impl Owner {
             run: run.clone(),
             stop,
             worker,
+            correction: None,
         });
         self.emit(self.started_reply(id, scope, &run)?)
     }

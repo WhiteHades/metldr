@@ -169,6 +169,11 @@ pub(super) fn remember_choice(panel: &Panel, value: &str) {
 
 pub(super) fn render(panel: &Panel) -> Result<(), JsValue> {
     let doc = &panel.document;
+    let running = active_run(&panel.snapshot).is_some();
+    let destination_locked = running || panel.start_pending;
+    if destination_locked {
+        close(panel);
+    }
     let choices = menu::models(panel)?;
     let select = select(doc)?;
     let selected = choices.iter().position(|row| row.value == select.value());
@@ -261,17 +266,57 @@ pub(super) fn render(panel: &Panel) -> Result<(), JsValue> {
             "Type to search commands"
         }));
     }
-    let running = active_run(&panel.snapshot).is_some();
+    let active = active_run(&panel.snapshot);
+    let running = active.is_some();
+    if let Some(input) = doc.get_element_by_id("question") {
+        input.set_attribute("aria-label", if running { "Correction" } else { "Prompt" })?;
+        input.set_attribute(
+            "placeholder",
+            if running {
+                "Write a correction…"
+            } else {
+                "Write a message…"
+            },
+        )?;
+    }
+    let correction_available = active.is_some_and(|run| {
+        panel
+            .snapshot
+            .as_ref()
+            .and_then(|view| view.native_correction.as_ref())
+            .is_some_and(|correction| correction.run == *run && correction.available)
+    });
     let send = doc
         .query_selector("[data-action='ask']")?
         .ok_or_else(|| err("Send missing."))?;
-    if draft.trim().is_empty() {
+    send.set_attribute(
+        "aria-label",
+        if running { "Send correction" } else { "Send" },
+    )?;
+    if draft.trim().is_empty()
+        || (running && !correction_available)
+        || panel.start_pending
+        || panel.correction_pending.is_some()
+    {
         send.set_attribute("disabled", "")?;
+    } else {
+        send.remove_attribute("disabled")?;
     }
-    if running {
+    if running && correction_available {
+        send.remove_attribute("hidden")?;
+    } else if running {
         send.set_attribute("hidden", "")?;
     } else {
         send.remove_attribute("hidden")?;
+    }
+    for selector in ["#composer-add", "#composer-model", "#codex-mode"] {
+        if let Some(control) = doc.query_selector(selector)? {
+            if destination_locked {
+                control.set_attribute("disabled", "")?;
+            } else {
+                control.remove_attribute("disabled")?;
+            }
+        }
     }
     let stop = doc
         .query_selector("[data-action='stop']")?
@@ -458,6 +503,12 @@ fn pick(panel: &Rc<RefCell<Panel>>, row: menu::Row, trusted: bool) -> Result<(),
         return Ok(());
     }
     let state = panel.borrow();
+    if matches!(&row.action, menu::Action::Model)
+        && (active_run(&state.snapshot).is_some() || state.start_pending)
+    {
+        close(&state);
+        return render(&state);
+    }
     close(&state);
     match row.action {
         menu::Action::Model => {

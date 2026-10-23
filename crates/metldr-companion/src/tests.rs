@@ -86,6 +86,7 @@ mod tests {
             status: Status::StopRequested,
             output: metldr_conversation::Content::flat("Pending ".into()).unwrap(),
             error: None,
+            corrections: Vec::new(),
         });
         state.starts.insert("fixture:request".into(), run.clone());
         state.launches.insert(
@@ -129,6 +130,7 @@ mod tests {
                 run: run.clone(),
                 stop: Arc::new(AtomicBool::new(true)),
                 worker,
+                correction: None,
             }),
             tx,
             pi_profile: None,
@@ -385,6 +387,7 @@ mod tests {
             status: Status::Running,
             output: metldr_conversation::Content::native(),
             error: None,
+            corrections: Vec::new(),
         });
         state.workflows.insert(
             workflow.clone(),
@@ -423,6 +426,7 @@ mod tests {
                 run: run.clone(),
                 stop: stop.clone(),
                 worker: thread::spawn(|| {}),
+                correction: None,
             }),
             tx,
             pi_profile: None,

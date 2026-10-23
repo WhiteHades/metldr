@@ -98,6 +98,7 @@ fn scoped_controls_and_start_retry_survive_selection_without_replay() -> crate::
                 status: Status::Running,
                 output: Default::default(),
                 error: None,
+                corrections: Vec::new(),
             },
             Launch::Fixture { input_digest },
         )?;
@@ -182,6 +183,7 @@ fn scoped_controls_and_start_retry_survive_selection_without_replay() -> crate::
                     status: Status::Running,
                     output: Default::default(),
                     error: None,
+                    corrections: Vec::new(),
                 },
                 launch,
             )?;

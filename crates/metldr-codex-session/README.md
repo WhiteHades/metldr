@@ -38,6 +38,7 @@ async fn main() -> metldr_codex_session::Result<()> {
                 session.reply_input(&input, answer).await?;
             }
             Event::InputResolved(_) => (),
+            Event::SteerResult { .. } => (),
             Event::ApprovalsUpdated(requests) => {
                 for (_, request) in requests {
                     session.reply_approval(&request, None).await?;
@@ -58,6 +59,8 @@ Save the thread identity from `info()` in the native task owner before dispatchi
 Resume requests metadata without returning prior turns. Codex restores the saved context for subsequent turns.
 
 Each completed `Event::Message` carries its item ID and full text. Use it to reconcile streamed deltas for that item. An interrupt reply reports acknowledgement or rejection; `Event::Finished` determines the final turn outcome.
+
+`steer(&turn, text)` sends a correction to the expected active turn without waiting for acceptance. Read its matching `Event::SteerResult` before sending another correction. An accepted receipt names the same turn. A known rejection leaves the session usable. Keep reading a pending receipt after the terminal event, since the replies can arrive in either order. An interrupt can run while the receipt waits. A lost reply or failed write makes the connection unusable and must not trigger an automatic resend.
 
 `TurnMode::Configured` leaves the native collaboration settings unchanged. `TurnMode::Plan` explicitly requests Plan mode using the effective native model. The caller chooses the mode for each prompt.
 

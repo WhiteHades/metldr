@@ -313,6 +313,7 @@ mod text_checks {
                 Default::default()
             },
             error: None,
+            corrections: Vec::new(),
         }
     }
 

@@ -5,6 +5,7 @@ mod event;
 mod input;
 mod report;
 mod rpc;
+mod steer;
 
 pub use approval::{Approval, ApprovalChoice, ApprovalId, ApprovalKind};
 pub use event::{Event, ToolCall, TurnStatus};
@@ -18,6 +19,7 @@ use std::{
     path::Path,
     sync::atomic::{AtomicU64, Ordering},
 };
+pub use steer::{SteerId, SteerOutcome};
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 pub(crate) fn invalid(message: &'static str) -> Box<dyn Error + Send + Sync> {
@@ -98,6 +100,7 @@ pub struct CodexSession {
     reports: report::Reports,
     approvals: approval::Approvals,
     inputs: input::Inputs,
+    steering: Option<steer::Pending>,
     failed: bool,
 }
 
@@ -165,6 +168,7 @@ impl CodexSession {
             reports: report::Reports::default(),
             approvals: approval::Approvals::default(),
             inputs: input::Inputs::default(),
+            steering: None,
             failed: false,
         })
     }
@@ -177,6 +181,7 @@ impl CodexSession {
         if self.failed
             || self.turn.is_some()
             || self.inputs.turn_pending()
+            || self.steering.is_some()
             || text.is_empty()
             || text.len() > 32 * 1024
         {

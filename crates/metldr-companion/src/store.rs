@@ -735,6 +735,7 @@ mod checks {
                 status: crate::model::Status::Complete,
                 output: Default::default(),
                 error: None,
+                corrections: Vec::new(),
             });
             state.next = 2;
             state.launches.insert(

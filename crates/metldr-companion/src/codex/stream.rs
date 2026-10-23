@@ -1,5 +1,6 @@
 use super::*;
-use metldr_codex_session::{Event as NativeEvent, Interrupt, TurnStatus};
+use crate::native_correction::{Command, Phase, Receiver, Target};
+use metldr_codex_session::{Event as NativeEvent, Interrupt, SteerId, SteerOutcome, TurnStatus};
 use metldr_conversation::{Change, MessageKey};
 use std::time::{Duration, Instant};
 
@@ -9,6 +10,7 @@ pub(super) async fn run(
     tools: &mut Tools,
     stop: &AtomicBool,
     tx: &mpsc::SyncSender<Event>,
+    corrections: &mut Receiver,
 ) -> Result<Outcome> {
     let info = session.info();
     let identity = Identity {
@@ -31,9 +33,11 @@ pub(super) async fn run(
         return Ok(Outcome::Cancelled);
     }
     let prompt = agent::message(&job.text, &job.source)?;
-    session
+    let turn = session
         .prompt(&format!("{prompt}\n\n{BROWSER_POLICY}"), job.mode.native())
         .await?;
+    let target = Target::Codex(turn.clone());
+    corrections.ready(target.clone())?;
     let mut stop_wait = agent::StopWait::default();
     let mut interrupted = None;
     let mut review = super::approval::Review::default();
@@ -41,11 +45,25 @@ pub(super) async fn run(
     let mut inputs = super::input::Inputs::default();
     let mut terminal = None;
     let mut drain_until = Instant::now();
+    let mut held_correction: Option<Command> = None;
+    let mut steering: Option<(Command, SteerId)> = None;
     loop {
-        if terminal.is_some() && (inputs.is_empty() || Instant::now() >= drain_until) {
+        if terminal.is_some()
+            && ((inputs.is_empty() && steering.is_none()) || Instant::now() >= drain_until)
+        {
             return outcome(terminal.take().unwrap(), &interrupted, review.cancelled);
         }
         let stopping = stop.load(Ordering::Acquire) || review.cancelled;
+        if stopping {
+            if let Some(command) = held_correction.take() {
+                corrections.finish(
+                    &command.request,
+                    Phase::NotSent {
+                        message: "Codex correction was stopped before sending".into(),
+                    },
+                )?;
+            }
+        }
         if terminal.is_none() {
             stop_wait.check(stopping, Instant::now())?;
         }
@@ -90,10 +108,52 @@ pub(super) async fn run(
                 inputs
                     .poll(session, job, tx, review.cancelled, stop)
                     .await?;
+                if let Some(command) = held_correction.take() {
+                    if stop.load(Ordering::Acquire) || review.cancelled {
+                        corrections.finish(
+                            &command.request,
+                            Phase::NotSent {
+                                message: "Codex correction was stopped before sending".into(),
+                            },
+                        )?;
+                    } else {
+                        let id = session.steer(&turn, &command.text).await?;
+                        steering = Some((command, id));
+                    }
+                } else if let Some(command) = corrections.take()? {
+                    if corrections.authorize(&command, &target, stop)? {
+                        held_correction = Some(command);
+                        continue;
+                    }
+                    corrections.finish(
+                        &command.request,
+                        Phase::NotSent {
+                            message: "Codex correction was not authorized for sending".into(),
+                        },
+                    )?;
+                }
             }
             continue;
         };
         match event {
+            NativeEvent::SteerResult { request, outcome } => {
+                let Some((command, pending)) = steering.as_ref() else {
+                    return Err("Codex returned an unexpected correction result".into());
+                };
+                if &request != pending {
+                    return Err("Codex correction result identity mismatch".into());
+                }
+                let phase = match outcome {
+                    SteerOutcome::Accepted { turn } => Phase::CodexAccepted {
+                        turn: turn.as_str().into(),
+                    },
+                    SteerOutcome::Rejected { code } => Phase::Rejected {
+                        message: format!("Codex rejected correction (code {code})"),
+                    },
+                };
+                corrections.finish(&command.request, phase)?;
+                steering = None;
+            }
             NativeEvent::Input(input) => {
                 inputs.request(input, job, tx, stopping || terminal.is_some())?
             }
@@ -208,6 +268,15 @@ pub(super) async fn run(
                     .await?;
             }
             NativeEvent::Finished { status, .. } => {
+                corrections.close()?;
+                if let Some(command) = held_correction.take() {
+                    corrections.finish(
+                        &command.request,
+                        Phase::NotSent {
+                            message: "Codex turn ended before correction sending".into(),
+                        },
+                    )?;
+                }
                 review.finish(job, tx, status == TurnStatus::Completed)?;
                 inputs.withdraw(job, tx)?;
                 terminal = Some(status);

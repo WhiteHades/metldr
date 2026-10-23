@@ -39,6 +39,13 @@ impl Drop for Directory {
 }
 
 fn make_owner(engine: &str) -> Result<(Directory, Owner, Arc<std::sync::Mutex<Vec<u8>>>, String)> {
+    make_owner_with_binding(engine, false)
+}
+
+fn make_owner_with_binding(
+    engine: &str,
+    bound: bool,
+) -> Result<(Directory, Owner, Arc<std::sync::Mutex<Vec<u8>>>, String)> {
     let directory = Directory::new()?;
     let disk = Disk::lock(directory.0.clone())?;
     let mut original = fixture::legacy();
@@ -59,6 +66,19 @@ fn make_owner(engine: &str) -> Result<(Directory, Owner, Arc<std::sync::Mutex<Ve
     record.error = None;
     record.output = metldr_conversation::Content::native();
     original.browser_actions.clear();
+    if bound {
+        let workflow = original.workflows.values_mut().next().unwrap();
+        let sessions = directory.0.join("sessions");
+        fs::create_dir(&sessions)?;
+        let path = sessions.join("pi-session-1.jsonl");
+        fs::write(&path, b"owned session fixture\n")?;
+        workflow.profile.session_dir = sessions;
+        workflow.fingerprint = crate::agent_model::digest(&workflow.profile)?;
+        workflow.binding = crate::agent_model::Binding::Bound {
+            id: "pi-session-1".into(),
+            path,
+        };
+    }
     original.validate()?;
     disk.save(&original)?;
     let path = directory.0.join("history.redb");
@@ -86,6 +106,7 @@ fn make_owner(engine: &str) -> Result<(Directory, Owner, Arc<std::sync::Mutex<Ve
             run: run.clone(),
             stop: Arc::new(AtomicBool::new(false)),
             worker,
+            correction: None,
         }),
         tx,
         pi_profile: None,
@@ -116,6 +137,90 @@ fn stop_owner(owner: &mut Owner) {
     if let Some(operation) = owner.operation.take() {
         operation.worker.join().expect("owned input-check worker");
     }
+}
+
+#[test]
+fn native_corrections_fence_duplicates_stop_and_uncertain_session_reuse() -> Result<()> {
+    use crate::native_correction::{Phase, Target, channel};
+    for (dispatch, restart) in [(true, false), (false, false), (false, true), (true, true)] {
+        let (directory, mut owner, _, run) = make_owner_with_binding("pi", true)?;
+        let scope = owner.record_history.as_ref().unwrap().selection()?;
+        let (slot, receiver) = channel(&run, &owner.tx);
+        owner.operation.as_mut().unwrap().correction = Some(slot);
+        owner.correction_ready(&run, Target::Pi)?;
+        owner.correct_native("correction-1", &scope, &run, "Keep the exact correction.")?;
+        assert_eq!(receiver.take()?.unwrap().text, "Keep the exact correction.");
+        let admitted = sequence(&owner)?;
+        owner.correct_native("correction-1", &scope, &run, "Keep the exact correction.")?;
+        assert_eq!(sequence(&owner)?, admitted);
+        assert!(receiver.take()?.is_none());
+        let admitted_task = owner
+            .record_history
+            .as_mut()
+            .unwrap()
+            .edit(|edit| edit.native_task(&scope, &run))?;
+        let super::NativeWorkflow::Pi(workflow) = admitted_task.workflow else {
+            panic!("Pi fixture")
+        };
+        assert!(workflow.binding.resume_path()?.is_some());
+        assert!(
+            owner
+                .correct_native("correction-1", &scope, &run, "Changed")
+                .is_err()
+        );
+        let mut stale = scope.clone();
+        stale.epoch += 1;
+        assert!(
+            owner
+                .correct_native("correction-2", &stale, &run, "Stale")
+                .is_err()
+        );
+        if dispatch {
+            let (ack, reply) = mpsc::sync_channel(1);
+            owner.correction_dispatch(&run, "correction-1", Target::Pi, ack)?;
+            assert!(reply.recv()?);
+        }
+        if restart {
+            stop_owner(&mut owner);
+            drop(owner.record_history.take());
+            let mut reopened =
+                History::open(&directory.0.join("history.redb"), owner.disk.lease())?;
+            reopened.edit(|edit| edit.recover(&scope))?;
+            owner.record_history = Some(reopened);
+        } else {
+            owner.stop_run("stop-correction", &run)?;
+            let (ack, reply) = mpsc::sync_channel(1);
+            owner.correction_dispatch(&run, "correction-1", Target::Pi, ack)?;
+            assert!(!reply.recv()?);
+            owner.agent_settled(&run, crate::agent::Outcome::Cancelled, false, true)?;
+        }
+        let saved = owner
+            .record_history
+            .as_mut()
+            .unwrap()
+            .edit(|edit| edit.native_task(&scope, &run))?;
+        assert_eq!(saved.run.corrections.len(), 1);
+        assert_eq!(saved.run.corrections[0].text, "Keep the exact correction.");
+        assert!(matches!(
+            (&saved.run.corrections[0].state, dispatch),
+            (Phase::Uncertain { .. }, true) | (Phase::NotSent { .. }, false)
+        ));
+        assert!(saved.run.status.terminal());
+        let super::NativeWorkflow::Pi(workflow) = saved.workflow else {
+            panic!("Pi fixture")
+        };
+        if dispatch || restart {
+            assert!(
+                workflow.binding.resume_path().is_err(),
+                "uncertain correction must block reuse"
+            );
+        } else {
+            assert!(workflow.binding.resume_path()?.is_some());
+        }
+        owner.correct_native("correction-1", &scope, &run, "Keep the exact correction.")?;
+        assert!(receiver.take().is_err());
+    }
+    Ok(())
 }
 
 fn pi_offer(

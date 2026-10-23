@@ -22,6 +22,7 @@ pub(crate) enum ReplyKind {
     SelectedPage(metldr_history_pages::Scope),
     Start(metldr_history_pages::Scope),
     Stop(metldr_history_pages::Scope, RunId),
+    Correction(metldr_history_pages::Scope, RunId, String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,6 +31,7 @@ pub(crate) enum Reply {
     Page(PageView),
     Started(RunId),
     Stop(StopReceipt),
+    Correction(crate::model::CorrectionReceipt),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -469,7 +471,7 @@ impl Protocol {
             let (_, cell) = self.pending.remove(request_id).unwrap();
             return Ok(cell
                 .upgrade()
-                .and_then(|cell| cell.borrow_mut().fail(FlowError::Host(message)))
+                .and_then(|cell| cell.borrow_mut().fail(FlowError::HostRejected(message)))
                 .into_iter()
                 .collect());
         }
@@ -533,6 +535,55 @@ impl Protocol {
                             request_id,
                             FlowError::Protocol(
                                 "stop receipt scope or run does not match request".into(),
+                            ),
+                        );
+                    }
+                    (Err(error), _) | (_, Err(error)) => {
+                        return self.fail_request(request_id, error);
+                    }
+                }
+            }
+            (ReplyKind::Correction(expected_scope, expected_run, expected_text), "correction") => {
+                match (parse_run(&value), parse_scope(&value)) {
+                    (Ok(run), Ok(scope)) if run == expected_run && scope == expected_scope => {
+                        let receipt: Result<crate::model::CorrectionReceipt, FlowError> = value
+                            .get("receipt")
+                            .cloned()
+                            .ok_or_else(|| {
+                                FlowError::Protocol("correction receipt is missing".into())
+                            })
+                            .and_then(|value| {
+                                serde_json::from_value(value)
+                                    .map_err(|error| FlowError::Protocol(error.to_string()))
+                            });
+                        let receipt = match receipt {
+                            Ok(receipt) => receipt,
+                            Err(error) => return self.fail_request(request_id, error),
+                        };
+                        if !(1..=16).contains(&receipt.ordinal)
+                            || receipt.request != request_id
+                            || receipt.text.text != expected_text
+                            || receipt.text.truncated
+                            || !crate::model::valid_correction_receipt(&receipt, 1024, true)
+                        {
+                            return self.fail_request(
+                                request_id,
+                                FlowError::Protocol(
+                                    "correction receipt does not match the captured submission"
+                                        .into(),
+                                ),
+                            );
+                        }
+                        (
+                            Reply::Correction(receipt),
+                            &["v", "request", "kind", "scope", "run", "receipt"][..],
+                        )
+                    }
+                    (Ok(_), Ok(_)) => {
+                        return self.fail_request(
+                            request_id,
+                            FlowError::Protocol(
+                                "correction receipt scope or run does not match request".into(),
                             ),
                         );
                     }
@@ -802,8 +853,9 @@ mod tests {
             "runs": [{
                 "id": RUN, "source": SOURCE, "kind": "summary", "question": null,
                 "status": status, "output": output, "conversation": [], "error": null,
-                "route": {"kind":"fixture"}, "activity": []
+                "route": {"kind":"fixture"}, "activity": [], "corrections":{"total":0,"entries":[]}
             }],
+            "native_correction": null,
             "pi_profile": null,
             "agent_sessions": []
         })
@@ -816,6 +868,68 @@ mod tests {
     fn poll(cell: &Rc<RefCell<WatchCell>>) -> Poll<Result<Option<PageView>, FlowError>> {
         cell.borrow_mut()
             .poll(&mut Context::from_waker(Waker::noop()))
+    }
+
+    #[test]
+    fn correction_ack_requires_matching_scope_run_and_identity() {
+        let mut protocol = Protocol::new();
+        let cell = protocol
+            .register_request(
+                "correction-1".into(),
+                ReplyKind::Correction(
+                    scope(),
+                    serde_json::from_value(json!(RUN)).unwrap(),
+                    "Exact text".into(),
+                ),
+            )
+            .unwrap();
+        protocol
+            .receive(json!({
+                "v": crate::WIRE_VERSION,
+                "request": "correction-1",
+                "kind": "correction",
+                "scope": scope(),
+                "run": RUN,
+                "receipt": {"request": "correction-1"}
+            }))
+            .unwrap();
+        assert!(matches!(
+            cell.borrow_mut()
+                .poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Ready(Err(FlowError::Protocol(_)))
+        ));
+
+        let mut protocol = Protocol::new();
+        let cell = protocol
+            .register_request(
+                "correction-1".into(),
+                ReplyKind::Correction(
+                    scope(),
+                    serde_json::from_value(json!(RUN)).unwrap(),
+                    "Exact text".into(),
+                ),
+            )
+            .unwrap();
+        protocol
+            .receive(json!({
+                "v": crate::WIRE_VERSION,
+                "request": "correction-1",
+                "kind": "correction",
+                "scope": scope(),
+                "run": RUN,
+                "receipt": {
+                    "ordinal": 1,
+                    "request": "correction-1",
+                    "text": {"text":"Exact text","truncated":false},
+                    "state": {"kind":"pending"}
+                }
+            }))
+            .unwrap();
+        assert!(matches!(
+            cell.borrow_mut()
+                .poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Ready(Ok(Reply::Correction(_)))
+        ));
     }
 
     #[test]

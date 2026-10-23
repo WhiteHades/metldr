@@ -54,6 +54,7 @@ fn add(
         status,
         output: metldr_conversation::Content::flat(output).unwrap(),
         error: None,
+        corrections: Vec::new(),
     });
     state.launches.insert(
         id,

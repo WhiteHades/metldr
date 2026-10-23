@@ -661,6 +661,7 @@ fn recovered_before_ready() -> Result<()> {
         status: Status::Running,
         output: Default::default(),
         error: None,
+        corrections: Vec::new(),
     });
     initial.launches.insert(
         run.clone(),

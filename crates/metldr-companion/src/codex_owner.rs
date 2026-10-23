@@ -87,11 +87,14 @@ impl Owner {
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = stop.clone();
         let tx = self.tx.clone();
-        let worker = thread::spawn(move || codex::execute(job, worker_stop, tx, events));
+        let (correction, corrections) = crate::native_correction::channel(&run, &tx);
+        let worker =
+            thread::spawn(move || codex::execute(job, worker_stop, tx, events, corrections));
         self.operation = Some(Operation {
             run: run.clone(),
             stop,
             worker,
+            correction: Some(correction),
         });
         self.emit(self.started_reply(id, scope, &run)?)
     }

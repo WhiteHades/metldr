@@ -1,15 +1,21 @@
 use crate::{Result, invalid};
 use serde_json::{Value, json};
-use std::{collections::VecDeque, path::Path, process::Stdio, time::Duration};
+use std::{
+    collections::VecDeque,
+    path::Path,
+    process::Stdio,
+    time::{Duration, Instant},
+};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{Child, ChildStdin, ChildStdout, Command},
-    time::timeout,
+    time::{timeout, timeout_at},
 };
 
 const FRAME_LIMIT: usize = 1024 * 1024;
 const QUEUE_LIMIT: usize = 2 * FRAME_LIMIT;
 const RPC_TIMEOUT: Duration = Duration::from_secs(15);
+const STEER_WRITE_TIMEOUT: Duration = Duration::from_millis(250);
 
 pub(crate) fn clean_eof(error: &(dyn std::error::Error + Send + Sync + 'static)) -> bool {
     error
@@ -24,87 +30,8 @@ pub(crate) struct Rpc {
 }
 
 #[cfg(all(test, unix))]
-mod tests {
-    use super::*;
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn clean_stdout_eof_allows_normal_process_close() {
-        let mut child = Command::new("sh")
-            .args(["-c", "exec 1>&-; read -r ignored || :"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true)
-            .spawn()
-            .unwrap();
-        let wire = Wire {
-            stdin: child.stdin.take(),
-            stdout: BufReader::new(child.stdout.take().unwrap()),
-            frame: Vec::new(),
-            queue: VecDeque::new(),
-            queued_bytes: 0,
-            sequence: 0,
-        };
-        let mut rpc = Rpc {
-            child,
-            wire,
-            healthy: true,
-        };
-        let error = rpc.next().await.unwrap_err();
-        assert!(clean_eof(error.as_ref()));
-        let exit = rpc.close().await.unwrap();
-        assert_eq!(exit.code, Some(0));
-        assert!(!exit.forced && exit.drained);
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn cancelled_rpc_and_blocked_write_kill_child_and_poison_connection() {
-        for blocked_write in [false, true] {
-            let mut child = Command::new("sleep")
-                .arg("60")
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .kill_on_drop(true)
-                .spawn()
-                .unwrap();
-            let wire = Wire {
-                stdin: child.stdin.take(),
-                stdout: BufReader::new(child.stdout.take().unwrap()),
-                frame: Vec::new(),
-                queue: VecDeque::new(),
-                queued_bytes: 0,
-                sequence: 0,
-            };
-            let mut rpc = Rpc {
-                child,
-                wire,
-                healthy: true,
-            };
-            let deadline = Duration::from_millis(30);
-            if blocked_write {
-                assert!(
-                    timeout(deadline, rpc.send(json!({"held":"x".repeat(900_000)})))
-                        .await
-                        .is_err()
-                );
-            } else {
-                assert!(
-                    timeout(deadline, rpc.call("held", json!({})))
-                        .await
-                        .is_err()
-                );
-            }
-            assert!(!rpc.healthy);
-            assert!(rpc.call("later", json!({})).await.is_err());
-            let status = timeout(Duration::from_secs(1), rpc.child.wait())
-                .await
-                .unwrap()
-                .unwrap();
-            assert!(!status.success());
-        }
-    }
-}
+#[path = "rpc/checks.rs"]
+mod checks;
 
 struct Wire {
     stdin: Option<ChildStdin>,
@@ -113,6 +40,13 @@ struct Wire {
     queue: VecDeque<(Value, usize)>,
     queued_bytes: usize,
     sequence: u64,
+    pending: Option<PendingResponse>,
+}
+
+struct PendingResponse {
+    id: u64,
+    deadline: Instant,
+    received: bool,
 }
 
 struct KillOnCancel<'a> {
@@ -171,6 +105,7 @@ impl Rpc {
                 queue: VecDeque::new(),
                 queued_bytes: 0,
                 sequence: 0,
+                pending: None,
             },
             healthy: true,
         })
@@ -203,6 +138,48 @@ impl Rpc {
         result
     }
 
+    pub(crate) async fn begin_steer(&mut self, params: Value) -> Result<u64> {
+        self.require_healthy()?;
+        if self.wire.pending.is_some() {
+            return Err(invalid("Codex steering response is pending"));
+        }
+        let id = self.wire.request_id()?;
+        self.wire.pending = Some(PendingResponse {
+            id,
+            deadline: Instant::now() + RPC_TIMEOUT,
+            received: false,
+        });
+        self.healthy = false;
+        let mut guard = KillOnCancel {
+            child: &mut self.child,
+            armed: true,
+        };
+        let result = timeout(
+            STEER_WRITE_TIMEOUT,
+            self.wire
+                .write(json!({"id":id,"method":"turn/steer","params":params})),
+        )
+        .await
+        .map_err(|_| invalid("Codex steering write deadline expired"))
+        .and_then(|r| r);
+        self.healthy = result.is_ok();
+        guard.armed = !self.healthy;
+        result.map(|()| id)
+    }
+
+    pub(crate) fn finish_steer(&mut self, id: u64) -> Result<()> {
+        if !self
+            .wire
+            .pending
+            .as_ref()
+            .is_some_and(|p| p.id == id && p.received)
+        {
+            return Err(invalid("Codex steering response identity mismatch"));
+        }
+        self.wire.pending = None;
+        Ok(())
+    }
+
     pub(crate) async fn send(&mut self, value: Value) -> Result<()> {
         self.require_healthy()?;
         self.healthy = false;
@@ -225,7 +202,7 @@ impl Rpc {
             self.wire.queued_bytes -= size;
             return Ok(value);
         }
-        match self.wire.read().await {
+        match self.wire.next().await {
             Ok((value, _)) => Ok(value),
             Err(error) if clean_eof(error.as_ref()) => Err(error),
             Err(error) => {
@@ -268,6 +245,56 @@ impl Rpc {
 }
 
 impl Wire {
+    fn request_id(&mut self) -> Result<u64> {
+        self.sequence = self
+            .sequence
+            .checked_add(1)
+            .ok_or_else(|| invalid("Codex request identities exhausted"))?;
+        Ok(self.sequence)
+    }
+
+    fn accept_pending(&mut self, value: &Value) -> Result<()> {
+        let pending = self
+            .pending
+            .as_mut()
+            .filter(|p| !p.received && value["id"].as_u64() == Some(p.id))
+            .ok_or_else(|| invalid("Codex response identity mismatch"))?;
+        match response(value) {
+            Ok(_) => (),
+            Err(error) if error.is::<Rejected>() => (),
+            Err(error) => return Err(error),
+        }
+        pending.received = true;
+        Ok(())
+    }
+
+    async fn read_with_deadline(&mut self) -> Result<(Value, usize)> {
+        if let Some(pending) = self.pending.as_ref().filter(|p| !p.received) {
+            timeout_at(pending.deadline.into(), self.read())
+                .await
+                .map_err(|_| invalid("Codex steering response deadline expired"))?
+        } else {
+            self.read().await
+        }
+    }
+
+    async fn next(&mut self) -> Result<(Value, usize)> {
+        let (value, size) = self.read_with_deadline().await?;
+        if value.get("method").is_none() {
+            self.accept_pending(&value)?;
+        }
+        Ok((value, size))
+    }
+
+    fn enqueue(&mut self, value: Value, size: usize) -> Result<()> {
+        if self.queued_bytes + size > QUEUE_LIMIT || self.queue.len() >= 256 {
+            return Err(invalid("Codex event queue exceeds limit"));
+        }
+        self.queued_bytes += size;
+        self.queue.push_back((value, size));
+        Ok(())
+    }
+
     async fn write(&mut self, value: Value) -> Result<()> {
         let mut bytes = serde_json::to_vec(&value)?;
         if bytes.len() > FRAME_LIMIT {
@@ -311,37 +338,34 @@ impl Wire {
     }
 
     async fn call(&mut self, method: &str, params: Value) -> Result<Value> {
-        self.sequence += 1;
-        let id = self.sequence;
+        let id = self.request_id()?;
         {
             self.write(json!({"id":id,"method":method,"params":params}))
                 .await?;
             loop {
-                let (value, size) = self.read().await?;
+                let (value, size) = self.read_with_deadline().await?;
                 if value.get("method").is_none() {
-                    if value["id"] != id {
-                        return Err(invalid("Codex response identity mismatch"));
+                    if value["id"].as_u64() == Some(id) {
+                        return response(&value);
                     }
-                    if let Some(error) = value.get("error") {
-                        let code = error["code"]
-                            .as_i64()
-                            .filter(|_| {
-                                error["message"].is_string() && value.get("result").is_none()
-                            })
-                            .ok_or_else(|| invalid("Codex RPC error is malformed"))?;
-                        return Err(Box::new(Rejected { code }));
-                    }
-                    return value
-                        .get("result")
-                        .cloned()
-                        .ok_or_else(|| invalid("Codex result missing"));
+                    self.accept_pending(&value)?;
                 }
-                if self.queued_bytes + size > QUEUE_LIMIT || self.queue.len() >= 256 {
-                    return Err(invalid("Codex event queue exceeds limit"));
-                }
-                self.queued_bytes += size;
-                self.queue.push_back((value, size));
+                self.enqueue(value, size)?;
             }
         }
     }
+}
+
+pub(crate) fn response(value: &Value) -> Result<Value> {
+    if let Some(error) = value.get("error") {
+        let code = error["code"]
+            .as_i64()
+            .filter(|_| error["message"].is_string() && value.get("result").is_none())
+            .ok_or_else(|| invalid("Codex RPC error is malformed"))?;
+        return Err(Box::new(Rejected { code }));
+    }
+    value
+        .get("result")
+        .cloned()
+        .ok_or_else(|| invalid("Codex result missing"))
 }

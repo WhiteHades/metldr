@@ -127,6 +127,7 @@ pub(super) fn render(
             .find(|record| Some(record.id.as_str()) == run["id"].as_str())
             .ok_or("missing run")?;
         *run = run_record(state, record)?;
+        run["corrections"] = crate::native_correction::public(record, true);
     }
     let fingerprint = profile.map(digest).transpose()?;
     view["pi_profile"] = match (profile, &fingerprint) {
@@ -167,6 +168,7 @@ pub(super) fn render(
 
 pub(super) fn run_record(state: &Store, record: &crate::model::Run) -> Result<Value> {
     let mut run = serde_json::to_value(record)?;
+    run["corrections"] = crate::native_correction::public(record, false);
     let projection = record.output.projection();
     run["output"] = json!(projection.output);
     run["conversation"] = serde_json::to_value(projection.conversation)?;

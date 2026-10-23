@@ -64,6 +64,7 @@ fn make_owner(directory: &Directory) -> crate::Result<(Owner, String)> {
         status: Status::Running,
         output: Default::default(),
         error: None,
+        corrections: Vec::new(),
     });
     let profile = codex_model::Profile {
         executable: PathBuf::from("/usr/bin/true"),
@@ -116,6 +117,7 @@ fn make_owner(directory: &Directory) -> crate::Result<(Owner, String)> {
                 run: run.clone(),
                 stop: Arc::new(AtomicBool::new(false)),
                 worker: std::thread::spawn(|| {}),
+                correction: None,
             }),
             tx,
             pi_profile: None,

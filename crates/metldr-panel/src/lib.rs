@@ -1,4 +1,4 @@
-const WIRE_VERSION: u8 = 12;
+use metldr_history_pages::WIRE_VERSION;
 
 use std::{cell::RefCell, rc::Rc};
 
@@ -58,6 +58,7 @@ struct Panel {
     snapshot: Option<PageView>,
     connected: bool,
     start_pending: bool,
+    correction_pending: Option<CorrectionSubmission>,
     status_message: String,
     browser_decision_pending: Option<(BrowserActionId, u64)>,
     native_permission_pending: Option<(RunId, RunId)>,
@@ -67,6 +68,14 @@ struct Panel {
     codex_input_stopping: Option<RunId>,
     stale_generation: u64,
     connection_generation: u64,
+}
+
+#[derive(Clone)]
+struct CorrectionSubmission {
+    request: String,
+    scope: metldr_history_pages::Scope,
+    run: RunId,
+    text: String,
 }
 
 #[wasm_bindgen]
@@ -167,6 +176,7 @@ async fn panel_start() -> Result<(), JsValue> {
         snapshot: None,
         connected: false,
         start_pending: false,
+        correction_pending: None,
         status_message: "Reconnect loads the saved view without starting work.".into(),
         browser_decision_pending: None,
         native_permission_pending: None,
@@ -722,6 +732,29 @@ fn apply_view(panel: &Rc<RefCell<Panel>>, view: PageView, generation: u64) {
     history_ui::selection_changed(&mut p.saved_history, selection_changed, generation);
     conversations::reconcile(&mut p.conversations, &view, selection_changed, generation);
     p.snapshot = Some(view);
+    let correction_found = if let Some(pending) = p.correction_pending.clone()
+        && pending.scope == p.snapshot.as_ref().unwrap().selection
+        && p.snapshot.as_ref().unwrap().runs.iter().any(|run| {
+            run.id == pending.run
+                && run
+                    .corrections
+                    .entries
+                    .iter()
+                    .any(|receipt| receipt.request == pending.request)
+        }) {
+        if let Some(input) = p
+            .document
+            .get_element_by_id("question")
+            .and_then(|node| node.dyn_into::<web_sys::HtmlTextAreaElement>().ok())
+            && input.value() == pending.text
+        {
+            input.set_value("");
+        }
+        p.correction_pending = None;
+        true
+    } else {
+        false
+    };
     if p.native_permission_pending
         .as_ref()
         .is_some_and(|(run, request)| {
@@ -770,7 +803,11 @@ fn apply_view(panel: &Rc<RefCell<Panel>>, view: PageView, generation: u64) {
         p.codex_input_stopping = None;
     }
     p.connected = p.flow.is_connected();
-    p.status_message = if p.snapshot.as_ref().and_then(PageView::active_run).is_some() {
+    p.status_message = if correction_found {
+        "Correction receipt found in saved run history."
+    } else if p.correction_pending.is_some() {
+        "Correction submission unresolved. Check saved run history before sending again."
+    } else if p.snapshot.as_ref().and_then(PageView::active_run).is_some() {
         "Working."
     } else if p.start_pending {
         "Starting work."

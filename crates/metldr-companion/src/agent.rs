@@ -3,6 +3,7 @@ use crate::{
     agent_model::{Activity, Binding, Profile},
     flow::Event,
     model::Source,
+    native_correction::{Command, Phase, Receiver, Target},
     tool_report::{Call, Preview},
 };
 use metldr_pi_session::{McpServer, PiProfile, PiSession};
@@ -57,6 +58,7 @@ fn native(
     stop: &AtomicBool,
     failed: &AtomicBool,
     ready: &AtomicBool,
+    corrections: &mut Receiver,
     mcp: McpServer,
     tx: &mpsc::SyncSender<Event>,
 ) -> Result<(Outcome, bool)> {
@@ -75,7 +77,7 @@ fn native(
         mcp: Some(mcp),
     })?;
     let mut ui = ui::Ui::new(&job.run, tx);
-    let result = session(job, &mut pi, &mut ui, stop, failed, ready, tx);
+    let result = session(job, &mut pi, &mut ui, stop, failed, ready, corrections, tx);
     if result.is_err() {
         let _ = pi.send(json!({"id":"cleanup-abort","type":"abort"}));
     }
@@ -97,6 +99,7 @@ fn session(
     stop: &AtomicBool,
     failed: &AtomicBool,
     ready: &AtomicBool,
+    corrections: &mut Receiver,
     tx: &mpsc::SyncSender<Event>,
 ) -> Result<Outcome> {
     pi.send(json!({"id":"native-state","type":"get_state"}))?;
@@ -174,7 +177,7 @@ fn session(
     }
     let message = prompt_message(&job.text, &job.source, &browser::name(&job.run))?;
     pi.send(json!({"id":"native-prompt","type":"prompt","message":message}))?;
-    stream(job, pi, ui, stop, failed, tx)
+    stream(job, pi, ui, stop, failed, corrections, tx)
 }
 
 fn prompt_message(text: &str, source: &Source, server: &str) -> Result<String> {
@@ -198,12 +201,19 @@ fn prompt_message(text: &str, source: &Source, server: &str) -> Result<String> {
     ))
 }
 
+struct PendingPiCorrection {
+    request: String,
+    id: String,
+    deadline: Instant,
+}
+
 fn stream(
     job: &Job,
     pi: &mut PiSession,
     ui: &mut ui::Ui,
     stop: &AtomicBool,
     failed: &AtomicBool,
+    corrections: &mut Receiver,
     tx: &mpsc::SyncSender<Event>,
 ) -> Result<Outcome> {
     let (mut prompt_ack, mut abort_sent, mut abort_reply) = (false, false, None);
@@ -211,10 +221,30 @@ fn stream(
     let (mut handled, mut handled_idle) = (false, false);
     let mut final_reason = None;
     let (mut tools, mut seen_tools) = (BTreeMap::<String, (String, Call)>::new(), BTreeSet::new());
+    let mut held_correction: Option<Command> = None;
+    let mut pending_correction: Option<PendingPiCorrection> = None;
+    let mut terminal_drain = None;
     let mut activities = 0usize;
     let mut messages = messages::Messages::default();
     let mut stop_wait = StopWait::default();
     loop {
+        if settled.is_none()
+            && pending_correction
+                .as_ref()
+                .is_some_and(|pending| Instant::now() >= pending.deadline)
+        {
+            return Err("Pi correction response deadline expired".into());
+        }
+        if stop.load(Ordering::Acquire) {
+            if let Some(command) = held_correction.take() {
+                corrections.finish(
+                    &command.request,
+                    Phase::NotSent {
+                        message: "Pi correction was stopped before sending".into(),
+                    },
+                )?;
+            }
+        }
         if failed.load(Ordering::Acquire) {
             return Err("Pi browser service failed; task halted".into());
         }
@@ -231,10 +261,104 @@ fn stream(
                 if e.downcast_ref::<io::Error>()
                     .is_some_and(|e| e.kind() == io::ErrorKind::TimedOut) =>
             {
+                if settled.is_some() {
+                    if (!abort_sent || abort_reply.is_some())
+                        && tools.is_empty()
+                        && (pending_correction.is_none()
+                            || terminal_drain.is_some_and(|deadline| Instant::now() >= deadline))
+                    {
+                        return settlement(settled.unwrap(), final_reason.as_deref(), abort_reply);
+                    }
+                } else if let Some(command) = held_correction.take() {
+                    if stop.load(Ordering::Acquire) {
+                        corrections.finish(
+                            &command.request,
+                            Phase::NotSent {
+                                message: "Pi correction was stopped before sending".into(),
+                            },
+                        )?;
+                    } else {
+                        let id = format!("correction:{}", command.request);
+                        pi.send(json!({"id":id,"type":"steer","message":command.text}))?;
+                        pending_correction = Some(PendingPiCorrection {
+                            request: command.request,
+                            id,
+                            deadline: Instant::now() + Duration::from_secs(15),
+                        });
+                    }
+                } else if !stop.load(Ordering::Acquire) && pending_correction.is_none() {
+                    if let Some(command) = corrections.take()? {
+                        if corrections.authorize(&command, &Target::Pi, stop)? {
+                            held_correction = Some(command);
+                        } else {
+                            corrections.finish(
+                                &command.request,
+                                Phase::NotSent {
+                                    message: "Pi correction was not authorized for sending".into(),
+                                },
+                            )?;
+                        }
+                    }
+                }
                 continue;
             }
             Err(e) => return Err(e),
         };
+        if pending_correction
+            .as_ref()
+            .is_some_and(|pending| v["type"] == "response" && v["id"] == pending.id)
+        {
+            let pending = pending_correction.take().unwrap();
+            if v["command"] != "steer" {
+                return Err("Pi correction response command is invalid".into());
+            }
+            let phase = match v["success"].as_bool() {
+                Some(true) => match v["data"]["disposition"].as_str() {
+                    Some("queued") => Phase::PiQueued,
+                    Some("handled") => Phase::PiHandled,
+                    _ => return Err("Pi correction disposition is invalid".into()),
+                },
+                Some(false) => {
+                    let message = v["error"]
+                        .as_str()
+                        .map(str::trim)
+                        .filter(|message| !message.is_empty())
+                        .ok_or("Pi correction rejection omitted its error")?;
+                    Phase::Rejected {
+                        message: Preview::text(message, 256).text,
+                    }
+                }
+                None => return Err("Pi correction response omitted success".into()),
+            };
+            corrections.finish(&pending.request, phase)?;
+            continue;
+        }
+        if v["type"] == "response"
+            && v["id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("correction:"))
+        {
+            return Err("Pi correction response id is unknown or duplicated".into());
+        }
+        if v["type"] == "agent_settled" {
+            if settled.is_some() {
+                return Err("duplicate Pi settlement".into());
+            }
+            corrections.close()?;
+            if let Some(command) = held_correction.take() {
+                corrections.finish(
+                    &command.request,
+                    Phase::NotSent {
+                        message: "Pi settled before correction sending".into(),
+                    },
+                )?;
+            }
+            settled = Some(v["aborted"].as_bool().ok_or("invalid Pi settlement")?);
+            if let Some(pending) = &pending_correction {
+                terminal_drain =
+                    Some((Instant::now() + Duration::from_secs(3)).min(pending.deadline));
+            }
+        }
         if ui.observe(&v, pi, stopping)? {
             continue;
         }
@@ -255,6 +379,7 @@ fn stream(
                         handled = true;
                         pi.send(json!({"id":"native-handled-state","type":"get_state"}))?;
                     }
+                    Some("started") if settled.is_none() => corrections.ready(Target::Pi)?,
                     Some("started") => (),
                     _ => return Err("Pi prompt disposition is invalid".into()),
                 }
@@ -358,12 +483,7 @@ fn stream(
                     },
                 })?;
             }
-            Some("agent_settled") => {
-                if settled.is_some() {
-                    return Err("duplicate Pi settlement".into());
-                }
-                settled = Some(v["aborted"].as_bool().ok_or("invalid Pi settlement")?);
-            }
+            Some("agent_settled") => (),
             Some("message_end") if v["message"]["role"] == "assistant" => {
                 final_reason = v["message"]["stopReason"].as_str().map(str::to_owned);
             }
@@ -380,7 +500,12 @@ fn stream(
                 Outcome::Complete
             });
         }
-        if prompt_ack && settled.is_some() && (!abort_sent || abort_reply.is_some()) {
+        if prompt_ack
+            && settled.is_some()
+            && (!abort_sent || abort_reply.is_some())
+            && (pending_correction.is_none()
+                || terminal_drain.is_some_and(|deadline| Instant::now() >= deadline))
+        {
             if !tools.is_empty() {
                 return Err("Pi settled with an unfinished native tool".into());
             }

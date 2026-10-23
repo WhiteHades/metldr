@@ -1,3 +1,4 @@
+use crate::native_correction::Receiver;
 use crate::{
     Result,
     agent::{self, Outcome},
@@ -35,12 +36,19 @@ pub(super) fn execute(
     stop: Arc<AtomicBool>,
     tx: mpsc::SyncSender<Event>,
     events: tokio::sync::mpsc::Receiver<Notice>,
+    mut corrections: Receiver,
 ) {
     let result = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })
-        .map(|runtime| runtime.block_on(execute_inner(&job, &stop, &tx, events)));
+        .map(|runtime| runtime.block_on(execute_inner(&job, &stop, &tx, events, &mut corrections)));
+    let close = corrections.close();
+    let result = match (result, close) {
+        (Ok(result), Ok(())) => Ok(result),
+        (Err(error), _) => Err(error),
+        (Ok(_), Err(error)) => Err(error),
+    };
     let (result, released) = match result {
         Ok(result) => result,
         Err(error) => (Outcome::Failed(error.to_string()), true),
@@ -57,6 +65,7 @@ async fn execute_inner(
     stop: &Arc<AtomicBool>,
     tx: &mpsc::SyncSender<Event>,
     events: tokio::sync::mpsc::Receiver<Notice>,
+    corrections: &mut Receiver,
 ) -> (Outcome, bool) {
     if stop.load(Ordering::Acquire) {
         return (Outcome::Cancelled, true);
@@ -89,7 +98,7 @@ async fn execute_inner(
         events,
         stop.clone(),
     );
-    let result = stream::run(job, &mut session, &mut tools, stop, tx).await;
+    let result = stream::run(job, &mut session, &mut tools, stop, tx, corrections).await;
     let browser_closed = tools.close().await;
     match (browser_closed, session.close().await) {
         (Ok(()), Ok(exit)) if exit.code == Some(0) && !exit.forced && exit.drained => (

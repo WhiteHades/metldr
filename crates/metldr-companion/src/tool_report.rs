@@ -462,6 +462,7 @@ mod tests {
                 status: crate::model::Status::Complete,
                 output: metldr_conversation::Content::flat("x".repeat(8_000)).unwrap(),
                 error: None,
+                corrections: Vec::new(),
             });
         }
         for index in 0..2 {

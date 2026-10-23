@@ -183,6 +183,23 @@ pub(super) fn run() -> Result<()> {
             Err(error) => return Err(error.into()),
         };
         match event {
+            Event::CorrectionReady { run, target } => owner.correction_ready(&run, target)?,
+            Event::CorrectionDispatch {
+                run,
+                request,
+                target,
+                ack,
+            } => {
+                owner.correction_dispatch(&run, &request, target, ack)?;
+            }
+            Event::CorrectionFinished {
+                run,
+                request,
+                outcome,
+            } => {
+                owner.correction_finished(&run, &request, outcome)?;
+            }
+            Event::CorrectionClosed { run } => owner.correction_closed(&run)?,
             Event::Provider(completion) => owner.provider_completed(completion)?,
             Event::BrowserIo(call) => owner.browser_io_call(call)?,
             Event::Browser(event) => owner.browser_event(event)?,

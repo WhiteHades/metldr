@@ -106,6 +106,7 @@ fn recovery_fixture() -> Result<Store> {
             status,
             output: Default::default(),
             error: None,
+            corrections: Vec::new(),
         });
         state.launches.insert(
             id.clone(),
@@ -469,6 +470,7 @@ fn saved_recovery_is_atomic_idempotent_and_preserves_workflow_heads() -> Result<
         status: Status::Complete,
         output: Default::default(),
         error: None,
+        corrections: Vec::new(),
     });
     headed.launches.insert(
         latest.into(),

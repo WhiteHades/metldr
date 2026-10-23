@@ -83,11 +83,14 @@ impl Owner {
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = stop.clone();
         let tx = self.tx.clone();
-        let worker = thread::spawn(move || agent::execute(job, worker_stop, tx, events));
+        let (correction, corrections) = crate::native_correction::channel(&run, &tx);
+        let worker =
+            thread::spawn(move || agent::execute(job, worker_stop, tx, events, corrections));
         self.operation = Some(Operation {
             run: run.clone(),
             stop,
             worker,
+            correction: Some(correction),
         });
         self.emit(self.started_reply(id, scope, &run)?)
     }
@@ -187,7 +190,18 @@ impl Owner {
             let saved = self.record_change(|edit, scope| {
                 let uncertain = edit.finish_browser(scope, run)?;
                 let mut task = edit.native_task(scope, run)?;
-                if !released || disconnected || uncertain {
+                crate::native_correction::finish(
+                    &mut task.run,
+                    "The run ended before the correction was sent.",
+                    "The run ended without a correction reply. Delivery is unknown.",
+                )?;
+                let correction_uncertain = task.run.corrections.iter().any(|receipt| {
+                    matches!(
+                        receipt.state,
+                        crate::native_correction::Phase::Uncertain { .. }
+                    )
+                });
+                if !released || disconnected || uncertain || correction_uncertain {
                     match &mut task.workflow {
                         crate::history::NativeWorkflow::Pi(w) => w.binding.block_recovery(),
                         crate::history::NativeWorkflow::Codex(w) => w.binding.block_recovery(),
@@ -219,6 +233,23 @@ impl Owner {
         }
         let mut next = self.state.clone();
         next.finish_browser(run)?;
+        let record = next
+            .view
+            .runs
+            .iter_mut()
+            .find(|r| r.id == run)
+            .ok_or("Pi settlement without run")?;
+        crate::native_correction::finish(
+            record,
+            "The run ended before the correction was sent.",
+            "The run ended without a correction reply. Delivery is unknown.",
+        )?;
+        let correction_uncertain = record.corrections.iter().any(|receipt| {
+            matches!(
+                receipt.state,
+                crate::native_correction::Phase::Uncertain { .. }
+            )
+        });
         let uncertain = next.browser_actions.values().any(|action| {
             action.proposal.run == run
                 && matches!(
@@ -228,7 +259,7 @@ impl Owner {
                     }
                 )
         });
-        if (!released || disconnected || uncertain)
+        if (!released || disconnected || uncertain || correction_uncertain)
             && let Some(launch) = next.launches.get(run)
         {
             match launch {

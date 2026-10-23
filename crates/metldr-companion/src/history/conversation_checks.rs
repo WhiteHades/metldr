@@ -122,6 +122,7 @@ fn actual_conversations_keep_receipts_scopes_settings_and_native_history() -> Re
             status: Status::Running,
             output: Default::default(),
             error: None,
+            corrections: Vec::new(),
         };
         tx.admit(
             &b,

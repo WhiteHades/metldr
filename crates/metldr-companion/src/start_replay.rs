@@ -29,6 +29,7 @@ impl Owner {
             | Action::OpenCodePrompt { .. }
             | Action::OpenCodeFollowUp { .. } => (),
             Action::Capture { .. }
+            | Action::NativeCorrection { .. }
             | Action::Watch { .. }
             | Action::Stop { .. }
             | Action::BrowserDecision { .. }

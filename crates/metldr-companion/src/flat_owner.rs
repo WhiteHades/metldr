@@ -129,6 +129,7 @@ impl Owner {
                         status: Status::Running,
                         output: Default::default(),
                         error: None,
+                        corrections: Vec::new(),
                     },
                     Launch::Fixture { input_digest },
                 )?;
@@ -185,6 +186,7 @@ impl Owner {
                 status: Status::Running,
                 output: Default::default(),
                 error: None,
+                corrections: Vec::new(),
             });
             next.starts.insert(id.into(), run.clone());
             next.launches
@@ -208,6 +210,7 @@ impl Owner {
             run: run.clone(),
             stop,
             worker,
+            correction: None,
         });
         self.emit(self.started_reply(id, scope, &run)?)
     }

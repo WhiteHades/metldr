@@ -48,6 +48,7 @@ fn with_owner(check: impl FnOnce(&mut Owner, Proposal)) {
         status: Status::Running,
         output: Default::default(),
         error: None,
+        corrections: Vec::new(),
     });
     state.launches.insert(
         run.clone(),
@@ -73,6 +74,7 @@ fn with_owner(check: impl FnOnce(&mut Owner, Proposal)) {
             run: run.clone(),
             stop: Arc::new(AtomicBool::new(false)),
             worker: std::thread::spawn(|| {}),
+            correction: None,
         }),
         tx,
         pi_profile: None,

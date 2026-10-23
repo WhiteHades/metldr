@@ -2,6 +2,7 @@ mod assembler;
 mod identity;
 mod snapshot;
 mod wire;
+pub use wire::WIRE_VERSION;
 
 pub use assembler::Assembler;
 pub use identity::{Counter, DocumentKind, Identity, Scope};

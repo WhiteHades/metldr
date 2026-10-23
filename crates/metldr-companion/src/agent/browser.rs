@@ -5,6 +5,7 @@ use crate::{
     browser_mcp::Server,
     browser_worker::Tools,
     flow::Event,
+    native_correction::Receiver,
 };
 use metldr_pi_session::McpServer;
 use std::sync::{
@@ -22,13 +23,14 @@ pub(crate) fn execute(
     stop: Arc<AtomicBool>,
     tx: mpsc::SyncSender<Event>,
     events: tokio::sync::mpsc::Receiver<Notice>,
+    corrections: Receiver,
 ) {
     let run = job.run.clone();
     let result = (|| -> Result<(Outcome, bool)> {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
-        Ok(runtime.block_on(execute_inner(job, stop, &tx, events)))
+        Ok(runtime.block_on(execute_inner(job, stop, &tx, events, corrections)))
     })();
     let (result, released) =
         result.unwrap_or_else(|error| (Outcome::Failed(error.to_string()), true));
@@ -44,6 +46,7 @@ async fn execute_inner(
     stop: Arc<AtomicBool>,
     tx: &mpsc::SyncSender<Event>,
     events: tokio::sync::mpsc::Receiver<Notice>,
+    corrections: Receiver,
 ) -> (Outcome, bool) {
     if stop.load(Ordering::Acquire) {
         return (Outcome::Cancelled, true);
@@ -76,14 +79,21 @@ async fn execute_inner(
     let worker_done = done.clone();
     let worker_tx = tx.clone();
     let worker = tokio::task::spawn_blocking(move || {
+        let mut corrections = corrections;
         let result = super::native(
             &job,
             &worker_stop,
             &worker_failed,
             &ready,
+            &mut corrections,
             registration,
             &worker_tx,
         );
+        let result = match (result, corrections.close()) {
+            (Ok(result), Ok(())) => Ok(result),
+            (Err(error), _) => Err(error),
+            (Ok(_), Err(error)) => Err(error.into()),
+        };
         worker_done.store(true, Ordering::Release);
         result
     });

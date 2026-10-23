@@ -2,14 +2,14 @@ use metldr_conversation::{Display, ProjectedEntry, Projection};
 
 use super::{
     ActivityOutcome, ActivityPhase, FlowError, MAX_ACTIVITY, MAX_PAGE_TEXT, RunId, RunKind,
-    RunRoute, RunView, WireRun, parse_identity, valid_ascii_label, valid_fingerprint,
-    valid_https_endpoint, valid_label,
+    RunRoute, RunView, WireRun, parse_identity, valid_ascii_label, valid_correction_receipt,
+    valid_fingerprint, valid_https_endpoint, valid_label,
 };
 
 const MAX_RUN_DOCUMENT: usize = 2 * 1024 * 1024;
 
 impl WireRun {
-    pub(super) fn into_view(self, store: &str) -> Result<RunView, FlowError> {
+    pub(super) fn into_view(self, store: &str, saved: bool) -> Result<RunView, FlowError> {
         let valid_id = |id: &str| parse_identity(id).is_ok_and(|(id_store, _)| id_store == store);
         if !valid_id(self.id.as_str())
             || !valid_id(self.source.as_str())
@@ -22,6 +22,69 @@ impl WireRun {
             })
             || self.error.as_ref().is_some_and(|text| text.len() > 256)
             || self.activity.len() > MAX_ACTIVITY
+            || self.corrections.total > 16
+            || self.corrections.entries.len() > usize::from(self.corrections.total)
+            || (saved && self.corrections.entries.len() != usize::from(self.corrections.total))
+            || (!saved
+                && self.corrections.entries.len() != usize::from(self.corrections.total.min(4)))
+            || self
+                .corrections
+                .entries
+                .iter()
+                .enumerate()
+                .any(|(index, receipt)| {
+                    let expected = if saved {
+                        index + 1
+                    } else {
+                        usize::from(self.corrections.total) - self.corrections.entries.len()
+                            + index
+                            + 1
+                    };
+                    usize::from(receipt.ordinal) != expected
+                        || !valid_correction_receipt(receipt, if saved { 1024 } else { 256 }, saved)
+                        || self.corrections.entries[..index]
+                            .iter()
+                            .any(|previous| previous.request == receipt.request)
+                        || matches!(
+                            (&self.route, &receipt.state),
+                            (
+                                RunRoute::Pi { .. },
+                                crate::model::CorrectionState::CodexAccepted
+                            ) | (
+                                RunRoute::Codex { .. },
+                                crate::model::CorrectionState::PiQueued
+                                    | crate::model::CorrectionState::PiHandled
+                            )
+                        )
+                })
+            || self
+                .corrections
+                .entries
+                .iter()
+                .enumerate()
+                .any(|(index, receipt)| {
+                    matches!(
+                        &receipt.state,
+                        crate::model::CorrectionState::Pending
+                            | crate::model::CorrectionState::Dispatching
+                    ) && (index + 1 != self.corrections.entries.len()
+                        || self
+                            .corrections
+                            .entries
+                            .iter()
+                            .filter(|entry| {
+                                matches!(
+                                    &entry.state,
+                                    crate::model::CorrectionState::Pending
+                                        | crate::model::CorrectionState::Dispatching
+                                )
+                            })
+                            .count()
+                            > 1
+                        || self.status.is_terminal())
+                })
+            || (!self.corrections.entries.is_empty()
+                && !matches!(&self.route, RunRoute::Pi { .. } | RunRoute::Codex { .. }))
             || self.activity.iter().any(|item| {
                 !valid_label(&item.tool, 128)
                     || !matches!(
@@ -123,6 +186,7 @@ impl WireRun {
             error: self.error,
             route: self.route,
             activity: self.activity,
+            corrections: self.corrections,
         })
     }
 }
@@ -140,6 +204,6 @@ impl RunView {
             return Err(FlowError::Protocol("saved run identity changed".into()));
         }
         let (store, _) = parse_identity(expected.as_str()).map_err(FlowError::Protocol)?;
-        run.into_view(store)
+        run.into_view(store, true)
     }
 }

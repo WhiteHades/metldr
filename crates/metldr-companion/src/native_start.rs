@@ -389,6 +389,7 @@ fn records(
         status: Status::Running,
         output: metldr_conversation::Content::native(),
         error: None,
+        corrections: Vec::new(),
     };
     Ok((value, record, launch))
 }

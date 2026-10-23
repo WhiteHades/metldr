@@ -740,6 +740,34 @@ impl FlowClient {
         }
     }
 
+    pub(crate) fn correction_request_id(&self) -> Result<String> {
+        self.inner.request_id()
+    }
+
+    pub(crate) async fn correct(
+        &self,
+        request: String,
+        scope: metldr_history_pages::Scope,
+        run: RunId,
+        text: UserText,
+    ) -> Result<()> {
+        let command = conversation(
+            &scope,
+            json!({"op":"native_correction","run":run,"text":text.as_str()}),
+        );
+        match self
+            .request_with_id(
+                request,
+                command,
+                ReplyKind::Correction(scope, run, text.as_str().to_owned()),
+            )
+            .await?
+        {
+            Reply::Correction(_) => Ok(()),
+            _ => Err(FlowError::Protocol("Expected a correction receipt.".into())),
+        }
+    }
+
     pub(crate) async fn decide_browser_action(
         &self,
         scope: metldr_history_pages::Scope,

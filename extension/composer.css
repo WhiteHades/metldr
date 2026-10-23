@@ -158,6 +158,24 @@ html[data-theme="light"] #composer {
 #composer #composer-controls > button[data-action="stop"] svg { inline-size: 16px; block-size: 16px; stroke-width: 2.4; }
 #composer [data-action="stop"] svg rect { fill: currentColor; stroke: none; }
 
+#composer #composer-controls:has(> [data-action="ask"]:not([hidden])):has(> [data-action="stop"]:not([hidden])) {
+  grid-template-columns: 28px auto minmax(0, 1fr) 44px 44px;
+
+  > #composer-dictate,
+  > #codex-mode-wrap { display: none; }
+
+  > button[data-action="stop"] { grid-column: 4; }
+
+  > button:is([data-action="ask"], [data-action="stop"]) {
+    inline-size: 44px;
+    block-size: 44px;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    > button:is([data-action="ask"], [data-action="stop"]):active:not(:disabled) { transform: scale(0.97); }
+  }
+}
+
 #composer .composer-menu,
 #composer .composer-model-menu {
   position: absolute;

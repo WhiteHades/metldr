@@ -90,6 +90,7 @@ fn native_admission_binding_continuation_and_terminal_output_persist() -> Result
                 status: Status::Running,
                 output: Content::native(),
                 error: None,
+                corrections: Vec::new(),
             },
             Launch::Pi {
                 input_digest: "a".repeat(64),
@@ -163,6 +164,7 @@ fn native_admission_binding_continuation_and_terminal_output_persist() -> Result
                     status: Status::Running,
                     output: Content::native(),
                     error: None,
+                    corrections: Vec::new(),
                 },
                 launch,
                 workflow,
@@ -361,6 +363,7 @@ fn native_admission_binding_continuation_and_terminal_output_persist() -> Result
                     status: Status::Running,
                     output: Content::native(),
                     error: None,
+                    corrections: Vec::new(),
                 },
                 launch,
                 workflow,
@@ -452,6 +455,7 @@ fn native_admission_binding_continuation_and_terminal_output_persist() -> Result
                                 status: Status::Running,
                                 output: Content::native(),
                                 error: None,
+                                corrections: Vec::new(),
                             },
                             Launch::Pi {
                                 input_digest: "f".repeat(64),

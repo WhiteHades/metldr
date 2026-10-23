@@ -140,6 +140,7 @@ impl Owner {
                     status: Status::Running,
                     output: metldr_conversation::Content::native(),
                     error: None,
+                    corrections: Vec::new(),
                 };
                 edit.admit(
                     scope,
@@ -182,6 +183,7 @@ impl Owner {
                 status: Status::Running,
                 output: metldr_conversation::Content::native(),
                 error: None,
+                corrections: Vec::new(),
             };
             next.view.runs.push(record);
             next.starts.insert(id.into(), run.clone());
@@ -249,6 +251,7 @@ impl Owner {
             run: run.clone(),
             stop,
             worker,
+            correction: None,
         });
         self.emit(self.started_reply(id, scope, &run)?)
     }
