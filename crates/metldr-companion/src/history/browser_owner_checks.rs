@@ -273,6 +273,31 @@ fn actual_owner_browser_lifecycle_is_record_durable_and_fails_closed() -> crate:
     ));
     binding = next_binding;
     for index in 1..17 {
+        let (intent, outcome) = if index == 1 {
+            use crate::browser_action::{Direction, Point, Scroll, ScrollKind};
+            let before: Point = serde_json::from_value(serde_json::json!({"x":-40.5,"y":120.25}))?;
+            let after: Point = serde_json::from_value(serde_json::json!({"x":-40.5,"y":620.25}))?;
+            (
+                Intent::Scroll {
+                    scroll: Scroll {
+                        handle: "r1-1-0".into(),
+                        kind: ScrollKind::Region,
+                        label: "Results".into(),
+                        direction: Direction::Down,
+                        pixels: 500,
+                        before,
+                    },
+                },
+                Outcome::ScrollObserved { after },
+            )
+        } else {
+            (
+                field(),
+                Outcome::Verified {
+                    observed: "new@example.invalid".into(),
+                },
+            )
+        };
         approve_dispatch_settle(
             &mut owner,
             proposal(
@@ -280,11 +305,9 @@ fn actual_owner_browser_lifecycle_is_record_durable_and_fails_closed() -> crate:
                 &format!("tool-{index}"),
                 &binding,
                 destination,
-                field(),
+                intent,
             ),
-            Outcome::Verified {
-                observed: "new@example.invalid".into(),
-            },
+            outcome,
         )?;
     }
     assert_eq!(owner.browser_view.len(), 16);

@@ -95,7 +95,7 @@ fn index_rows(read: &redb::ReadTransaction) -> Result<Value> {
 }
 
 #[test]
-#[ignore = "requires METLDR_STARTUP_BINARY and METLDR_HISTORY_OLD_BINARY with history format 10, 11 or 12"]
+#[ignore = "requires METLDR_STARTUP_BINARY and METLDR_HISTORY_OLD_BINARY with history format 10 through 13"]
 fn actual_old_private_host_upgrades_and_cannot_reopen_new_history() -> Result<()> {
     let directory = Directory::new()?;
     let mut legacy = crate::history::fixture::legacy();
@@ -121,8 +121,8 @@ fn actual_old_private_host_upgrades_and_cannot_reopen_new_history() -> Result<()
     let old_format = before["profile"]["format"]
         .as_u64()
         .ok_or("old format absent")?;
-    assert!(matches!(old_format, 10 | 11 | 12));
-    assert_eq!(ready["v"], if old_format == 10 { 10 } else { 12 });
+    assert!(matches!(old_format, 10..=13));
+    assert_eq!(ready["v"], if old_format == 11 { 12 } else { old_format });
     assert_eq!(before["tables"]["runs"].as_array().unwrap().len(), 11);
     assert_eq!(before["tables"]["starts"].as_array().unwrap().len(), 11);
     assert_eq!(
@@ -130,7 +130,7 @@ fn actual_old_private_host_upgrades_and_cannot_reopen_new_history() -> Result<()
         1
     );
     let marker = fs::read(directory.0.join("snapshot.json"))?;
-    let original_index = if old_format == 12 {
+    let original_index = if old_format >= 12 {
         let db = redb::Database::open(directory.0.join("history.redb"))?;
         Some(index_rows(&db.begin_read()?)?)
     } else {
@@ -182,7 +182,7 @@ fn actual_old_private_host_upgrades_and_cannot_reopen_new_history() -> Result<()
             let bytes = meta.get("profile")?.unwrap().value().to_vec();
             (
                 bytes,
-                if old_format == 12 {
+                if old_format >= 12 {
                     Some(index_rows(&read)?)
                 } else {
                     None

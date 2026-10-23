@@ -378,6 +378,7 @@ pub(crate) struct BrowserActionView {
     pub(crate) outcome: Option<BrowserActionOutcome>,
     pub(crate) reason: Option<String>,
     pub(crate) observed_selection: Option<Choice>,
+    pub(crate) observed_scroll: Option<Point>,
     pub(crate) target_current: bool,
 }
 
@@ -399,6 +400,62 @@ pub(crate) enum BrowserActionIntent {
     SelectOption {
         selection: Selection,
     },
+    Scroll {
+        scroll: Scroll,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ScrollKind {
+    Page,
+    Region,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ScrollDirection {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Point {
+    pub(crate) x: serde_json::Number,
+    pub(crate) y: serde_json::Number,
+}
+
+impl Point {
+    fn valid(&self) -> bool {
+        [&self.x, &self.y].into_iter().all(|number| {
+            number
+                .as_f64()
+                .is_some_and(|value| value.is_finite() && value.abs() <= 1_000_000_000.0)
+        })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Scroll {
+    pub(crate) handle: String,
+    pub(crate) kind: ScrollKind,
+    pub(crate) label: String,
+    pub(crate) direction: ScrollDirection,
+    pub(crate) pixels: u16,
+    pub(crate) before: Point,
+}
+
+impl Scroll {
+    fn valid(&self) -> bool {
+        valid_control_id(&self.handle)
+            && valid_selection_label(&self.label)
+            && (1..=2000).contains(&self.pixels)
+            && self.before.valid()
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -467,6 +524,8 @@ struct WireBrowserAction {
     button_label: Option<String>,
     #[serde(default, deserialize_with = "present")]
     selection: Option<Selection>,
+    #[serde(default, deserialize_with = "present")]
+    scroll: Option<Scroll>,
     phase: BrowserActionPhase,
     #[serde(default, deserialize_with = "Option::deserialize")]
     outcome: Option<BrowserActionOutcome>,
@@ -474,6 +533,8 @@ struct WireBrowserAction {
     reason: Option<String>,
     #[serde(default, deserialize_with = "present")]
     observed_selection: Option<Choice>,
+    #[serde(default, deserialize_with = "present")]
+    observed_scroll: Option<Point>,
 }
 
 impl<'de> Deserialize<'de> for BrowserActionView {
@@ -488,12 +549,14 @@ impl<'de> Deserialize<'de> for BrowserActionView {
             || wire.value.is_some();
         let button_members = wire.button_id.is_some() || wire.button_label.is_some();
         let selection_member = wire.selection.is_some();
+        let scroll_member = wire.scroll.is_some();
         let intent = match wire.kind.as_str() {
             "field"
                 if field_members
                     && !button_members
                     && wire.destination.is_none()
-                    && !selection_member =>
+                    && !selection_member
+                    && !scroll_member =>
             {
                 BrowserActionIntent::Field {
                     field_id: wire
@@ -508,7 +571,9 @@ impl<'de> Deserialize<'de> for BrowserActionView {
                         .ok_or_else(|| serde::de::Error::missing_field("value"))?,
                 }
             }
-            "navigate" if !field_members && !button_members && !selection_member => {
+            "navigate"
+                if !field_members && !button_members && !selection_member && !scroll_member =>
+            {
                 BrowserActionIntent::Navigate {
                     destination: wire
                         .destination
@@ -519,7 +584,8 @@ impl<'de> Deserialize<'de> for BrowserActionView {
                 if !field_members
                     && wire.destination.is_none()
                     && button_members
-                    && !selection_member =>
+                    && !selection_member
+                    && !scroll_member =>
             {
                 BrowserActionIntent::ActivateButton {
                     button_id: wire
@@ -534,12 +600,26 @@ impl<'de> Deserialize<'de> for BrowserActionView {
                 if !field_members
                     && !button_members
                     && wire.destination.is_none()
+                    && !scroll_member
                     && selection_member =>
             {
                 BrowserActionIntent::SelectOption {
                     selection: wire
                         .selection
                         .ok_or_else(|| serde::de::Error::custom("selection is null"))?,
+                }
+            }
+            "scroll"
+                if !field_members
+                    && !button_members
+                    && wire.destination.is_none()
+                    && !selection_member
+                    && scroll_member =>
+            {
+                BrowserActionIntent::Scroll {
+                    scroll: wire
+                        .scroll
+                        .ok_or_else(|| serde::de::Error::custom("scroll is null"))?,
                 }
             }
             _ => return Err(serde::de::Error::custom("invalid browser action intent")),
@@ -557,6 +637,7 @@ impl<'de> Deserialize<'de> for BrowserActionView {
             outcome: wire.outcome,
             reason: wire.reason,
             observed_selection,
+            observed_scroll: wire.observed_scroll,
             target_current: false,
         })
     }
@@ -596,6 +677,7 @@ pub(crate) enum BrowserActionOutcome {
     Verified,
     ClickObserved,
     SelectionObserved,
+    ScrollObserved,
     Prevented,
     Uncertain,
 }
@@ -606,6 +688,7 @@ impl std::fmt::Display for BrowserActionOutcome {
             Self::Verified => "verified",
             Self::ClickObserved => "click_observed",
             Self::SelectionObserved => "selection_observed",
+            Self::ScrollObserved => "scroll_observed",
             Self::Prevented => "prevented",
             Self::Uncertain => "uncertain",
         })
@@ -1549,39 +1632,58 @@ impl PageView {
                         && action.outcome.is_none()
                         && action.reason.is_none()
                         && action.observed_selection.is_none()
+                        && action.observed_scroll.is_none()
                 }
                 BrowserActionPhase::Approved => {
                     action.revision == 2
                         && action.outcome.is_none()
                         && action.reason.is_none()
                         && action.observed_selection.is_none()
+                        && action.observed_scroll.is_none()
                 }
                 BrowserActionPhase::Dispatching => {
                     action.revision == 3
                         && action.outcome.is_none()
                         && action.reason.is_none()
                         && action.observed_selection.is_none()
+                        && action.observed_scroll.is_none()
                 }
                 BrowserActionPhase::Settled => {
-                    match (action.outcome, &action.intent, &action.observed_selection) {
+                    match (
+                        action.outcome,
+                        &action.intent,
+                        &action.observed_selection,
+                        &action.observed_scroll,
+                    ) {
                         (
                             Some(BrowserActionOutcome::Verified),
                             BrowserActionIntent::Field { .. }
                             | BrowserActionIntent::Navigate { .. },
+                            None,
                             None,
                         )
                         | (
                             Some(BrowserActionOutcome::ClickObserved),
                             BrowserActionIntent::ActivateButton { .. },
                             None,
+                            None,
                         )
-                        | (Some(BrowserActionOutcome::Uncertain), _, None) => action.revision == 4,
+                        | (Some(BrowserActionOutcome::Uncertain), _, None, None) => {
+                            action.revision == 4
+                        }
                         (
                             Some(BrowserActionOutcome::SelectionObserved),
                             BrowserActionIntent::SelectOption { selection },
                             Some(observed),
+                            None,
                         ) => action.revision == 4 && observed == &selection.selected,
-                        (Some(BrowserActionOutcome::Prevented), _, None) => {
+                        (
+                            Some(BrowserActionOutcome::ScrollObserved),
+                            BrowserActionIntent::Scroll { scroll },
+                            None,
+                            Some(after),
+                        ) => action.revision == 4 && scroll.valid() && after.valid(),
+                        (Some(BrowserActionOutcome::Prevented), _, None, None) => {
                             (2..=4).contains(&action.revision)
                         }
                         _ => false,
@@ -1603,7 +1705,8 @@ impl PageView {
                     Some(
                         BrowserActionOutcome::Verified
                         | BrowserActionOutcome::ClickObserved
-                        | BrowserActionOutcome::SelectionObserved,
+                        | BrowserActionOutcome::SelectionObserved
+                        | BrowserActionOutcome::ScrollObserved,
                     ),
                     None,
                 ) => true,
@@ -1627,6 +1730,10 @@ impl PageView {
                 || action.url.len() > 2_048
                 || action.url.chars().any(char::is_control)
                 || !valid_browser_intent(&action.intent)
+                || action
+                    .observed_scroll
+                    .as_ref()
+                    .is_some_and(|point| !point.valid())
                 || !phase_revision
                 || !reason_valid
             {
@@ -1886,6 +1993,7 @@ fn valid_browser_intent(intent: &BrowserActionIntent) -> bool {
                 && !button_label.chars().any(char::is_control)
         }
         BrowserActionIntent::SelectOption { selection } => selection.valid(),
+        BrowserActionIntent::Scroll { scroll } => scroll.valid(),
     }
 }
 
@@ -2618,6 +2726,50 @@ mod tests {
         assert!(PageView::decode(&serde_json::to_vec(&view).unwrap()).is_err());
         view["browser_actions"][0]["observed_selection"] = selection["selected"].clone();
         view["browser_actions"][0]["observed_selection"]["index"] = serde_json::json!(32);
+        assert!(PageView::decode(&serde_json::to_vec(&view).unwrap()).is_err());
+    }
+
+    #[test]
+    fn decodes_scroll_approval_and_observed_receipt_strictly() {
+        let mut view: serde_json::Value = serde_json::from_str(VALID).unwrap();
+        view["browser_actions"] = serde_json::json!([{
+            "id":format!("{STORE}:4"), "revision":1,
+            "run":format!("{STORE}:2"), "tab":4, "document":"doc-1",
+            "url":"http://127.0.0.1:43123/article", "kind":"scroll",
+            "scroll":{"handle":"region_1", "kind":"region", "label":"Article",
+                "direction":"left", "pixels":240, "before":{"x":-12.5,"y":3.25}},
+            "phase":"pending"
+        }]);
+        let decoded = PageView::decode(&serde_json::to_vec(&view).unwrap()).unwrap();
+        let action = &decoded.browser_actions[0];
+        assert!(matches!(
+            &action.intent,
+            BrowserActionIntent::Scroll { scroll }
+                if scroll.before.x.to_string() == "-12.5"
+                    && scroll.direction == ScrollDirection::Left
+        ));
+
+        view["browser_actions"][0]["scroll"]["before"]["y"] = serde_json::Value::Null;
+        assert!(PageView::decode(&serde_json::to_vec(&view).unwrap()).is_err());
+        view["browser_actions"][0]["scroll"]["before"]["y"] = serde_json::json!(3.25);
+        view["browser_actions"][0]["field_id"] = serde_json::json!(null);
+        assert!(PageView::decode(&serde_json::to_vec(&view).unwrap()).is_err());
+        view["browser_actions"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("field_id");
+        view["browser_actions"][0]["revision"] = serde_json::json!(2);
+        assert!(PageView::decode(&serde_json::to_vec(&view).unwrap()).is_err());
+        view["browser_actions"][0]["revision"] = serde_json::json!(1);
+        view["browser_actions"][0]["scroll"]["before"]["x"] = serde_json::json!(1_000_000_001_i64);
+        assert!(PageView::decode(&serde_json::to_vec(&view).unwrap()).is_err());
+        view["browser_actions"][0]["scroll"]["before"]["x"] = serde_json::json!(-12.5);
+        view["browser_actions"][0]["phase"] = serde_json::json!("settled");
+        view["browser_actions"][0]["revision"] = serde_json::json!(4);
+        view["browser_actions"][0]["outcome"] = serde_json::json!("scroll_observed");
+        view["browser_actions"][0]["observed_scroll"] = serde_json::json!({"x":-13.75,"y":3.25});
+        assert!(PageView::decode(&serde_json::to_vec(&view).unwrap()).is_ok());
+        view["browser_actions"][0]["observed_scroll"]["x"] = serde_json::json!(1_000_000_001_i64);
         assert!(PageView::decode(&serde_json::to_vec(&view).unwrap()).is_err());
     }
 

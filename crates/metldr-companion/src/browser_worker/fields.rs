@@ -99,6 +99,19 @@ impl Tools {
                     .await?;
                 self.perform(proposal, stop, budget).await?
             }
+            Call::Scroll {
+                handle,
+                direction,
+                pixels,
+            } => {
+                let proposal = self
+                    .engine
+                    .as_ref()
+                    .ok_or("browser is not attached")?
+                    .prepare_scroll(call_id, handle, *direction, *pixels)
+                    .await?;
+                self.perform(proposal, stop, budget).await?
+            }
         };
         self.completed
             .insert(call_id.to_owned(), (call, result.clone()));
@@ -182,6 +195,7 @@ impl Tools {
                     Intent::Field { .. } => engine.change(&dispatched).await,
                     Intent::ActivateButton { .. } => engine.activate_button(&dispatched).await,
                     Intent::SelectOption { .. } => engine.select_option(&dispatched).await,
+                    Intent::Scroll { .. } => engine.scroll(&dispatched).await,
                     Intent::Navigate { .. } => {
                         return Err("navigation requires its own result owner".into());
                     }
@@ -260,6 +274,17 @@ fn validate_call(call_id: &str, call: &Call) -> Result<()> {
             Ok(())
         }
         Call::SelectOption { .. } => Err("invalid browser selection handle".into()),
+        Call::Scroll { handle, pixels, .. }
+            if !handle.is_empty()
+                && handle.len() <= 64
+                && handle
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+                && (1..=2000).contains(pixels) =>
+        {
+            Ok(())
+        }
+        Call::Scroll { .. } => Err("invalid browser scroll request".into()),
     }
 }
 

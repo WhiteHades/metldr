@@ -1,6 +1,9 @@
 use crate::{
     Panel, active_run, composer, err,
-    model::{BrowserActionIntent, BrowserActionOutcome, BrowserActionPhase, SourceStatus},
+    model::{
+        BrowserActionIntent, BrowserActionOutcome, BrowserActionPhase, ScrollDirection,
+        SourceStatus,
+    },
     results,
 };
 use wasm_bindgen::closure::Closure;
@@ -398,6 +401,7 @@ fn render_browser_actions(panel: &Panel) -> Result<(), JsValue> {
                     BrowserActionOutcome::Verified
                         | BrowserActionOutcome::ClickObserved
                         | BrowserActionOutcome::SelectionObserved
+                        | BrowserActionOutcome::ScrollObserved
                 )
             ) {
             (&receipt_rows, &mut receipt_position)
@@ -459,6 +463,10 @@ fn create_action_card(
         ("field", "Field"),
         ("previous-value", "Previous value"),
         ("value", "Proposed value"),
+        ("scroll-target", "Target"),
+        ("scroll-motion", "Scroll"),
+        ("scroll-before", "Before"),
+        ("scroll-after", "After"),
         ("status", "Status"),
     ] {
         let detail = doc.create_element("p")?;
@@ -501,6 +509,10 @@ fn update_action_card(
             "Approve option selection"
         }
         BrowserActionIntent::SelectOption { .. } => "Option selection",
+        BrowserActionIntent::Scroll { .. } if action.phase == BrowserActionPhase::Pending => {
+            "Approve scroll"
+        }
+        BrowserActionIntent::Scroll { .. } => "Page scroll",
     }));
     match &action.intent {
         BrowserActionIntent::Field {
@@ -560,10 +572,65 @@ fn update_action_card(
                 &["destination", "field", "previous-value", "value", "status"],
             )?;
         }
+        BrowserActionIntent::Scroll { scroll } => {
+            update_detail(card, "destination", &action.url)?;
+            update_detail(card, "scroll-target", &scroll.label)?;
+            update_detail(
+                card,
+                "scroll-motion",
+                &format!(
+                    "{} {} px",
+                    match scroll.direction {
+                        ScrollDirection::Up => "Up",
+                        ScrollDirection::Down => "Down",
+                        ScrollDirection::Left => "Left",
+                        ScrollDirection::Right => "Right",
+                    },
+                    scroll.pixels
+                ),
+            )?;
+            update_detail(
+                card,
+                "scroll-before",
+                &format!("x: {}, y: {}", scroll.before.x, scroll.before.y),
+            )?;
+            let after = action
+                .observed_scroll
+                .as_ref()
+                .map_or_else(String::new, |point| {
+                    format!("x: {}, y: {}", point.x, point.y)
+                });
+            update_detail(card, "scroll-after", &after)?;
+            show_rows(
+                card,
+                if action.observed_scroll.is_some() {
+                    &[
+                        "destination",
+                        "scroll-target",
+                        "scroll-motion",
+                        "scroll-before",
+                        "scroll-after",
+                        "status",
+                    ]
+                } else {
+                    &[
+                        "destination",
+                        "scroll-target",
+                        "scroll-motion",
+                        "scroll-before",
+                        "status",
+                    ]
+                },
+            )?;
+        }
     }
     let status = match action.outcome {
         Some(BrowserActionOutcome::ClickObserved) => "Button click observed".to_owned(),
         Some(BrowserActionOutcome::SelectionObserved) => "Selection observed".to_owned(),
+        Some(BrowserActionOutcome::ScrollObserved) if action.observed_scroll.as_ref().is_some_and(|after| {
+            matches!(&action.intent, BrowserActionIntent::Scroll { scroll } if scroll.before == *after)
+        }) => "No movement observed".to_owned(),
+        Some(BrowserActionOutcome::ScrollObserved) => "Scroll position observed".to_owned(),
         _ => format!(
             "{}{}{}",
             action.phase,
@@ -641,6 +708,10 @@ fn show_rows(card: &Element, visible: &[&str]) -> Result<(), JsValue> {
         "field",
         "previous-value",
         "value",
+        "scroll-target",
+        "scroll-motion",
+        "scroll-before",
+        "scroll-after",
         "status",
     ] {
         let element = card

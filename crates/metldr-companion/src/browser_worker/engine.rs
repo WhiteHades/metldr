@@ -61,6 +61,13 @@ enum Kind {
         destination: String,
     },
     Navigate(Action),
+    PrepareScroll {
+        tool: String,
+        handle: String,
+        direction: metldr_browser_tools::ScrollDirection,
+        pixels: u16,
+    },
+    Scroll(Action),
 }
 
 pub(super) struct AttachFailure {
@@ -276,6 +283,28 @@ impl Engine {
         self.effect(
             Kind::Navigate(action.clone()),
             "navigation destination or effect could not be verified",
+        )
+        .await
+    }
+    pub(super) async fn prepare_scroll(
+        &self,
+        tool: &str,
+        handle: &str,
+        direction: metldr_browser_tools::ScrollDirection,
+        pixels: u16,
+    ) -> Result<Proposal> {
+        self.request(Kind::PrepareScroll {
+            tool: tool.into(),
+            handle: handle.into(),
+            direction,
+            pixels,
+        })
+        .await
+    }
+    pub(super) async fn scroll(&self, action: &Action) -> Outcome {
+        self.effect(
+            Kind::Scroll(action.clone()),
+            "scroll dispatch result was lost",
         )
         .await
     }

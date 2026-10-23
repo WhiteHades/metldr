@@ -12,12 +12,17 @@ pub(super) fn run(db: &Database) -> Result<()> {
     )?;
     match profile.format {
         FORMAT => return Ok(()),
-        10 | 11 | 12 => (),
+        10..=13 => (),
         _ => return Err("unsupported history profile format".into()),
     }
     require_base_tables(&read)?;
-    if profile.format == 12 {
+    if profile.format >= 12 {
         read.open_table(NATIVE_CHOICES)?;
+    }
+    for row in read.open_table(ACTIONS)?.iter()? {
+        let (_, bytes) = row?;
+        let record: Record<crate::browser_action::Action> = decode(bytes.value())?;
+        crate::browser_action::reject_scroll_action(&record.value)?;
     }
     drop(meta);
     drop(read);
@@ -34,7 +39,7 @@ pub(super) fn run(db: &Database) -> Result<()> {
         )?;
         match profile.format {
             FORMAT => return Ok(()),
-            10 | 11 | 12 => (),
+            10..=13 => (),
             _ => return Err("unsupported history profile format".into()),
         }
         let format = profile.format;

@@ -60,6 +60,7 @@ impl Actor {
                     fields: BTreeMap::new(),
                     buttons: BTreeMap::new(),
                     selects: BTreeMap::new(),
+                    scroll_targets: BTreeMap::new(),
                 });
                 self.queue(
                     "Runtime.callFunctionOn",
@@ -113,8 +114,17 @@ impl Actor {
                 option,
                 job,
             } => self.selection_read(tool, handle, option, job, value),
+            Work::ReadScroll {
+                tool,
+                handle,
+                direction,
+                pixels,
+                job,
+            } => self.scroll_read(tool, handle, direction, pixels, job, value),
             Work::WriteSelection { action, job } => self.selection_written(action, job, value),
             Work::VerifySelection { action, job } => self.selection_verified(action, job, value),
+            Work::WriteScroll { action, job } => self.scroll_written(action, job, value),
+            Work::VerifyScroll { after, job } => self.scroll_verified(after, job, value),
             Work::ArmButton { action, job } => self.button_armed(action, job, value),
             Work::Gesture { job, .. } => self.button_gestured(job),
             Work::ButtonReceipt { job } => {
@@ -268,6 +278,22 @@ impl Actor {
                     }
                 },
             ),
+            Work::WriteScroll { job, .. } => self.value(
+                job,
+                if prevented {
+                    Outcome::Prevented { reason }
+                } else {
+                    Outcome::Uncertain {
+                        reason: "scroll dispatch result was lost".into(),
+                    }
+                },
+            ),
+            Work::VerifyScroll { job, .. } => self.value(
+                job,
+                Outcome::Uncertain {
+                    reason: "scroll position could not be verified".into(),
+                },
+            ),
             Work::VerifySelection { job, .. } => self.value(
                 job,
                 Outcome::Uncertain {
@@ -303,6 +329,7 @@ impl Actor {
             | Work::ReadField { job, .. }
             | Work::ReadButton { job, .. }
             | Work::ReadSelection { job, .. }
+            | Work::ReadScroll { job, .. }
             | Work::ArmButton { job, .. }
             | Work::Navigate { job, .. } => {
                 self.finish(job, Err(reason.into()));

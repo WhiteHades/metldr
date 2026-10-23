@@ -1,4 +1,6 @@
-use metldr_browser_tools::{ACTIVATE_TOOL, Call, SELECT_TOOL, decode_call, definitions};
+use metldr_browser_tools::{
+    ACTIVATE_TOOL, Call, SCROLL_TOOL, SELECT_TOOL, ScrollDirection, decode_call, definitions,
+};
 use serde_json::json;
 
 #[test]
@@ -6,6 +8,18 @@ fn decodes_the_shared_browser_calls_and_bounds_untrusted_arguments() {
     assert_eq!(
         decode_call("observe_page", json!({})).unwrap(),
         Call::Observe
+    );
+    assert_eq!(
+        decode_call(
+            SCROLL_TOOL,
+            json!({"handle":"r1-2-0","direction":"left","pixels":2000})
+        )
+        .unwrap(),
+        Call::Scroll {
+            handle: "r1-2-0".into(),
+            direction: ScrollDirection::Left,
+            pixels: 2000
+        }
     );
     assert_eq!(
         decode_call(ACTIVATE_TOOL, json!({"handle":"button_1-A"})).unwrap(),
@@ -55,6 +69,35 @@ fn decodes_the_shared_browser_calls_and_bounds_untrusted_arguments() {
     assert!(decode_call("navigate_page", json!({"url":"a".repeat(2048)})).is_ok());
     for (name, arguments) in [
         ("unknown", json!({})),
+        (SCROLL_TOOL, json!({"handle":"page","direction":"down"})),
+        (
+            SCROLL_TOOL,
+            json!({"handle":"#region","direction":"down","pixels":100}),
+        ),
+        (
+            SCROLL_TOOL,
+            json!({"handle":"r1","direction":"diagonal","pixels":100}),
+        ),
+        (
+            SCROLL_TOOL,
+            json!({"handle":"r1","direction":"down","pixels":0}),
+        ),
+        (
+            SCROLL_TOOL,
+            json!({"handle":"r1","direction":"down","pixels":2001}),
+        ),
+        (
+            SCROLL_TOOL,
+            json!({"handle":"r1","direction":"down","pixels":1.5}),
+        ),
+        (
+            SCROLL_TOOL,
+            json!({"handle":"r1","direction":"down","pixels":"100"}),
+        ),
+        (
+            SCROLL_TOOL,
+            json!({"handle":"r1","direction":"down","pixels":100,"approve":true}),
+        ),
         ("observe_page", json!([])),
         ("observe_page", json!({"selector":"body"})),
         (ACTIVATE_TOOL, json!({})),
@@ -134,7 +177,8 @@ fn decodes_the_shared_browser_calls_and_bounds_untrusted_arguments() {
             "set_field_value",
             "navigate_page",
             ACTIVATE_TOOL,
-            SELECT_TOOL
+            SELECT_TOOL,
+            SCROLL_TOOL
         ]
     );
     assert_eq!(tools[3].input_schema["required"], json!(["handle"]));

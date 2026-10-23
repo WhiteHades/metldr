@@ -29,6 +29,7 @@ mod initialization;
 mod navigation;
 mod requests;
 mod results;
+mod scroll;
 mod selects;
 
 struct Initialization {
@@ -76,12 +77,27 @@ enum Work {
         option: String,
         job: Job,
     },
+    ReadScroll {
+        tool: String,
+        handle: String,
+        direction: metldr_browser_tools::ScrollDirection,
+        pixels: u16,
+        job: Job,
+    },
     WriteSelection {
         action: Action,
         job: Job,
     },
     VerifySelection {
         action: Action,
+        job: Job,
+    },
+    WriteScroll {
+        action: Action,
+        job: Job,
+    },
+    VerifyScroll {
+        after: crate::browser_action::Point,
         job: Job,
     },
     ArmButton {
@@ -338,6 +354,7 @@ impl Actor {
             match &pending.work {
                 Work::Write { action, .. }
                 | Work::WriteSelection { action, .. }
+                | Work::WriteScroll { action, .. }
                 | Work::Navigate { action, .. }
                 | Work::ArmButton { action, .. }
                 | Work::Gesture { action, .. } => self.validate_action(
@@ -390,6 +407,7 @@ impl Actor {
         let reply = match &pending.work {
             Work::Write { job, .. }
             | Work::WriteSelection { job, .. }
+            | Work::WriteScroll { job, .. }
             | Work::Navigate { job, .. }
             | Work::Gesture { job, .. } => job
                 .admission
@@ -454,8 +472,11 @@ impl Work {
             | Self::ReadField { job, .. }
             | Self::ReadButton { job, .. }
             | Self::ReadSelection { job, .. }
+            | Self::ReadScroll { job, .. }
             | Self::WriteSelection { job, .. }
             | Self::VerifySelection { job, .. }
+            | Self::WriteScroll { job, .. }
+            | Self::VerifyScroll { job, .. }
             | Self::ArmButton { job, .. }
             | Self::Gesture { job, .. }
             | Self::ButtonReceipt { job }

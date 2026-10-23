@@ -1,6 +1,6 @@
 use super::runtime::FrameContext;
 use crate::Result;
-use crate::browser_action::Choice;
+use crate::browser_action::{Choice, Point, ScrollKind};
 use chromiumoxide::cdp::js_protocol::runtime::RemoteObjectId;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -18,6 +18,25 @@ struct Census {
     buttons: Vec<CensusField>,
     selects_truncated: bool,
     selects: Vec<CensusSelect>,
+    scroll_targets_truncated: bool,
+    frame_scroll_targets_observed: bool,
+    scroll_targets: Vec<CensusScrollTarget>,
+}
+
+#[derive(Deserialize)]
+struct CensusScrollTarget {
+    slot: usize,
+    kind: ScrollKind,
+    label: String,
+    x: serde_json::Number,
+    y: serde_json::Number,
+}
+
+pub(super) struct ScrollTarget {
+    pub(super) slot: usize,
+    pub(super) kind: ScrollKind,
+    pub(super) label: String,
+    pub(super) before: Point,
 }
 
 #[derive(Deserialize)]
@@ -86,6 +105,7 @@ pub(super) struct Snapshot {
     pub(super) fields: BTreeMap<String, Field>,
     pub(super) buttons: BTreeMap<String, Field>,
     pub(super) selects: BTreeMap<String, SelectControl>,
+    pub(super) scroll_targets: BTreeMap<String, ScrollTarget>,
 }
 
 impl Snapshot {
@@ -162,6 +182,30 @@ impl Snapshot {
                 },
             );
         }
+        let mut scroll_targets = BTreeMap::new();
+        let mut observed_scroll_targets = Vec::with_capacity(census.scroll_targets.len());
+        for target in &census.scroll_targets {
+            let handle = format!("r{}-{generation:x}-{:x}", &run_identity[..32], target.slot);
+            let before = Point {
+                x: target.x.clone(),
+                y: target.y.clone(),
+            };
+            scroll_targets.insert(
+                handle.clone(),
+                ScrollTarget {
+                    slot: target.slot,
+                    kind: target.kind.clone(),
+                    label: target.label.clone(),
+                    before: before.clone(),
+                },
+            );
+            observed_scroll_targets.push(json!({
+                "handle": handle,
+                "kind": target.kind,
+                "label": target.label,
+                "before": before,
+            }));
+        }
         let result = json!({
             "kind": "page_observation",
             "untrusted": true,
@@ -175,6 +219,9 @@ impl Snapshot {
             "buttons": observed_buttons,
             "selects_truncated": census.selects_truncated,
             "selects": observed_selects,
+            "scroll_targets_truncated": census.scroll_targets_truncated,
+            "frame_scroll_targets_observed": census.frame_scroll_targets_observed,
+            "scroll_targets": observed_scroll_targets,
         });
         Ok((
             Self {
@@ -183,6 +230,7 @@ impl Snapshot {
                 fields,
                 buttons,
                 selects,
+                scroll_targets,
             },
             result,
         ))
@@ -203,6 +251,12 @@ impl Snapshot {
         self.selects
             .get(handle)
             .ok_or_else(|| "invalid or expired browser selection handle".into())
+    }
+
+    pub(super) fn scroll_target(&self, handle: &str) -> Result<&ScrollTarget> {
+        self.scroll_targets
+            .get(handle)
+            .ok_or_else(|| "invalid or expired browser scroll handle".into())
     }
 }
 
@@ -252,12 +306,36 @@ impl Census {
         {
             return Err("invalid or oversized browser selection observation".into());
         }
+        if self.scroll_targets.is_empty()
+            || self.scroll_targets.len() > 16
+            || self.frame_scroll_targets_observed
+            || self
+                .scroll_targets
+                .iter()
+                .enumerate()
+                .any(|(slot, target)| {
+                    target.slot != slot
+                        || !valid_label(&target.label)
+                        || !numeric_position(&target.x)
+                        || !numeric_position(&target.y)
+                        || (slot == 0 && target.kind != ScrollKind::Page)
+                        || (slot > 0 && target.kind != ScrollKind::Region)
+                })
+        {
+            return Err("invalid browser scroll target observation".into());
+        }
         Ok(())
     }
 }
 
 fn valid_label(label: &str) -> bool {
     !label.is_empty() && label.len() <= 128 && !label.chars().any(char::is_control)
+}
+
+fn numeric_position(value: &serde_json::Number) -> bool {
+    value
+        .as_f64()
+        .is_some_and(|position| position.is_finite() && position.abs() <= 1_000_000_000.0)
 }
 
 #[cfg(test)]
@@ -271,6 +349,8 @@ mod checks {
             "text_truncated":false, "fields_truncated":false,
             "buttons_truncated":false,"buttons":[],
             "selects_truncated":false,"selects":[],
+            "scroll_targets_truncated":false,"frame_scroll_targets_observed":false,
+            "scroll_targets":[{"slot":0,"kind":"page","label":"Page","x":0,"y":0}],
             "fields":[{"slot":0,"label":"Report title","check_label":"Report title"}]
         }))
         .unwrap();

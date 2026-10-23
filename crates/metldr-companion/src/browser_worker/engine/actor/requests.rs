@@ -16,6 +16,13 @@ impl Actor {
                 option,
             } => self.prepare_selection(tool, handle, option, job),
             Kind::SelectOption(action) => self.select_option(action, job),
+            Kind::PrepareScroll {
+                tool,
+                handle,
+                direction,
+                pixels,
+            } => self.prepare_scroll(tool, handle, direction, pixels, job),
+            Kind::Scroll(action) => self.scroll(action, job),
             Kind::PrepareButton { tool, handle } => self.prepare_button(tool, handle, job),
             Kind::ActivateButton(action) => self.arm_button(action, job),
             Kind::Observe { generation } => {

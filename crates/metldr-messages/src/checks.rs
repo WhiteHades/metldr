@@ -225,7 +225,7 @@ fn constructs_native_request_and_enforces_conversation_order() {
     assert_eq!(q["max_tokens"], 2048);
     assert_eq!(q["system"], BROWSER_POLICY);
     assert_eq!(q.as_object().unwrap().len(), 6);
-    assert_eq!(q["tools"].as_array().unwrap().len(), 5);
+    assert_eq!(q["tools"].as_array().unwrap().len(), 6);
     assert!(!q.to_string().contains("dummy-key"));
     assert_eq!(
         q["tools"][0]["input_schema"],

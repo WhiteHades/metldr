@@ -4,7 +4,7 @@ use metldr_history_pages::{Counter, DocumentKind, Identity};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-const VERSION: u64 = 13;
+const VERSION: u64 = 14;
 const MAX_PAGE: usize = 32_768;
 const MAX_RUNS: usize = 16;
 const MAX_CONVERSATIONS: usize = 16;
@@ -664,7 +664,7 @@ mod tests {
             epoch: Counter(1),
         };
         let frame = json!({
-            "v": 13,
+            "v": VERSION,
             "request": "r1",
             "kind": "conversation_changed",
             "original": {"store": store, "conversation": format!("{store}:2"), "epoch": "2"},

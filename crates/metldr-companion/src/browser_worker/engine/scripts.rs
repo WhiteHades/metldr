@@ -1,4 +1,5 @@
 mod buttons;
+pub(super) mod scroll;
 pub(super) mod selects;
 pub(super) use buttons::{arm_button, button_receipt, check_button};
 
@@ -88,17 +89,38 @@ pub(super) fn capture() -> String {
 const snapshot = [];
 const buttons = [];
 const selects = [];
+const scrollTargets = [];
 let optionCount = 0;
 Object.defineProperty(snapshot, '__metldr_buttons', { value: buttons });
 Object.defineProperty(snapshot, '__metldr_selects', { value: selects });
-const summary = { url: bounded(location.href, 2048)[0], title: bounded(document.title, 128)[0], text: '', text_truncated: false, fields_truncated: false, fields: [], buttons_truncated: false, buttons: [], selects_truncated: false, selects: [] };
+Object.defineProperty(snapshot, '__metldr_scrollers', { value: scrollTargets });
+const summary = { url: bounded(location.href, 2048)[0], title: bounded(document.title, 128)[0], text: '', text_truncated: false, fields_truncated: false, fields: [], buttons_truncated: false, buttons: [], selects_truncated: false, selects: [], scroll_targets_truncated: false, frame_scroll_targets_observed: false, scroll_targets: [] };
+const scrollingElement = document.scrollingElement;
+if (!scrollingElement || scrollingElement.ownerDocument !== document) throw new Error('document scrolling element unavailable');
+const saveScroller = (element, kind, slot) => {
+  const style = getComputedStyle(element);
+  const accessible = label(element);
+  const targetLabel = bounded(accessible || (kind === 'page' ? 'Page' : `Scrollable region ${slot}`), 128)[0];
+  const saved = { element, parent: element.parentElement, document, url: location.href, kind, label: targetLabel, overflowX: style.overflowX, overflowY: style.overflowY, width: element.scrollWidth, height: element.scrollHeight, clientWidth: element.clientWidth, clientHeight: element.clientHeight, x: element.scrollLeft, y: element.scrollTop };
+  const index = scrollTargets.push(saved) - 1;
+  summary.scroll_targets.push({ slot: index, kind, label: targetLabel, x: saved.x, y: saved.y });
+};
+saveScroller(scrollingElement, 'page', 0);
 let bytes = 0, nodes = 0;
 const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
 while (walker.nextNode()) {
   nodes++;
-  if (nodes > 4096) { summary.text_truncated = true; summary.fields_truncated = true; summary.buttons_truncated = true; summary.selects_truncated = true; break; }
+  if (nodes > 4096) { summary.text_truncated = true; summary.fields_truncated = true; summary.buttons_truncated = true; summary.selects_truncated = true; summary.scroll_targets_truncated = true; break; }
   const node = walker.currentNode;
   if (node.nodeType === Node.ELEMENT_NODE) {
+    if (node !== scrollingElement && node !== document.documentElement && node !== document.body && node.ownerDocument === document && node.isConnected && visible(node)) {
+      const style = getComputedStyle(node);
+      const canScroll = value => ['auto','scroll','overlay'].includes(value);
+      if ((canScroll(style.overflowX) && node.scrollWidth > node.clientWidth) || (canScroll(style.overflowY) && node.scrollHeight > node.clientHeight)) {
+        if (scrollTargets.length < 16) saveScroller(node, 'region', scrollTargets.length);
+        else summary.scroll_targets_truncated = true;
+      }
+    }
     const select = captureSelect(node);
     if (select) {
       if (select.oversized || selects.length === 32 || optionCount + select.options.length > 64) summary.selects_truncated = true;

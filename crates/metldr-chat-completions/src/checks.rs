@@ -43,7 +43,7 @@ fn queued() -> Conversation {
 async fn queued_calls_require_one_matching_result_before_the_next_call() {
     let stop = AtomicBool::new(false);
     let mut conversation = queued();
-    assert_eq!(conversation.request["tools"].as_array().unwrap().len(), 5);
+    assert_eq!(conversation.request["tools"].as_array().unwrap().len(), 6);
     assert_eq!(
         conversation.request["tools"][4]["function"]["name"],
         "select_option"

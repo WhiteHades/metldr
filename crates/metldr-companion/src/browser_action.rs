@@ -5,9 +5,11 @@ use crate::{
 use serde::{Deserialize, Serialize};
 
 mod intent;
+mod scroll;
 mod selection;
 mod target;
 pub(super) use intent::{Intent, valid_destination};
+pub(crate) use scroll::{Direction, Point, Scroll, ScrollKind};
 pub(crate) use selection::{Choice, Selection};
 pub(super) use target::Target;
 
@@ -47,6 +49,9 @@ pub(super) enum Outcome {
     ButtonClickObserved,
     SelectionObserved {
         selected: Choice,
+    },
+    ScrollObserved {
+        after: Point,
     },
     Prevented {
         reason: String,
@@ -173,6 +178,9 @@ impl Action {
                     Outcome::SelectionObserved { .. } => {
                         self.revision == 4
                             && matches!(&self.proposal.intent, Intent::SelectOption { .. })
+                    }
+                    Outcome::ScrollObserved { .. } => {
+                        self.revision == 4 && matches!(&self.proposal.intent, Intent::Scroll { .. })
                     }
                     Outcome::ButtonClickObserved => {
                         self.revision == 4
@@ -437,6 +445,7 @@ fn validate_outcome(outcome: &Outcome, proposal: &Proposal) -> Result<()> {
             Ok(())
         }
         (Outcome::ButtonClickObserved, Intent::ActivateButton { .. }) => Ok(()),
+        (Outcome::ScrollObserved { after }, Intent::Scroll { .. }) if after.valid() => Ok(()),
         (Outcome::SelectionObserved { selected }, Intent::SelectOption { selection })
             if selected == &selection.selected =>
         {
@@ -502,6 +511,26 @@ pub(super) fn reject_selection_actions(
             )
     }) {
         return Err("legacy browser store contains selection action data".into());
+    }
+    Ok(())
+}
+
+pub(super) fn reject_scroll_actions(
+    actions: &std::collections::BTreeMap<String, Action>,
+) -> Result<()> {
+    actions.values().try_for_each(reject_scroll_action)
+}
+
+pub(super) fn reject_scroll_action(action: &Action) -> Result<()> {
+    if matches!(&action.proposal.intent, Intent::Scroll { .. })
+        || matches!(
+            &action.state,
+            Phase::Settled {
+                outcome: Outcome::ScrollObserved { .. }
+            }
+        )
+    {
+        return Err("legacy browser store contains scroll action data".into());
     }
     Ok(())
 }
