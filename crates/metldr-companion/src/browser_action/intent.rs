@@ -1,4 +1,4 @@
-use super::{Binding, Proposal, Scroll, Selection, bounded};
+use super::{Binding, Control, Proposal, Scroll, Selection, bounded};
 use crate::Result;
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +23,9 @@ pub(crate) enum Intent {
     },
     Scroll {
         scroll: Scroll,
+    },
+    SetNativeControl {
+        control: Control,
     },
 }
 
@@ -100,6 +103,7 @@ impl Intent {
             }
             Self::SelectOption { selection } if selection.valid() => Ok(()),
             Self::Scroll { scroll } if scroll.valid() => Ok(()),
+            Self::SetNativeControl { control } if control.valid() => Ok(()),
             _ => Err("invalid browser action intent".into()),
         }
     }

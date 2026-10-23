@@ -243,7 +243,7 @@ async fn encodes_native_request_and_enforces_conversation_order() {
         request["tools"][0]["parameters"],
         json!({"type":"object","properties":{},"additionalProperties":false})
     );
-    assert_eq!(request["tools"].as_array().unwrap().len(), 6);
+    assert_eq!(request["tools"].as_array().unwrap().len(), 7);
     assert_eq!(request["tools"][4]["name"], "select_option");
     assert_eq!(
         request["tools"][4]["parameters"],

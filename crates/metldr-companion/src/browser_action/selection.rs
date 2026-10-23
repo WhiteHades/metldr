@@ -33,7 +33,7 @@ impl Selection {
     }
 }
 
-fn valid_id(value: &str) -> bool {
+pub(super) fn valid_id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 64
         && value
@@ -41,7 +41,7 @@ fn valid_id(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 
-fn valid_label(value: &str) -> bool {
+pub(super) fn valid_label(value: &str) -> bool {
     !value.trim().is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
 }
 

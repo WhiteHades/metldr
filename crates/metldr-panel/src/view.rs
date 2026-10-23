@@ -1,8 +1,8 @@
 use crate::{
     Panel, active_run, composer, err,
     model::{
-        BrowserActionIntent, BrowserActionOutcome, BrowserActionPhase, ScrollDirection,
-        SourceStatus,
+        BrowserActionIntent, BrowserActionOutcome, BrowserActionPhase, Control, ControlReceipt,
+        ScrollDirection, SourceStatus,
     },
     results,
 };
@@ -402,6 +402,7 @@ fn render_browser_actions(panel: &Panel) -> Result<(), JsValue> {
                         | BrowserActionOutcome::ClickObserved
                         | BrowserActionOutcome::SelectionObserved
                         | BrowserActionOutcome::ScrollObserved
+                        | BrowserActionOutcome::ControlObserved
                 )
             ) {
             (&receipt_rows, &mut receipt_position)
@@ -467,6 +468,12 @@ fn create_action_card(
         ("scroll-motion", "Scroll"),
         ("scroll-before", "Before"),
         ("scroll-after", "After"),
+        ("control-target", "Control"),
+        ("control-previous", "Previous state"),
+        ("control-requested", "Requested state"),
+        ("control-group", "Radio group"),
+        ("control-peer", "Previous radio choice"),
+        ("control-observed", "Observed local state"),
         ("status", "Status"),
     ] {
         let detail = doc.create_element("p")?;
@@ -513,6 +520,12 @@ fn update_action_card(
             "Approve scroll"
         }
         BrowserActionIntent::Scroll { .. } => "Page scroll",
+        BrowserActionIntent::SetNativeControl { .. }
+            if action.phase == BrowserActionPhase::Pending =>
+        {
+            "Approve control change"
+        }
+        BrowserActionIntent::SetNativeControl { .. } => "Control change",
     }));
     match &action.intent {
         BrowserActionIntent::Field {
@@ -623,6 +636,81 @@ fn update_action_card(
                 },
             )?;
         }
+        BrowserActionIntent::SetNativeControl { control } => {
+            update_detail(card, "destination", &action.url)?;
+            let (label, previous, requested, group, peer) = match control {
+                Control::Checkbox {
+                    control_label,
+                    before,
+                    checked,
+                    ..
+                } => (
+                    control_label.as_str(),
+                    checkbox_state(before.checked, before.indeterminate),
+                    checkbox_state(*checked, false).into(),
+                    String::new(),
+                    String::new(),
+                ),
+                Control::Radio {
+                    control_label,
+                    index,
+                    group,
+                    ..
+                } => (
+                    control_label.as_str(),
+                    "Not checked",
+                    format!("Select {} (option {})", control_label, index + 1),
+                    if group.member_count == 1 {
+                        "1 option".into()
+                    } else {
+                        format!("{} options", group.member_count)
+                    },
+                    group
+                        .prior_selected
+                        .as_ref()
+                        .map_or_else(|| "None selected".into(), radio_choice),
+                ),
+            };
+            update_detail(card, "control-target", label)?;
+            update_detail(card, "control-previous", &previous)?;
+            update_detail(card, "control-requested", &requested)?;
+            update_detail(card, "control-group", &group)?;
+            update_detail(card, "control-peer", &peer)?;
+            let observed = match &action.observed_control {
+                Some(ControlReceipt::Checkbox {
+                    checked,
+                    indeterminate,
+                }) => checkbox_state(*checked, *indeterminate).into(),
+                Some(ControlReceipt::Radio {
+                    selected,
+                    cleared_peer,
+                    ..
+                }) => format!(
+                    "Selected {} (option {}). Cleared {}.",
+                    selected.label,
+                    selected.index + 1,
+                    cleared_peer
+                        .as_ref()
+                        .map_or("no other choice".into(), radio_choice)
+                ),
+                None => "".into(),
+            };
+            update_detail(card, "control-observed", &observed)?;
+            let mut rows = vec![
+                "destination",
+                "control-target",
+                "control-previous",
+                "control-requested",
+            ];
+            if matches!(control, Control::Radio { .. }) {
+                rows.extend(["control-group", "control-peer"]);
+            }
+            if action.observed_control.is_some() {
+                rows.push("control-observed");
+            }
+            rows.push("status");
+            show_rows(card, &rows)?;
+        }
     }
     let status = match action.outcome {
         Some(BrowserActionOutcome::ClickObserved) => "Button click observed".to_owned(),
@@ -631,6 +719,7 @@ fn update_action_card(
             matches!(&action.intent, BrowserActionIntent::Scroll { scroll } if scroll.before == *after)
         }) => "No movement observed".to_owned(),
         Some(BrowserActionOutcome::ScrollObserved) => "Scroll position observed".to_owned(),
+        Some(BrowserActionOutcome::ControlObserved) => "Control state observed on this page".to_owned(),
         _ => format!(
             "{}{}{}",
             action.phase,
@@ -712,6 +801,12 @@ fn show_rows(card: &Element, visible: &[&str]) -> Result<(), JsValue> {
         "scroll-motion",
         "scroll-before",
         "scroll-after",
+        "control-target",
+        "control-previous",
+        "control-requested",
+        "control-group",
+        "control-peer",
+        "control-observed",
         "status",
     ] {
         let element = card
@@ -761,4 +856,24 @@ fn write_text(element: &Element, value: &str) {
 
 pub(super) fn status(doc: &Document, value: &str) {
     set_text(doc, "status", value);
+}
+
+fn checkbox_state(checked: bool, indeterminate: bool) -> &'static str {
+    if indeterminate {
+        "Mixed"
+    } else if checked {
+        "Checked"
+    } else {
+        "Not checked"
+    }
+}
+
+fn radio_choice(member: &crate::model::RadioMember) -> String {
+    format!(
+        "{} (option {}{}{})",
+        member.label,
+        member.index + 1,
+        if member.hidden { ", hidden" } else { "" },
+        if member.disabled { ", disabled" } else { "" }
+    )
 }

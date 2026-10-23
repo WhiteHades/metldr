@@ -122,7 +122,7 @@ impl Actor {
         }
     }
 
-    pub(super) fn button_armed(&mut self, action: Action, job: Job, value: Value) -> Result<()> {
+    pub(super) fn tap_armed(&mut self, action: Action, job: Job, value: Value) -> Result<()> {
         let point: Option<Point> = serde_json::from_value(results::evaluation_value(&value)?)?;
         let Some(point) = point.filter(|p| {
             p.x.is_finite()
@@ -133,7 +133,11 @@ impl Actor {
             return self.value(
                 job,
                 Outcome::Prevented {
-                    reason: "button changed or is covered before dispatch".into(),
+                    reason: if matches!(&action.proposal.intent, Intent::SetNativeControl { .. }) {
+                        "native control changed or is covered before dispatch".into()
+                    } else {
+                        "button changed or is covered before dispatch".into()
+                    },
                 },
             );
         };

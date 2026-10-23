@@ -53,6 +53,10 @@ pub(super) fn browser_actions(actions: &BTreeMap<String, crate::browser_action::
                         value["kind"] = json!("scroll");
                         value["scroll"] = json!(scroll);
                     }
+                    crate::browser_action::Intent::SetNativeControl { control } => {
+                        value["kind"] = json!("set_native_control");
+                        value["control"] = json!(control);
+                    }
                 }
                 if let crate::browser_action::Phase::Settled { outcome } = &action.state {
                     use crate::browser_action::Outcome;
@@ -61,6 +65,7 @@ pub(super) fn browser_actions(actions: &BTreeMap<String, crate::browser_action::
                         Outcome::ButtonClickObserved => "click_observed",
                         Outcome::SelectionObserved { .. } => "selection_observed",
                         Outcome::ScrollObserved { .. } => "scroll_observed",
+                        Outcome::ControlObserved { .. } => "control_observed",
                         Outcome::Prevented { .. } => "prevented",
                         Outcome::Uncertain { .. } => "uncertain",
                     });
@@ -72,6 +77,9 @@ pub(super) fn browser_actions(actions: &BTreeMap<String, crate::browser_action::
                     }
                     if let Outcome::ScrollObserved { after } = outcome {
                         value["observed_scroll"] = json!(after);
+                    }
+                    if let Outcome::ControlObserved { receipt } = outcome {
+                        value["observed_control"] = json!(receipt);
                     }
                 }
                 value

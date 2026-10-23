@@ -4,10 +4,14 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
+mod control;
+#[cfg(test)]
+pub(crate) use control::RadioMember;
 mod intent;
 mod scroll;
 mod selection;
 mod target;
+pub(crate) use control::{CheckboxState, Control, ControlReceipt, RadioGroup};
 pub(super) use intent::{Intent, valid_destination};
 pub(crate) use scroll::{Direction, Point, Scroll, ScrollKind};
 pub(crate) use selection::{Choice, Selection};
@@ -52,6 +56,9 @@ pub(super) enum Outcome {
     },
     ScrollObserved {
         after: Point,
+    },
+    ControlObserved {
+        receipt: ControlReceipt,
     },
     Prevented {
         reason: String,
@@ -181,6 +188,10 @@ impl Action {
                     }
                     Outcome::ScrollObserved { .. } => {
                         self.revision == 4 && matches!(&self.proposal.intent, Intent::Scroll { .. })
+                    }
+                    Outcome::ControlObserved { .. } => {
+                        self.revision == 4
+                            && matches!(&self.proposal.intent, Intent::SetNativeControl { .. })
                     }
                     Outcome::ButtonClickObserved => {
                         self.revision == 4
@@ -446,6 +457,11 @@ fn validate_outcome(outcome: &Outcome, proposal: &Proposal) -> Result<()> {
         }
         (Outcome::ButtonClickObserved, Intent::ActivateButton { .. }) => Ok(()),
         (Outcome::ScrollObserved { after }, Intent::Scroll { .. }) if after.valid() => Ok(()),
+        (Outcome::ControlObserved { receipt }, Intent::SetNativeControl { control })
+            if control.matches(receipt) =>
+        {
+            Ok(())
+        }
         (Outcome::SelectionObserved { selected }, Intent::SelectOption { selection })
             if selected == &selection.selected =>
         {
@@ -531,6 +547,26 @@ pub(super) fn reject_scroll_action(action: &Action) -> Result<()> {
         )
     {
         return Err("legacy browser store contains scroll action data".into());
+    }
+    Ok(())
+}
+
+pub(super) fn reject_control_actions(
+    actions: &std::collections::BTreeMap<String, Action>,
+) -> Result<()> {
+    actions.values().try_for_each(reject_control_action)
+}
+
+pub(super) fn reject_control_action(action: &Action) -> Result<()> {
+    if matches!(&action.proposal.intent, Intent::SetNativeControl { .. })
+        || matches!(
+            &action.state,
+            Phase::Settled {
+                outcome: Outcome::ControlObserved { .. }
+            }
+        )
+    {
+        return Err("legacy browser store contains native control action data".into());
     }
     Ok(())
 }

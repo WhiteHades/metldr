@@ -1,5 +1,6 @@
 use metldr_browser_tools::{
-    ACTIVATE_TOOL, Call, SCROLL_TOOL, SELECT_TOOL, ScrollDirection, decode_call, definitions,
+    ACTIVATE_TOOL, CONTROL_TOOL, Call, SCROLL_TOOL, SELECT_TOOL, ScrollDirection, decode_call,
+    definitions,
 };
 use serde_json::json;
 
@@ -38,6 +39,31 @@ fn decodes_the_shared_browser_calls_and_bounds_untrusted_arguments() {
             option: "option_2-B".into()
         }
     );
+    assert_eq!(
+        decode_call(
+            CONTROL_TOOL,
+            json!({"handle":"checkbox_1-A","checked":true})
+        )
+        .unwrap(),
+        Call::SetNativeControl {
+            handle: "checkbox_1-A".into(),
+            checked: true
+        }
+    );
+    assert_eq!(
+        decode_call(CONTROL_TOOL, json!({"handle":"radio_2","checked":false})).unwrap(),
+        Call::SetNativeControl {
+            handle: "radio_2".into(),
+            checked: false
+        }
+    );
+    assert!(
+        decode_call(
+            CONTROL_TOOL,
+            json!({"handle":"a".repeat(64),"checked":true})
+        )
+        .is_ok()
+    );
     assert!(
         decode_call(
             SELECT_TOOL,
@@ -68,6 +94,26 @@ fn decodes_the_shared_browser_calls_and_bounds_untrusted_arguments() {
     );
     assert!(decode_call("navigate_page", json!({"url":"a".repeat(2048)})).is_ok());
     for (name, arguments) in [
+        (CONTROL_TOOL, json!({})),
+        (CONTROL_TOOL, json!({"handle":"checkbox_1"})),
+        (CONTROL_TOOL, json!({"checked":true})),
+        (
+            CONTROL_TOOL,
+            json!({"handle":"checkbox_1","checked":"true"}),
+        ),
+        (CONTROL_TOOL, json!({"handle":"checkbox_1","checked":1})),
+        (CONTROL_TOOL, json!({"handle":"checkbox_1","checked":null})),
+        (
+            CONTROL_TOOL,
+            json!({"handle":"checkbox_1","checked":true,"approve":true}),
+        ),
+        (CONTROL_TOOL, json!({"handle":"","checked":true})),
+        (CONTROL_TOOL, json!({"handle":"#checkbox","checked":true})),
+        (CONTROL_TOOL, json!({"handle":"é","checked":true})),
+        (
+            CONTROL_TOOL,
+            json!({"handle":"a".repeat(65),"checked":true}),
+        ),
         ("unknown", json!({})),
         (SCROLL_TOOL, json!({"handle":"page","direction":"down"})),
         (
@@ -178,7 +224,8 @@ fn decodes_the_shared_browser_calls_and_bounds_untrusted_arguments() {
             "navigate_page",
             ACTIVATE_TOOL,
             SELECT_TOOL,
-            SCROLL_TOOL
+            SCROLL_TOOL,
+            CONTROL_TOOL
         ]
     );
     assert_eq!(tools[3].input_schema["required"], json!(["handle"]));
@@ -198,6 +245,18 @@ fn decodes_the_shared_browser_calls_and_bounds_untrusted_arguments() {
                 "option":{"type":"string","minLength":1,"maxLength":64,"pattern":"^[A-Za-z0-9_-]+$"}
             },
             "required":["handle","option"],
+            "additionalProperties":false
+        })
+    );
+    assert_eq!(
+        tools[6].input_schema,
+        json!({
+            "type":"object",
+            "properties":{
+                "handle":{"type":"string","minLength":1,"maxLength":64,"pattern":"^[A-Za-z0-9_-]+$"},
+                "checked":{"type":"boolean"}
+            },
+            "required":["handle","checked"],
             "additionalProperties":false
         })
     );

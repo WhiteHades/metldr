@@ -46,7 +46,7 @@ struct Attachment {
     sessions: BTreeMap<String, Option<String>>,
     grant_revision: u64,
     pending_navigation: Option<navigation::PendingNavigation>,
-    buttons: BTreeSet<String>,
+    clicks: BTreeSet<String>,
     confirming_navigation: bool,
     command_count: usize,
 }
@@ -84,6 +84,13 @@ enum Operation {
         params: Value,
     },
     ActivateButton {
+        action: String,
+        revision: u64,
+        binding: navigation::Binding,
+        url: String,
+        params: Value,
+    },
+    ActivateControl {
         action: String,
         revision: u64,
         binding: navigation::Binding,
@@ -225,6 +232,27 @@ async fn handle(envelope: Envelope, connection: u64) -> Result<Value, String> {
                 binding,
                 url,
                 params,
+                "button",
+            )
+            .await
+        }
+        Operation::ActivateControl {
+            action,
+            revision,
+            binding,
+            url,
+            params,
+        } => {
+            button::activate(
+                connection,
+                envelope.call,
+                &envelope.run,
+                action,
+                revision,
+                binding,
+                url,
+                params,
+                "control",
             )
             .await
         }
@@ -291,7 +319,7 @@ async fn attach(
             sessions: BTreeMap::new(),
             grant_revision: 1,
             pending_navigation: None,
-            buttons: BTreeSet::new(),
+            clicks: BTreeSet::new(),
             confirming_navigation: false,
             command_count: 0,
         });
@@ -1130,6 +1158,36 @@ mod checks {
         assert!(!current_connection(8, 7));
         assert!(current_lease(8, 8, Some(12), 12));
         assert!(!current_lease(8, 8, Some(13), 12));
+    }
+
+    #[test]
+    fn activate_control_wire_shape_rejects_unrecognized_fields() {
+        let operation = json!({
+            "op":"activate_control",
+            "action":"action_1",
+            "revision":1,
+            "binding":{
+                "tab":1,
+                "document":"document_1",
+                "target":"target_1",
+                "frame":"frame_1",
+                "session":"metldr-owned-root",
+                "unique_context":"context_1",
+                "grant_revision":1
+            },
+            "url":"https://example.com/",
+            "params":{
+                "x":1.0,
+                "y":2.0,
+                "duration":50,
+                "tapCount":1,
+                "gestureSourceType":"mouse"
+            }
+        });
+        assert!(serde_json::from_value::<Operation>(operation.clone()).is_ok());
+        let mut extended = operation;
+        extended["selector"] = json!("button");
+        assert!(serde_json::from_value::<Operation>(extended).is_err());
     }
 }
 

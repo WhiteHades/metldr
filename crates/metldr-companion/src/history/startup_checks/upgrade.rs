@@ -95,7 +95,7 @@ fn index_rows(read: &redb::ReadTransaction) -> Result<Value> {
 }
 
 #[test]
-#[ignore = "requires METLDR_STARTUP_BINARY and METLDR_HISTORY_OLD_BINARY with history format 10 through 13"]
+#[ignore = "requires METLDR_STARTUP_BINARY and METLDR_HISTORY_OLD_BINARY with history format 10 through 14"]
 fn actual_old_private_host_upgrades_and_cannot_reopen_new_history() -> Result<()> {
     let directory = Directory::new()?;
     let mut legacy = crate::history::fixture::legacy();
@@ -121,7 +121,7 @@ fn actual_old_private_host_upgrades_and_cannot_reopen_new_history() -> Result<()
     let old_format = before["profile"]["format"]
         .as_u64()
         .ok_or("old format absent")?;
-    assert!(matches!(old_format, 10..=13));
+    assert!(matches!(old_format, 10..=14));
     assert_eq!(ready["v"], if old_format == 11 { 12 } else { old_format });
     assert_eq!(before["tables"]["runs"].as_array().unwrap().len(), 11);
     assert_eq!(before["tables"]["starts"].as_array().unwrap().len(), 11);

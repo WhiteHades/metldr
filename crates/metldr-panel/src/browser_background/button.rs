@@ -22,9 +22,10 @@ pub(super) async fn activate(
     binding: navigation::Binding,
     url: String,
     params: Value,
+    name: &str,
 ) -> Result<Value, String> {
     let tap: TapParams = serde_json::from_value(params.clone())
-        .map_err(|_| "Invalid button gesture parameters.".to_owned())?;
+        .map_err(|_| format!("Invalid {name} gesture parameters."))?;
     if !bounded_id(&action, 128)
         || revision == 0
         || !navigation::valid_binding(&binding)
@@ -39,7 +40,7 @@ pub(super) async fn activate(
         || tap.gesture_source_type != "mouse"
         || !bounded_json(&params, MAX_FRAME)
     {
-        return Err("Invalid browser button request.".into());
+        return Err(format!("Invalid browser {name} request."));
     }
     let session = navigation::root_session(&binding.session);
     let epoch = reserve_call(connection, call_id, run, binding.tab, session)?;
@@ -54,7 +55,7 @@ pub(super) async fn activate(
             || active.command_count != 0
             || active.pending_navigation.is_some()
             || active.confirming_navigation
-            || !active.buttons.insert(action.clone())
+            || !active.clicks.insert(action.clone())
         {
             return false;
         }
@@ -62,7 +63,9 @@ pub(super) async fn activate(
         true
     });
     if !reserved {
-        return Err("Button action does not match the active browser grant.".into());
+        return Err(format!(
+            "{name} action does not match the active browser grant."
+        ));
     }
 
     let result = async {

@@ -127,12 +127,14 @@ impl Disk {
                     Some(crate::STORE_VERSION) => {
                         let state: Store = serde_json::from_slice(&bytes)?;
                         crate::browser_action::reject_scroll_actions(&state.browser_actions)?;
+                        crate::browser_action::reject_control_actions(&state.browser_actions)?;
                         state.validate()?;
                         state
                     }
                     Some(7) => {
                         let mut state: Store = serde_json::from_slice(&bytes)?;
                         crate::browser_action::reject_scroll_actions(&state.browser_actions)?;
+                        crate::browser_action::reject_control_actions(&state.browser_actions)?;
                         reject_text_launches(&state.launches)?;
                         state.schema = crate::STORE_VERSION;
                         state.validate()?;
@@ -143,6 +145,7 @@ impl Disk {
                     Some(6) => {
                         let mut state: Store = serde_json::from_slice(&bytes)?;
                         crate::browser_action::reject_scroll_actions(&state.browser_actions)?;
+                        crate::browser_action::reject_control_actions(&state.browser_actions)?;
                         reject_text_launches(&state.launches)?;
                         crate::browser_action::reject_selection_actions(&state.browser_actions)?;
                         state.schema = crate::STORE_VERSION;
@@ -154,6 +157,7 @@ impl Disk {
                     Some(5) => {
                         let mut state: Store = serde_json::from_slice(&bytes)?;
                         crate::browser_action::reject_scroll_actions(&state.browser_actions)?;
+                        crate::browser_action::reject_control_actions(&state.browser_actions)?;
                         reject_text_launches(&state.launches)?;
                         crate::browser_action::reject_button_actions(&state.browser_actions)?;
                         crate::browser_action::reject_selection_actions(&state.browser_actions)?;
@@ -166,6 +170,7 @@ impl Disk {
                     Some(4) => {
                         let mut state: Store = serde_json::from_slice(&bytes)?;
                         crate::browser_action::reject_scroll_actions(&state.browser_actions)?;
+                        crate::browser_action::reject_control_actions(&state.browser_actions)?;
                         reject_text_launches(&state.launches)?;
                         crate::browser_action::reject_button_actions(&state.browser_actions)?;
                         crate::browser_action::reject_selection_actions(&state.browser_actions)?;
@@ -181,6 +186,7 @@ impl Disk {
                     Some(3) => {
                         let legacy: LegacyV3 = serde_json::from_slice(&bytes)?;
                         crate::browser_action::reject_scroll_actions(&legacy.browser_actions)?;
+                        crate::browser_action::reject_control_actions(&legacy.browser_actions)?;
                         if legacy.schema != 3 {
                             return Err("invalid schema 3 store".into());
                         }
@@ -209,6 +215,7 @@ impl Disk {
                     Some(2) => {
                         let legacy: LegacyV2 = serde_json::from_slice(&bytes)?;
                         crate::browser_action::reject_scroll_actions(&legacy.browser_actions)?;
+                        crate::browser_action::reject_control_actions(&legacy.browser_actions)?;
                         if legacy.schema != 2 {
                             return Err("invalid schema 2 store".into());
                         }

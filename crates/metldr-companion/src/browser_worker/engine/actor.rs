@@ -25,6 +25,7 @@ use tokio::{
 };
 
 mod buttons;
+mod controls;
 mod initialization;
 mod navigation;
 mod requests;
@@ -46,6 +47,20 @@ struct Pending {
     prevented: Option<String>,
 }
 enum Work {
+    ReadControl {
+        tool: String,
+        handle: String,
+        checked: bool,
+        job: Job,
+    },
+    ArmControl {
+        action: Action,
+        job: Job,
+    },
+    ControlReceipt {
+        action: Action,
+        job: Job,
+    },
     Init(Initialization),
     CreateWorld,
     ReleaseObserve {
@@ -357,6 +372,7 @@ impl Actor {
                 | Work::WriteScroll { action, .. }
                 | Work::Navigate { action, .. }
                 | Work::ArmButton { action, .. }
+                | Work::ArmControl { action, .. }
                 | Work::Gesture { action, .. } => self.validate_action(
                     action,
                     pending.context.as_ref().ok_or("missing action context")?,
@@ -377,6 +393,17 @@ impl Actor {
         self.transport.dispatch(&command)?;
         let navigating = matches!(pending.work, Work::Navigate { .. });
         let operation = match &pending.work {
+            Work::Gesture { action, .. }
+                if matches!(&action.proposal.intent, Intent::SetNativeControl { .. }) =>
+            {
+                Operation::ActivateControl {
+                    action: action.id.clone(),
+                    revision: action.revision,
+                    binding: action.proposal.binding.clone(),
+                    url: action.proposal.url.clone(),
+                    params: command.params,
+                }
+            }
             Work::Gesture { action, .. } => Operation::ActivateButton {
                 action: action.id.clone(),
                 revision: action.revision,
@@ -478,6 +505,9 @@ impl Work {
             | Self::WriteScroll { job, .. }
             | Self::VerifyScroll { job, .. }
             | Self::ArmButton { job, .. }
+            | Self::ReadControl { job, .. }
+            | Self::ArmControl { job, .. }
+            | Self::ControlReceipt { job, .. }
             | Self::Gesture { job, .. }
             | Self::ButtonReceipt { job }
             | Self::Write { job, .. }

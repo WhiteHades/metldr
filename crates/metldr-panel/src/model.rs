@@ -3,10 +3,13 @@ use std::{fmt, num::NonZeroU64};
 use metldr_conversation::{Display, ProjectedEntry};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+#[path = "model/control.rs"]
+mod control;
 #[path = "model/run.rs"]
 mod run;
 #[path = "model/source.rs"]
 mod source;
+pub(crate) use control::{Control, ControlReceipt, RadioMember};
 
 const MAX_FRAME: usize = 65_536;
 const MAX_RUNS: usize = 16;
@@ -379,6 +382,7 @@ pub(crate) struct BrowserActionView {
     pub(crate) reason: Option<String>,
     pub(crate) observed_selection: Option<Choice>,
     pub(crate) observed_scroll: Option<Point>,
+    pub(crate) observed_control: Option<ControlReceipt>,
     pub(crate) target_current: bool,
 }
 
@@ -402,6 +406,9 @@ pub(crate) enum BrowserActionIntent {
     },
     Scroll {
         scroll: Scroll,
+    },
+    SetNativeControl {
+        control: Control,
     },
 }
 
@@ -526,6 +533,8 @@ struct WireBrowserAction {
     selection: Option<Selection>,
     #[serde(default, deserialize_with = "present")]
     scroll: Option<Scroll>,
+    #[serde(default, deserialize_with = "present")]
+    control: Option<Control>,
     phase: BrowserActionPhase,
     #[serde(default, deserialize_with = "Option::deserialize")]
     outcome: Option<BrowserActionOutcome>,
@@ -535,6 +544,8 @@ struct WireBrowserAction {
     observed_selection: Option<Choice>,
     #[serde(default, deserialize_with = "present")]
     observed_scroll: Option<Point>,
+    #[serde(default, deserialize_with = "present")]
+    observed_control: Option<ControlReceipt>,
 }
 
 impl<'de> Deserialize<'de> for BrowserActionView {
@@ -550,13 +561,15 @@ impl<'de> Deserialize<'de> for BrowserActionView {
         let button_members = wire.button_id.is_some() || wire.button_label.is_some();
         let selection_member = wire.selection.is_some();
         let scroll_member = wire.scroll.is_some();
+        let control_member = wire.control.is_some();
         let intent = match wire.kind.as_str() {
             "field"
                 if field_members
                     && !button_members
                     && wire.destination.is_none()
                     && !selection_member
-                    && !scroll_member =>
+                    && !scroll_member
+                    && !control_member =>
             {
                 BrowserActionIntent::Field {
                     field_id: wire
@@ -572,7 +585,11 @@ impl<'de> Deserialize<'de> for BrowserActionView {
                 }
             }
             "navigate"
-                if !field_members && !button_members && !selection_member && !scroll_member =>
+                if !field_members
+                    && !button_members
+                    && !selection_member
+                    && !scroll_member
+                    && !control_member =>
             {
                 BrowserActionIntent::Navigate {
                     destination: wire
@@ -585,7 +602,8 @@ impl<'de> Deserialize<'de> for BrowserActionView {
                     && wire.destination.is_none()
                     && button_members
                     && !selection_member
-                    && !scroll_member =>
+                    && !scroll_member
+                    && !control_member =>
             {
                 BrowserActionIntent::ActivateButton {
                     button_id: wire
@@ -601,6 +619,7 @@ impl<'de> Deserialize<'de> for BrowserActionView {
                     && !button_members
                     && wire.destination.is_none()
                     && !scroll_member
+                    && !control_member
                     && selection_member =>
             {
                 BrowserActionIntent::SelectOption {
@@ -614,12 +633,27 @@ impl<'de> Deserialize<'de> for BrowserActionView {
                     && !button_members
                     && wire.destination.is_none()
                     && !selection_member
-                    && scroll_member =>
+                    && scroll_member
+                    && !control_member =>
             {
                 BrowserActionIntent::Scroll {
                     scroll: wire
                         .scroll
                         .ok_or_else(|| serde::de::Error::custom("scroll is null"))?,
+                }
+            }
+            "set_native_control"
+                if !field_members
+                    && !button_members
+                    && wire.destination.is_none()
+                    && !selection_member
+                    && !scroll_member
+                    && control_member =>
+            {
+                BrowserActionIntent::SetNativeControl {
+                    control: wire
+                        .control
+                        .ok_or_else(|| serde::de::Error::custom("control is null"))?,
                 }
             }
             _ => return Err(serde::de::Error::custom("invalid browser action intent")),
@@ -638,6 +672,7 @@ impl<'de> Deserialize<'de> for BrowserActionView {
             reason: wire.reason,
             observed_selection,
             observed_scroll: wire.observed_scroll,
+            observed_control: wire.observed_control,
             target_current: false,
         })
     }
@@ -678,6 +713,7 @@ pub(crate) enum BrowserActionOutcome {
     ClickObserved,
     SelectionObserved,
     ScrollObserved,
+    ControlObserved,
     Prevented,
     Uncertain,
 }
@@ -689,6 +725,7 @@ impl std::fmt::Display for BrowserActionOutcome {
             Self::ClickObserved => "click_observed",
             Self::SelectionObserved => "selection_observed",
             Self::ScrollObserved => "scroll_observed",
+            Self::ControlObserved => "control_observed",
             Self::Prevented => "prevented",
             Self::Uncertain => "uncertain",
         })
@@ -1633,6 +1670,7 @@ impl PageView {
                         && action.reason.is_none()
                         && action.observed_selection.is_none()
                         && action.observed_scroll.is_none()
+                        && action.observed_control.is_none()
                 }
                 BrowserActionPhase::Approved => {
                     action.revision == 2
@@ -1640,6 +1678,7 @@ impl PageView {
                         && action.reason.is_none()
                         && action.observed_selection.is_none()
                         && action.observed_scroll.is_none()
+                        && action.observed_control.is_none()
                 }
                 BrowserActionPhase::Dispatching => {
                     action.revision == 3
@@ -1647,6 +1686,7 @@ impl PageView {
                         && action.reason.is_none()
                         && action.observed_selection.is_none()
                         && action.observed_scroll.is_none()
+                        && action.observed_control.is_none()
                 }
                 BrowserActionPhase::Settled => {
                     match (
@@ -1654,11 +1694,13 @@ impl PageView {
                         &action.intent,
                         &action.observed_selection,
                         &action.observed_scroll,
+                        &action.observed_control,
                     ) {
                         (
                             Some(BrowserActionOutcome::Verified),
                             BrowserActionIntent::Field { .. }
                             | BrowserActionIntent::Navigate { .. },
+                            None,
                             None,
                             None,
                         )
@@ -1667,8 +1709,9 @@ impl PageView {
                             BrowserActionIntent::ActivateButton { .. },
                             None,
                             None,
+                            None,
                         )
-                        | (Some(BrowserActionOutcome::Uncertain), _, None, None) => {
+                        | (Some(BrowserActionOutcome::Uncertain), _, None, None, None) => {
                             action.revision == 4
                         }
                         (
@@ -1676,14 +1719,23 @@ impl PageView {
                             BrowserActionIntent::SelectOption { selection },
                             Some(observed),
                             None,
+                            None,
                         ) => action.revision == 4 && observed == &selection.selected,
                         (
                             Some(BrowserActionOutcome::ScrollObserved),
                             BrowserActionIntent::Scroll { scroll },
                             None,
                             Some(after),
+                            None,
                         ) => action.revision == 4 && scroll.valid() && after.valid(),
-                        (Some(BrowserActionOutcome::Prevented), _, None, None) => {
+                        (
+                            Some(BrowserActionOutcome::ControlObserved),
+                            BrowserActionIntent::SetNativeControl { control },
+                            None,
+                            None,
+                            Some(receipt),
+                        ) => action.revision == 4 && control.valid() && receipt.matches(control),
+                        (Some(BrowserActionOutcome::Prevented), _, None, None, None) => {
                             (2..=4).contains(&action.revision)
                         }
                         _ => false,
@@ -1706,7 +1758,8 @@ impl PageView {
                         BrowserActionOutcome::Verified
                         | BrowserActionOutcome::ClickObserved
                         | BrowserActionOutcome::SelectionObserved
-                        | BrowserActionOutcome::ScrollObserved,
+                        | BrowserActionOutcome::ScrollObserved
+                        | BrowserActionOutcome::ControlObserved,
                     ),
                     None,
                 ) => true,
@@ -1994,6 +2047,7 @@ fn valid_browser_intent(intent: &BrowserActionIntent) -> bool {
         }
         BrowserActionIntent::SelectOption { selection } => selection.valid(),
         BrowserActionIntent::Scroll { scroll } => scroll.valid(),
+        BrowserActionIntent::SetNativeControl { control } => control.valid(),
     }
 }
 
@@ -2771,6 +2825,35 @@ mod tests {
         assert!(PageView::decode(&serde_json::to_vec(&view).unwrap()).is_ok());
         view["browser_actions"][0]["observed_scroll"]["x"] = serde_json::json!(1_000_000_001_i64);
         assert!(PageView::decode(&serde_json::to_vec(&view).unwrap()).is_err());
+    }
+
+    #[test]
+    fn decodes_control_approval_and_requires_its_exact_receipt() {
+        use serde_json::json;
+        let mut view: serde_json::Value = serde_json::from_str(VALID).unwrap();
+        view["browser_actions"] = json!([{
+            "id":format!("{STORE}:4"),"revision":1,"run":format!("{STORE}:2"),
+            "tab":4,"document":"doc-1","url":"http://127.0.0.1:43123/article",
+            "kind":"set_native_control","phase":"pending",
+            "control":{"kind":"checkbox","control_id":"control_1","control_label":"Updates",
+                "before":{"checked":false,"indeterminate":true},"checked":true}
+        }]);
+        let decode =
+            |view: &serde_json::Value| PageView::decode(&serde_json::to_vec(view).unwrap());
+        assert!(decode(&view).is_ok());
+        let pending = view.clone();
+        view["browser_actions"][0]["observed_control"] =
+            json!({"kind":"checkbox","checked":true,"indeterminate":false});
+        assert!(decode(&view).is_err());
+        view["browser_actions"][0]["phase"] = json!("settled");
+        view["browser_actions"][0]["revision"] = json!(4);
+        view["browser_actions"][0]["outcome"] = json!("control_observed");
+        assert!(decode(&view).is_ok());
+        view["browser_actions"][0]["observed_control"]["indeterminate"] = json!(true);
+        assert!(decode(&view).is_err());
+        view = pending;
+        view["browser_actions"][0]["selection"] = json!(null);
+        assert!(decode(&view).is_err());
     }
 
     #[test]

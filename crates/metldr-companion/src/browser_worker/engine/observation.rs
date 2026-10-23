@@ -1,7 +1,9 @@
 use super::runtime::FrameContext;
+mod controls;
 use crate::Result;
 use crate::browser_action::{Choice, Point, ScrollKind};
 use chromiumoxide::cdp::js_protocol::runtime::RemoteObjectId;
+pub(super) use controls::{NativeControl, NativeState};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -19,6 +21,8 @@ struct Census {
     selects_truncated: bool,
     selects: Vec<CensusSelect>,
     scroll_targets_truncated: bool,
+    controls_truncated: bool,
+    controls: Vec<NativeControl>,
     frame_scroll_targets_observed: bool,
     scroll_targets: Vec<CensusScrollTarget>,
 }
@@ -106,6 +110,7 @@ pub(super) struct Snapshot {
     pub(super) buttons: BTreeMap<String, Field>,
     pub(super) selects: BTreeMap<String, SelectControl>,
     pub(super) scroll_targets: BTreeMap<String, ScrollTarget>,
+    pub(super) controls: BTreeMap<String, NativeControl>,
 }
 
 impl Snapshot {
@@ -206,6 +211,13 @@ impl Snapshot {
                 "before": before,
             }));
         }
+        let mut controls = BTreeMap::new();
+        let mut observed_controls = Vec::with_capacity(census.controls.len());
+        for control in &census.controls {
+            let handle = format!("c{}-{generation:x}-{:x}", &run_identity[..32], control.slot);
+            observed_controls.push(control.public(&handle));
+            controls.insert(handle, control.clone());
+        }
         let result = json!({
             "kind": "page_observation",
             "untrusted": true,
@@ -222,6 +234,8 @@ impl Snapshot {
             "scroll_targets_truncated": census.scroll_targets_truncated,
             "frame_scroll_targets_observed": census.frame_scroll_targets_observed,
             "scroll_targets": observed_scroll_targets,
+            "controls_truncated": census.controls_truncated,
+            "controls": observed_controls,
         });
         Ok((
             Self {
@@ -231,6 +245,7 @@ impl Snapshot {
                 buttons,
                 selects,
                 scroll_targets,
+                controls,
             },
             result,
         ))
@@ -258,6 +273,12 @@ impl Snapshot {
             .get(handle)
             .ok_or_else(|| "invalid or expired browser scroll handle".into())
     }
+
+    pub(super) fn control(&self, handle: &str) -> Result<&NativeControl> {
+        self.controls
+            .get(handle)
+            .ok_or_else(|| "invalid or expired browser control handle".into())
+    }
 }
 
 fn public_choice(choice: &Choice) -> Value {
@@ -284,6 +305,15 @@ impl Census {
             })
         {
             return Err("invalid or oversized browser observation".into());
+        }
+        let mut control_slots = BTreeSet::new();
+        if self.controls.len() > 32
+            || self
+                .controls
+                .iter()
+                .any(|control| !control.valid() || !control_slots.insert(control.slot))
+        {
+            return Err("invalid or oversized browser control observation".into());
         }
         let mut slots = BTreeSet::new();
         if self.selects.len() > 32
@@ -350,6 +380,7 @@ mod checks {
             "buttons_truncated":false,"buttons":[],
             "selects_truncated":false,"selects":[],
             "scroll_targets_truncated":false,"frame_scroll_targets_observed":false,
+            "controls_truncated":false,"controls":[],
             "scroll_targets":[{"slot":0,"kind":"page","label":"Page","x":0,"y":0}],
             "fields":[{"slot":0,"label":"Report title","check_label":"Report title"}]
         }))

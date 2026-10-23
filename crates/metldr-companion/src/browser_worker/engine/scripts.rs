@@ -1,4 +1,5 @@
 mod buttons;
+pub(super) mod controls;
 pub(super) mod scroll;
 pub(super) mod selects;
 pub(super) use buttons::{arm_button, button_receipt, check_button};
@@ -83,18 +84,21 @@ fn function(body: &str) -> String {
 
 pub(super) fn capture() -> String {
     function(&format!(
-        "{}\n{}",
+        "{}\n{}\n{}",
         selects::HELPERS,
+        controls::HELPERS,
         r#"
 const snapshot = [];
 const buttons = [];
 const selects = [];
+const controls = [];
 const scrollTargets = [];
 let optionCount = 0;
 Object.defineProperty(snapshot, '__metldr_buttons', { value: buttons });
 Object.defineProperty(snapshot, '__metldr_selects', { value: selects });
+Object.defineProperty(snapshot, '__metldr_controls', { value: controls });
 Object.defineProperty(snapshot, '__metldr_scrollers', { value: scrollTargets });
-const summary = { url: bounded(location.href, 2048)[0], title: bounded(document.title, 128)[0], text: '', text_truncated: false, fields_truncated: false, fields: [], buttons_truncated: false, buttons: [], selects_truncated: false, selects: [], scroll_targets_truncated: false, frame_scroll_targets_observed: false, scroll_targets: [] };
+const summary = { url: bounded(location.href, 2048)[0], title: bounded(document.title, 128)[0], text: '', text_truncated: false, fields_truncated: false, fields: [], buttons_truncated: false, buttons: [], selects_truncated: false, selects: [], controls_truncated:false, controls:[], scroll_targets_truncated: false, frame_scroll_targets_observed: false, scroll_targets: [] };
 const scrollingElement = document.scrollingElement;
 if (!scrollingElement || scrollingElement.ownerDocument !== document) throw new Error('document scrolling element unavailable');
 const saveScroller = (element, kind, slot) => {
@@ -110,7 +114,7 @@ let bytes = 0, nodes = 0;
 const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
 while (walker.nextNode()) {
   nodes++;
-  if (nodes > 4096) { summary.text_truncated = true; summary.fields_truncated = true; summary.buttons_truncated = true; summary.selects_truncated = true; summary.scroll_targets_truncated = true; break; }
+  if (nodes > 4096) { summary.text_truncated = true; summary.fields_truncated = true; summary.buttons_truncated = true; summary.selects_truncated = true; summary.controls_truncated = true; summary.scroll_targets_truncated = true; break; }
   const node = walker.currentNode;
   if (node.nodeType === Node.ELEMENT_NODE) {
     if (node !== scrollingElement && node !== document.documentElement && node !== document.body && node.ownerDocument === document && node.isConnected && visible(node)) {
@@ -122,6 +126,14 @@ while (walker.nextNode()) {
       }
     }
     const select = captureSelect(node);
+    const control = captureControl(node, controls.length);
+    if (control) {
+      if (control.blocked || controls.length === 32) summary.controls_truncated = true;
+      else {
+        controls.push(control);
+        summary.controls.push({slot:control.slot,label:control.label,state:control.state});
+      }
+    }
     if (select) {
       if (select.oversized || selects.length === 32 || optionCount + select.options.length > 64) summary.selects_truncated = true;
       else {

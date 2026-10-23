@@ -1,6 +1,6 @@
 # Browser tool contract
 
-This Rust crate defines the shared tools for observing a page and proposing navigation, text field changes, native button clicks, single select choices and scrolling. API providers and installed agents use the same definitions and argument decoder.
+This Rust crate defines the shared tools for observing a page and proposing navigation, text field changes, native button clicks, native checkbox or radio state changes, single select choices and scrolling. API providers and installed agents use the same definitions and argument decoder.
 
 ```rust
 use metldr_browser_tools::{Call, decode_call};
@@ -30,3 +30,5 @@ Run `make check-browser-tools` from the repository root.
 `select_option` proposes selecting an option handle from the latest observation. Its `handle` and `option` arguments are opaque bounded identifiers, not selectors or option values. The user must approve the exact control and choice. A local selection receipt reports only the observed selection; it does not certify a site save or submission.
 
 `scroll_page` uses an observed page or region handle, a direction of `up`, `down`, `left` or `right`, and `pixels` from 1 to 2000. The user approves the target and request. The receipt reports the actual position, including no movement. It does not confirm a distance, loaded content or a site result. Observe again for fresh handles. Targets cover the main document and its nested scroll regions. Frame and shadow root scrolling remain unavailable.
+
+`set_native_control` proposes a checked state for an observed native checkbox or radio using its opaque handle and a boolean. The user must approve before dispatch. A request that already matches the local state is a no-op. Radios can be selected, but cannot be unchecked directly; an unsupported radio uncheck has no effect. These actions describe local control state only and do not promise a site save or submission.

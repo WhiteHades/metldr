@@ -7,7 +7,7 @@ use crate::{
     browser_owner,
     flow::Event,
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
     sync::{
@@ -74,6 +74,22 @@ impl Tools {
             return Err("browser task stopped".into());
         }
         let result = match &call {
+            Call::SetNativeControl { handle, checked } => {
+                let prepared = self
+                    .engine
+                    .as_ref()
+                    .ok_or("browser is not attached")?
+                    .prepare_control(call_id, handle, *checked)
+                    .await?;
+                match prepared {
+                    super::engine::ControlPreparation::NoOp { state } => {
+                        json!({"kind":"control_no_op", "state":state, "scope":"local_observation", "untrusted":true})
+                    }
+                    super::engine::ControlPreparation::Propose { proposal } => {
+                        self.perform(proposal, stop, budget).await?
+                    }
+                }
+            }
             Call::Observe => self.observe().await?,
             Call::Navigate { destination } => {
                 self.navigate(call_id, destination, stop, budget).await?
@@ -196,6 +212,7 @@ impl Tools {
                     Intent::ActivateButton { .. } => engine.activate_button(&dispatched).await,
                     Intent::SelectOption { .. } => engine.select_option(&dispatched).await,
                     Intent::Scroll { .. } => engine.scroll(&dispatched).await,
+                    Intent::SetNativeControl { .. } => engine.set_native_control(&dispatched).await,
                     Intent::Navigate { .. } => {
                         return Err("navigation requires its own result owner".into());
                     }
@@ -232,6 +249,16 @@ fn validate_call(call_id: &str, call: &Call) -> Result<()> {
         return Err("invalid browser tool id".into());
     }
     match call {
+        Call::SetNativeControl { handle, .. }
+            if !handle.is_empty()
+                && handle.len() <= 64
+                && handle
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-')) =>
+        {
+            Ok(())
+        }
+        Call::SetNativeControl { .. } => Err("invalid native control handle".into()),
         Call::Observe => Ok(()),
         Call::Navigate { destination }
             if !destination.is_empty()

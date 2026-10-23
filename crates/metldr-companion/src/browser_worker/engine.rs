@@ -36,6 +36,12 @@ struct Request {
     job: Job,
 }
 enum Kind {
+    PrepareControl {
+        tool: String,
+        handle: String,
+        checked: bool,
+    },
+    SetNativeControl(Action),
     Observe {
         generation: u64,
     },
@@ -81,6 +87,13 @@ pub(super) struct Engine {
     task: JoinHandle<(Result<()>, Result<()>)>,
     client: Client,
     tab: i32,
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(tag = "preparation", rename_all = "snake_case", deny_unknown_fields)]
+pub(super) enum ControlPreparation {
+    NoOp { state: observation::NativeState },
+    Propose { proposal: Proposal },
 }
 
 impl Engine {
@@ -201,6 +214,26 @@ impl Engine {
     }
     pub(super) async fn observe(&self, generation: u64) -> Result<Value> {
         self.request(Kind::Observe { generation }).await
+    }
+    pub(super) async fn prepare_control(
+        &self,
+        tool: &str,
+        handle: &str,
+        checked: bool,
+    ) -> Result<ControlPreparation> {
+        self.request(Kind::PrepareControl {
+            tool: tool.into(),
+            handle: handle.into(),
+            checked,
+        })
+        .await
+    }
+    pub(super) async fn set_native_control(&self, action: &Action) -> Outcome {
+        self.effect(
+            Kind::SetNativeControl(action.clone()),
+            "native control dispatch result was lost",
+        )
+        .await
     }
     pub(super) async fn prepare_change(
         &self,

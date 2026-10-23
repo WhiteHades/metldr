@@ -61,6 +61,7 @@ impl Actor {
                     buttons: BTreeMap::new(),
                     selects: BTreeMap::new(),
                     scroll_targets: BTreeMap::new(),
+                    controls: BTreeMap::new(),
                 });
                 self.queue(
                     "Runtime.callFunctionOn",
@@ -125,8 +126,22 @@ impl Actor {
             Work::VerifySelection { action, job } => self.selection_verified(action, job, value),
             Work::WriteScroll { action, job } => self.scroll_written(action, job, value),
             Work::VerifyScroll { after, job } => self.scroll_verified(after, job, value),
-            Work::ArmButton { action, job } => self.button_armed(action, job, value),
+            Work::ReadControl {
+                tool,
+                handle,
+                checked,
+                job,
+            } => self.control_read(tool, handle, checked, job, value),
+            Work::ArmButton { action, job } | Work::ArmControl { action, job } => {
+                self.tap_armed(action, job, value)
+            }
+            Work::Gesture { action, job }
+                if matches!(&action.proposal.intent, Intent::SetNativeControl { .. }) =>
+            {
+                self.control_gestured(action, job)
+            }
             Work::Gesture { job, .. } => self.button_gestured(job),
+            Work::ControlReceipt { action, job } => self.control_receipt(action, job, value),
             Work::ButtonReceipt { job } => {
                 let delivered = evaluation_value(&value).is_ok_and(|v| v == Value::Bool(true));
                 self.value(
@@ -252,13 +267,20 @@ impl Actor {
             Work::Init(_) | Work::CreateWorld => {
                 Err(format!("browser session initialization failed: {reason}").into())
             }
-            Work::Gesture { job, .. } => self.value(
+            Work::Gesture { action, job } => self.value(
                 job,
                 if prevented {
                     Outcome::Prevented { reason }
                 } else {
                     Outcome::Uncertain {
-                        reason: "button input result was lost".into(),
+                        reason: if matches!(
+                            &action.proposal.intent,
+                            Intent::SetNativeControl { .. }
+                        ) {
+                            "native control input result was lost".into()
+                        } else {
+                            "button input result was lost".into()
+                        },
                     }
                 },
             ),
@@ -266,6 +288,12 @@ impl Actor {
                 job,
                 Outcome::Uncertain {
                     reason: "approved button click could not be verified".into(),
+                },
+            ),
+            Work::ControlReceipt { job, .. } => self.value(
+                job,
+                Outcome::Uncertain {
+                    reason: "native control state could not be verified".into(),
                 },
             ),
             Work::WriteSelection { job, .. } => self.value(
@@ -328,9 +356,11 @@ impl Actor {
             | Work::Census { job, .. }
             | Work::ReadField { job, .. }
             | Work::ReadButton { job, .. }
+            | Work::ReadControl { job, .. }
             | Work::ReadSelection { job, .. }
             | Work::ReadScroll { job, .. }
             | Work::ArmButton { job, .. }
+            | Work::ArmControl { job, .. }
             | Work::Navigate { job, .. } => {
                 self.finish(job, Err(reason.into()));
                 Ok(())

@@ -4,7 +4,7 @@ use metldr_history_pages::{Counter, DocumentKind, Identity};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-const VERSION: u64 = 14;
+const VERSION: u64 = metldr_history_pages::WIRE_VERSION as u64;
 const MAX_PAGE: usize = 32_768;
 const MAX_RUNS: usize = 16;
 const MAX_CONVERSATIONS: usize = 16;

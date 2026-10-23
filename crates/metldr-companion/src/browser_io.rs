@@ -38,6 +38,13 @@ pub(super) enum Operation {
         url: String,
         params: Value,
     },
+    ActivateControl {
+        action: String,
+        revision: u64,
+        binding: crate::browser_action::Binding,
+        url: String,
+        params: Value,
+    },
     ConfirmNavigation {
         action: String,
         revision: u64,
@@ -141,6 +148,7 @@ impl Owner {
             let saved_action = match &call.operation {
                 Operation::Navigate { action, .. }
                 | Operation::ActivateButton { action, .. }
+                | Operation::ActivateControl { action, .. }
                 | Operation::ConfirmNavigation { action, .. } => {
                     Some(self.saved_browser_action(action)?)
                 }
@@ -197,6 +205,13 @@ impl Owner {
                     binding,
                     url,
                     ..
+                }
+                | Operation::ActivateControl {
+                    action,
+                    revision,
+                    binding,
+                    url,
+                    ..
                 } => {
                     let record = saved_action.as_ref().ok_or("unknown button action")?;
                     if record.proposal.run != call.run
@@ -205,8 +220,14 @@ impl Owner {
                         || &record.proposal.binding != binding
                         || &record.proposal.url != url
                         || !matches!(
-                            &record.proposal.intent,
-                            crate::browser_action::Intent::ActivateButton { .. }
+                            (&call.operation, &record.proposal.intent),
+                            (
+                                Operation::ActivateButton { .. },
+                                crate::browser_action::Intent::ActivateButton { .. }
+                            ) | (
+                                Operation::ActivateControl { .. },
+                                crate::browser_action::Intent::SetNativeControl { .. }
+                            )
                         )
                         || binding.tab != slot.tab
                         || !slot.buttons.insert(action.clone())

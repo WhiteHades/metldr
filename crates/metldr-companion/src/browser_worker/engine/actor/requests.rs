@@ -10,6 +10,12 @@ impl Actor {
         }
         self.busy = true;
         match kind {
+            Kind::PrepareControl {
+                tool,
+                handle,
+                checked,
+            } => self.prepare_control(tool, handle, checked, job),
+            Kind::SetNativeControl(action) => self.arm_control(action, job),
             Kind::PrepareSelection {
                 tool,
                 handle,
