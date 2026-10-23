@@ -261,6 +261,10 @@ pub(super) enum ConversationAction {
     Watch {
         run: String,
     },
+    Unwatch {
+        run: String,
+        watch: String,
+    },
     Stop {
         run: String,
     },

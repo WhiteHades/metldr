@@ -76,6 +76,16 @@ impl Gate {
         self.phase == Some(Phase::Ready)
     }
 
+    pub(super) fn discard_request(&mut self, request: &str) {
+        self.pending.retain(|frame| {
+            get(frame, "request")
+                .ok()
+                .and_then(|value| value.as_string())
+                .as_deref()
+                != Some(request)
+        });
+    }
+
     pub(super) fn can_discard_changed(&self) -> bool {
         matches!(self.phase, Some(Phase::Connecting | Phase::AwaitingReady))
     }
@@ -134,6 +144,18 @@ pub(super) fn native_message(message: JsValue) {
                 if !is_current(&native) {
                     break;
                 }
+                if let Some(request) = get(&frame, "request")
+                    .ok()
+                    .and_then(|value| value.as_string())
+                {
+                    BACKGROUND.with(|b| {
+                        for watch in &mut b.borrow_mut().watches {
+                            if watch.request == request {
+                                watch.queued = false;
+                            }
+                        }
+                    });
+                }
                 if call(&native, "postMessage", &[frame]).is_err() {
                     disconnect_current();
                     return;
@@ -158,6 +180,22 @@ pub(super) fn native_message(message: JsValue) {
     let Some(raw) = raw.as_string().filter(|raw| raw.len() <= MAX_FRAME) else {
         return;
     };
+    if (kind == "error"
+        || (kind == "view"
+            && get(&message, "ended")
+                .ok()
+                .and_then(|value| value.as_bool())
+                == Some(true)))
+        && let Some(request) = get(&message, "request")
+            .ok()
+            .and_then(|value| value.as_string())
+    {
+        BACKGROUND.with(|b| {
+            b.borrow_mut()
+                .watches
+                .retain(|watch| watch.request != request)
+        });
+    }
     let Ok(value) = js_sys::JSON::parse(&raw) else {
         return;
     };
@@ -224,7 +262,11 @@ fn is_current(native: &JsValue) -> bool {
 
 pub(super) fn disconnect_current() {
     if let Some(native) = BACKGROUND.with(|b| b.borrow().native.clone()) {
-        BACKGROUND.with(|b| b.borrow_mut().readiness.disconnect());
+        BACKGROUND.with(|b| {
+            let mut background = b.borrow_mut();
+            background.readiness.disconnect();
+            background.watches.clear();
+        });
         let _ = call(&native, "disconnect", &[]);
     }
 }

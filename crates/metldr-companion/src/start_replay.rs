@@ -31,6 +31,7 @@ impl Owner {
             Action::Capture { .. }
             | Action::NativeCorrection { .. }
             | Action::Watch { .. }
+            | Action::Unwatch { .. }
             | Action::Stop { .. }
             | Action::BrowserDecision { .. }
             | Action::NativePermission { .. }

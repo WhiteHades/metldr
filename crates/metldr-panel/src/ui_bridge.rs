@@ -19,9 +19,11 @@ use crate::{
     model::{FlowError, PageView, RunId, UserText},
 };
 
+mod active;
 mod conversations;
 mod history;
 mod owner;
+pub use active::UiActiveRun;
 use owner::{NavigationWork, Owner, Stop};
 
 #[wasm_bindgen]
@@ -124,6 +126,18 @@ impl UiBridge {
     #[wasm_bindgen(getter)]
     pub fn thread_id(&self) -> String {
         self.core.scope.conversation.clone()
+    }
+
+    pub fn active_run(&self) -> Result<Option<UiActiveRun>, JsValue> {
+        self.core.owner.borrow().readable().map_err(js_error)?;
+        Ok(self
+            .core
+            .view
+            .borrow()
+            .runs
+            .iter()
+            .find(|run| !run.status.is_terminal())
+            .map(|run| UiActiveRun::new(Rc::clone(&self.core), run)))
     }
 
     pub async fn snapshot(&self) -> Result<String, JsValue> {
@@ -257,7 +271,13 @@ impl UiBridge {
                 return Err(js_error(error));
             }
         }
-        let result = self.core.stream(&native, &mut stream, &emit).await;
+        let result = async {
+            stream
+                .accept_question(&native)
+                .map_err(FlowError::Protocol)?;
+            self.core.stream(&native, &mut stream, &emit).await
+        }
+        .await;
         match result {
             Ok(()) => self.core.owner.borrow_mut().finished(&native),
             Err(error) => {
@@ -412,30 +432,37 @@ impl Core {
         stream: &mut RunStream,
         emit: &Function,
     ) -> Result<(), FlowError> {
-        stream
-            .accept_question(native)
-            .map_err(FlowError::Protocol)?;
         let mut views = self
             .flow()
             .watch(self.scope.clone(), native.clone())
             .await?;
         while let Some(view) = views.changed().await? {
-            let view = self.accept(view)?;
-            let run = view
-                .runs
-                .iter()
-                .find(|run| run.id == *native)
-                .ok_or_else(|| FlowError::Protocol("The watched UI run is missing.".into()))?;
-            for event in stream.push(run).map_err(FlowError::Protocol)? {
-                let encoded = bounded_json(&event)?;
-                emit.call1(&JsValue::UNDEFINED, &encoded.into())
-                    .map_err(|_| FlowError::Host("The UI event consumer disconnected.".into()))?;
-            }
-            if run.status.is_terminal() {
+            if self.emit_view(view, native, stream, emit)? {
                 return Ok(());
             }
         }
         Err(FlowError::Disconnected)
+    }
+
+    fn emit_view(
+        &self,
+        view: PageView,
+        native: &RunId,
+        stream: &mut RunStream,
+        emit: &Function,
+    ) -> Result<bool, FlowError> {
+        let view = self.accept(view)?;
+        let run = view
+            .runs
+            .iter()
+            .find(|run| run.id == *native)
+            .ok_or_else(|| FlowError::Protocol("The watched UI run is missing.".into()))?;
+        for event in stream.push(run).map_err(FlowError::Protocol)? {
+            let encoded = bounded_json(&event)?;
+            emit.call1(&JsValue::UNDEFINED, &encoded.into())
+                .map_err(|_| FlowError::Host("The UI event consumer disconnected.".into()))?;
+        }
+        Ok(run.status.is_terminal())
     }
 }
 

@@ -1,5 +1,5 @@
 use crate::Result;
-use crate::model::{Command, ConversationAction, Request, Status, Store};
+use crate::model::{Command, ConversationAction, Request, Status, Store, valid_request_id};
 use crate::store::Disk;
 use metldr_conversation::Change;
 use serde_json::json;
@@ -588,6 +588,18 @@ impl Owner {
                     );
                 }
                 self.reply_view(Some(id), "view", status.terminal())
+            }
+            ConversationAction::Unwatch { run, watch } => {
+                self.require_conversation(scope)?;
+                if !valid_request_id(&watch) {
+                    return Err("invalid watch identity".into());
+                }
+                if self.subscribers.get(&watch).is_some_and(|subscription| {
+                    subscription.scope == *scope && subscription.run == run
+                }) {
+                    self.subscribers.remove(&watch);
+                }
+                self.emit(json!({"v":crate::WIRE_VERSION,"request":id,"kind":"unwatched"}))
             }
             ConversationAction::Stop { run } => {
                 self.require_conversation(scope)?;

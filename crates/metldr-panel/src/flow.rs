@@ -726,7 +726,11 @@ impl FlowClient {
             connection: Rc::downgrade(&self.inner),
             protocol: Rc::downgrade(&self.inner.protocol),
             cell,
-            request: Some(id.clone()),
+            request: Some(WatchRequest {
+                id: id.clone(),
+                scope: scope.clone(),
+                run: run.clone(),
+            }),
         };
         self.inner
             .post(&id, conversation(&scope, json!({"op":"watch","run":run})))?;
@@ -914,7 +918,13 @@ pub(crate) struct Views {
     connection: Weak<Connection>,
     protocol: Weak<RefCell<Protocol>>,
     cell: Rc<RefCell<WatchCell>>,
-    request: Option<String>,
+    request: Option<WatchRequest>,
+}
+
+struct WatchRequest {
+    id: String,
+    scope: metldr_history_pages::Scope,
+    run: RunId,
 }
 impl Views {
     pub(crate) async fn changed(&mut self) -> Result<Option<PageView>> {
@@ -928,8 +938,20 @@ impl Views {
 impl Drop for Views {
     fn drop(&mut self) {
         if let Some(protocol) = self.protocol.upgrade() {
-            if let Some(id) = &self.request {
-                protocol.borrow_mut().remove_watch(id);
+            if let Some(watch) = &self.request {
+                protocol.borrow_mut().remove_watch(&watch.id);
+                if !self.cell.borrow().terminal_received()
+                    && let Some(connection) = self.connection.upgrade()
+                    && let Ok(id) = connection.request_id()
+                {
+                    let _ = connection.post(
+                        &id,
+                        conversation(
+                            &watch.scope,
+                            json!({"op":"unwatch","run":watch.run,"watch":watch.id}),
+                        ),
+                    );
+                }
             } else {
                 protocol.borrow_mut().remove_observer(&self.cell);
             }

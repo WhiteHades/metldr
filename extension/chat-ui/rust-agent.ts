@@ -5,6 +5,7 @@ import { Observable } from "rxjs";
 import {
   connect_ui_bridge,
   UiRunRequest,
+  type UiActiveRun,
   type UiBridge,
 } from "../../crates/metldr-panel/pkg/metldr_panel.js";
 
@@ -13,6 +14,7 @@ type RustAgentConfig = {
   mode: string;
   capture: () => void;
   bridgeFactory?: () => Promise<UiBridge>;
+  recovery?: UiActiveRun;
   onStopFailure: (error: unknown) => void;
 };
 
@@ -51,6 +53,90 @@ export class RustAgent extends AbstractAgent {
   override abortRun(): void {
     if (this.abortActive) this.abortActive();
     else if (this.isRunning) this.abortRequested = true;
+  }
+
+  protected override connect(input: RunAgentInput): Observable<BaseEvent> {
+    const recovery = this.config.recovery;
+    if (!recovery) return super.connect(input);
+
+    return new Observable<BaseEvent>((subscriber) => {
+      const aborted = this.abortRequested;
+      this.abortRequested = false;
+      let parsedInput: RunAgentInput;
+      try {
+        parsedInput = RunAgentInputSchema.parse(input);
+        if (parsedInput.threadId !== recovery.thread_id) {
+          throw new Error("The active run belongs to another conversation.");
+        }
+      } catch (error) {
+        subscriber.error(error);
+        return;
+      }
+
+      let terminal = false;
+      let stopInFlight = false;
+      const requestStop = () => {
+        if (terminal || stopInFlight) return;
+        stopInFlight = true;
+        void (async () => {
+            const receipt = await recovery.stop();
+            if (receipt !== "requested" && receipt !== "already_terminal") {
+              throw new Error("The active run returned an invalid stop receipt.");
+            }
+          })()
+          .catch((error) => {
+            stopInFlight = false;
+            try {
+              this.config.onStopFailure(error);
+            } catch (reportingError) {
+              if (!subscriber.closed) subscriber.error(reportingError);
+            }
+          });
+      };
+      this.abortActive = requestStop;
+
+      let watching: Promise<void>;
+      try {
+        watching = recovery.watch(parsedInput.runId, (encoded: string) => {
+          try {
+            const payload: unknown = JSON.parse(encoded);
+            const event = EventSchemas.parse(payload);
+            if ((event.type === "RUN_STARTED" || event.type === "RUN_FINISHED") &&
+                (event.threadId !== recovery.thread_id || event.runId !== parsedInput.runId)) {
+              throw new Error("The active run emitted an event for another conversation.");
+            }
+            terminal = event.type === "RUN_FINISHED" || event.type === "RUN_ERROR";
+            subscriber.next(event);
+            if (terminal) subscriber.complete();
+          } catch (error) {
+            if (!subscriber.closed) subscriber.error(error);
+          }
+        });
+      } catch (error) {
+        subscriber.error(error);
+        return () => {
+          if (this.abortActive === requestStop) this.abortActive = undefined;
+        };
+      }
+      if (aborted) {
+        requestStop();
+      }
+
+      void watching
+        .then(() => {
+          if (!terminal && !subscriber.closed) {
+            subscriber.error(new Error("The active run ended without a terminal event."));
+          }
+        })
+        .catch((error) => {
+          if (!subscriber.closed) subscriber.error(error);
+        });
+
+      return () => {
+        recovery.detach();
+        if (this.abortActive === requestStop) this.abortActive = undefined;
+      };
+    });
   }
 
   run(input: RunAgentInput): Observable<BaseEvent> {

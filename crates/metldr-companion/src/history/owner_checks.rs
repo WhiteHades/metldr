@@ -679,6 +679,88 @@ fn actual_owner_conversation_switch_waits_for_work_and_preserves_retry() -> Resu
     assert_eq!(frames(&wire)?.len(), 1);
     assert_eq!(serde_json::to_value(&owner.state)?, live);
     assert!(owner.subscribers.contains_key("watch-b"));
+    let unwatch = |owner: &mut Owner,
+                   request: &str,
+                   scope: &Selection,
+                   run: &str,
+                   watch: &str|
+     -> Result<Value> {
+        wire.lock().unwrap().clear();
+        owner.request(Request {
+            v: crate::WIRE_VERSION,
+            request: request.into(),
+            command: Command::Conversation {
+                scope: crate::history_io::Scope::from(scope),
+                action: crate::model::ConversationAction::Unwatch {
+                    run: run.into(),
+                    watch: watch.into(),
+                },
+            },
+        })?;
+        frames(&wire)?
+            .pop()
+            .ok_or_else(|| "unwatch reply absent".into())
+    };
+    assert_eq!(
+        unwatch(&mut owner, "wrong-run", &b, "other-run", "watch-b")?["kind"],
+        "unwatched"
+    );
+    assert_eq!(owner.subscribers.len(), 1);
+    wire.lock().unwrap().clear();
+    owner.request(Request {
+        v: crate::WIRE_VERSION,
+        request: "wrong-scope".into(),
+        command: Command::Conversation {
+            scope: crate::history_io::Scope::from(&a),
+            action: crate::model::ConversationAction::Unwatch {
+                run: run.clone(),
+                watch: "watch-b".into(),
+            },
+        },
+    })?;
+    assert_eq!(frames(&wire)?[0]["kind"], "error");
+    assert_eq!(owner.subscribers.len(), 1);
+    for index in 0..20 {
+        let watch = format!("cycle-watch-{index}");
+        owner.request(Request {
+            v: crate::WIRE_VERSION,
+            request: watch.clone(),
+            command: conversation(
+                &owner,
+                crate::model::ConversationAction::Watch { run: run.clone() },
+            ),
+        })?;
+        assert_eq!(owner.subscribers.len(), 2);
+        let reply = unwatch(
+            &mut owner,
+            &format!("cycle-unwatch-{index}"),
+            &b,
+            &run,
+            &watch,
+        )?;
+        assert_eq!(
+            reply,
+            json!({"v":crate::WIRE_VERSION,"request":format!("cycle-unwatch-{index}"),"kind":"unwatched"})
+        );
+        assert_eq!(owner.subscribers.len(), 1);
+    }
+    for request in ["remove-watch", "remove-watch-again"] {
+        assert_eq!(
+            unwatch(&mut owner, request, &b, &run, "watch-b")?["kind"],
+            "unwatched"
+        );
+        assert_eq!(owner.subscribers.len(), 0);
+    }
+    assert_eq!(
+        owner
+            .operation
+            .as_ref()
+            .map(|operation| operation.run.as_str()),
+        Some(run.as_str())
+    );
+    assert_eq!(owner.state.view.runs[0].id, run);
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    assert!(matches!(listener.accept(), Err(e) if e.kind() == io::ErrorKind::WouldBlock));
     for (request, action) in [
         ("busy-create", ConversationChange::Create),
         (

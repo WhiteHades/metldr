@@ -17,6 +17,7 @@ pub(super) enum Owner {
         ui: String,
         native: RunId,
     },
+    Observing(RunId),
     Navigating(Navigation),
     Retired,
     Uncertain,
@@ -42,6 +43,18 @@ pub(super) enum Stop {
 }
 
 impl Owner {
+    pub(super) fn observe(&mut self, native: RunId) -> Result<(), FlowError> {
+        self.idle()?;
+        *self = Self::Observing(native);
+        Ok(())
+    }
+
+    pub(super) fn observation_finished(&mut self, run: &RunId) {
+        if matches!(self, Self::Observing(native) if native == run) {
+            *self = Self::Idle;
+        }
+    }
+
     pub(super) fn stop_pending(&self) -> bool {
         matches!(self, Self::Starting { stop: true, .. })
     }
@@ -201,6 +214,12 @@ mod checks {
             serde_json::from_value(serde_json::json!("0123456789abcdef0123456789abcdef:1"))
                 .unwrap();
         let mut owner = Owner::Idle;
+        owner.observe(native.clone()).unwrap();
+        assert!(owner.begin("while-observing").is_err());
+        assert!(owner.capture().is_err());
+        assert!(owner.readable().is_ok());
+        assert!(owner.stop("unrelated").is_err());
+        owner.observation_finished(&native);
         owner.begin("first").unwrap();
         assert!(!owner.stop_pending());
         assert!(owner.begin("second").is_err());

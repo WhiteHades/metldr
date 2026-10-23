@@ -87,6 +87,10 @@ pub(crate) struct WatchCell {
 }
 
 impl WatchCell {
+    pub(crate) fn terminal_received(&self) -> bool {
+        self.terminal_queued
+    }
+
     fn specific(scope: metldr_history_pages::Scope, run: RunId) -> Self {
         Self {
             target: Some((scope, run)),
@@ -1443,6 +1447,8 @@ mod tests {
             Poll::Ready(Ok(Some(view))) if view.sequence == 2
         ));
         assert!(matches!(poll(&terminal_watch), Poll::Ready(Ok(None))));
+        assert!(terminal_watch.borrow().terminal_received());
+        assert!(!watch.borrow().terminal_received());
         assert!(matches!(
             poll(&observer),
             Poll::Ready(Err(FlowError::Disconnected))
@@ -1486,6 +1492,7 @@ mod tests {
             .unwrap();
         protocol.remove_watch("watch-2");
         assert!(matches!(poll(&removed), Poll::Ready(Ok(None))));
+        assert!(!removed.borrow().terminal_received());
         assert_eq!(
             protocol
                 .latest
