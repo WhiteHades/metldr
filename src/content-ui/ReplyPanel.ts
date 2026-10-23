@@ -535,7 +535,7 @@ export class ReplyPanel {
   }
 
   getIconDataUrl(): string {
-    return chrome.runtime.getURL('assets/logo/metldr-dark-lavender-256x256.png')
+    return chrome.runtime.getURL('assets/logo/metldr-mark.svg')
   }
 
   showSuggestionsPanel(composeView: ComposeView): void {
