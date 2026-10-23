@@ -23,7 +23,7 @@ pub(crate) struct Cursor {
     pub(crate) before: Counter,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Preview {
     pub(crate) text: String,
@@ -122,7 +122,7 @@ pub(crate) enum Change {
     Select { conversation: String },
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ConversationSummary {
     pub(crate) id: String,

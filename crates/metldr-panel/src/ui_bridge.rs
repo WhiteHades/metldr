@@ -15,12 +15,14 @@ use crate::{
     ag_ui::{AgUiMessage, MessageRole, RunStream},
     composer,
     flow::{FlowClient, StopReceipt},
+    history::Change,
     model::{FlowError, PageView, RunId, UserText},
 };
 
+mod conversations;
 mod history;
 mod owner;
-use owner::{Owner, Stop};
+use owner::{NavigationWork, Owner, Stop};
 
 #[wasm_bindgen]
 pub struct UiRunRequest {
@@ -68,7 +70,7 @@ pub struct UiBridge {
 }
 
 struct Core {
-    flow: FlowClient,
+    flow: RefCell<FlowClient>,
     scope: Scope,
     view: RefCell<PageView>,
     owner: RefCell<Owner>,
@@ -99,16 +101,22 @@ pub async fn connect_ui_bridge(capture: Function) -> Result<UiBridge, JsValue> {
     crate::flow::install_capture(capture);
     let flow = FlowClient::connect().await.map_err(js_error)?;
     let view = flow.current_page().await.map_err(js_error)?;
-    Ok(UiBridge {
-        core: Rc::new(Core {
-            scope: view.selection.clone(),
-            flow,
-            view: RefCell::new(view),
-            owner: RefCell::new(Owner::Idle),
-            history_loading: Cell::new(false),
-            preparing: RefCell::new(None),
-        }),
-    })
+    Ok(UiBridge::from_view(flow, view))
+}
+
+impl UiBridge {
+    fn from_view(flow: FlowClient, view: PageView) -> Self {
+        Self {
+            core: Rc::new(Core {
+                scope: view.selection.clone(),
+                flow: RefCell::new(flow),
+                view: RefCell::new(view),
+                owner: RefCell::new(Owner::Idle),
+                history_loading: Cell::new(false),
+                preparing: RefCell::new(None),
+            }),
+        }
+    }
 }
 
 #[wasm_bindgen]
@@ -134,10 +142,43 @@ impl UiBridge {
         bounded_json(&page).map_err(js_error)
     }
 
+    pub async fn conversations(&self, cursor: Option<String>) -> Result<String, JsValue> {
+        let _read = self.core.begin_read().map_err(js_error)?;
+        let page = conversations::page(&self.core.flow(), &self.core.scope, cursor.as_deref())
+            .await
+            .map_err(js_error)?;
+        bounded_json(&page).map_err(js_error)
+    }
+
+    pub async fn new_conversation(&self) -> Result<UiBridge, JsValue> {
+        self.core
+            .begin_navigation(Change::Create)
+            .map_err(js_error)?;
+        self.core.navigate().await.map_err(js_error)
+    }
+
+    pub async fn select_conversation(&self, conversation: String) -> Result<UiBridge, JsValue> {
+        let selected = Scope {
+            conversation: conversation.clone(),
+            ..self.core.scope.clone()
+        };
+        selected
+            .validate()
+            .map_err(|_| crate::err("Invalid conversation."))?;
+        self.core
+            .begin_navigation(Change::Select { conversation })
+            .map_err(js_error)?;
+        self.core.navigate().await.map_err(js_error)
+    }
+
+    pub async fn retry_navigation(&self) -> Result<UiBridge, JsValue> {
+        self.core.navigate().await.map_err(js_error)
+    }
+
     pub fn capture(&self) -> Result<Promise, JsValue> {
         self.core.owner.borrow_mut().capture().map_err(js_error)?;
         // Prepare the permission request in the user's click, before yielding.
-        let capture = self.core.flow.capture_selected(&self.core.view.borrow());
+        let capture = self.core.flow().capture_selected(&self.core.view.borrow());
         let core = Rc::clone(&self.core);
         Ok(future_to_promise(async move {
             let result = capture.await.and_then(|view| core.accept(view));
@@ -189,7 +230,7 @@ impl UiBridge {
             }
         };
         let started = composer::dispatch(
-            &self.core.flow,
+            &self.core.flow(),
             self.core.scope.clone(),
             source,
             destination,
@@ -208,7 +249,7 @@ impl UiBridge {
         if stop {
             if let Err(error) = self
                 .core
-                .flow
+                .flow()
                 .request_stop(self.core.scope.clone(), native.clone())
                 .await
             {
@@ -223,7 +264,7 @@ impl UiBridge {
                 // Losing a listener is not evidence that native work stopped.
                 let _ = self
                     .core
-                    .flow
+                    .flow()
                     .request_stop(self.core.scope.clone(), native)
                     .await;
                 self.core.owner.borrow_mut().uncertain();
@@ -246,7 +287,7 @@ impl UiBridge {
             Stop::Native(native) => {
                 match self
                     .core
-                    .flow
+                    .flow()
                     .request_stop(self.core.scope.clone(), native)
                     .await
                     .map_err(js_error)?
@@ -260,6 +301,68 @@ impl UiBridge {
 }
 
 impl Core {
+    fn flow(&self) -> FlowClient {
+        self.flow.borrow().clone()
+    }
+
+    fn begin_navigation(&self, change: Change) -> Result<(), FlowError> {
+        if self.history_loading.get() {
+            return Err(FlowError::HistoryBusy);
+        }
+        let request = self
+            .flow()
+            .conversation_request(self.scope.clone(), change)?;
+        self.owner.borrow_mut().navigate(request)
+    }
+
+    async fn navigate(&self) -> Result<UiBridge, FlowError> {
+        let work = self.owner.borrow_mut().navigation_step()?;
+        let flow = self.flow();
+        let flow = if matches!(&work, NavigationWork::Retry(_) | NavigationWork::Refresh(_)) {
+            match flow.reconnect().await {
+                Ok(flow) => flow,
+                Err(error) => {
+                    self.owner.borrow_mut().navigation_interrupted();
+                    return Err(error);
+                }
+            }
+        } else {
+            flow
+        };
+        self.flow.replace(flow.clone());
+        let expected = match work {
+            NavigationWork::Send(request) | NavigationWork::Retry(request) => {
+                match flow.change_conversation(&request).await {
+                    Ok(receipt) => {
+                        self.owner
+                            .borrow_mut()
+                            .navigation_confirmed(receipt.current.clone());
+                        receipt.current
+                    }
+                    Err(error) => {
+                        self.owner.borrow_mut().navigation_failed(&error);
+                        return Err(error);
+                    }
+                }
+            }
+            NavigationWork::Refresh(expected) => expected,
+        };
+        let result = flow.current_page().await.and_then(|view| {
+            if view.selection.store != expected.scope.store
+                || (view.selection != expected.scope
+                    && view.selection.epoch.0 <= expected.scope.epoch.0)
+            {
+                return Err(FlowError::HistoryStale);
+            }
+            Ok(UiBridge::from_view(flow.clone(), view))
+        });
+        match &result {
+            Ok(_) => *self.owner.borrow_mut() = Owner::Retired,
+            Err(error) => self.owner.borrow_mut().navigation_failed(error),
+        }
+        result
+    }
+
     async fn prepare_current(&self) -> Result<Option<PageView>, FlowError> {
         let mut current = std::pin::pin!(self.current());
         let result = std::future::poll_fn(|context| {
@@ -278,11 +381,16 @@ impl Core {
     }
 
     async fn history(&self, cursor: Option<&str>) -> Result<history::Page, FlowError> {
+        let _read = self.begin_read()?;
+        history::page(&self.flow(), &self.scope, cursor).await
+    }
+
+    fn begin_read(&self) -> Result<HistoryRead<'_>, FlowError> {
+        self.owner.borrow().readable()?;
         if self.history_loading.replace(true) {
             return Err(FlowError::HistoryBusy);
         }
-        let _read = HistoryRead(&self.history_loading);
-        history::page(&self.flow, &self.scope, cursor).await
+        Ok(HistoryRead(&self.history_loading))
     }
 
     fn accept(&self, view: PageView) -> Result<PageView, FlowError> {
@@ -294,7 +402,8 @@ impl Core {
     }
 
     async fn current(&self) -> Result<PageView, FlowError> {
-        self.accept(self.flow.current_page().await?)
+        self.owner.borrow().readable()?;
+        self.accept(self.flow().current_page().await?)
     }
 
     async fn stream(
@@ -306,7 +415,10 @@ impl Core {
         stream
             .accept_question(native)
             .map_err(FlowError::Protocol)?;
-        let mut views = self.flow.watch(self.scope.clone(), native.clone()).await?;
+        let mut views = self
+            .flow()
+            .watch(self.scope.clone(), native.clone())
+            .await?;
         while let Some(view) = views.changed().await? {
             let view = self.accept(view)?;
             let run = view

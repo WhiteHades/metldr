@@ -97,6 +97,16 @@ impl FlowClient {
         let capture = CAPTURE
             .with(|slot| slot.borrow().clone())
             .ok_or_else(|| FlowError::Protocol("Page capture bridge is unavailable.".into()))?;
+        Self::connect_with(capture).await
+    }
+
+    pub(crate) async fn reconnect(&self) -> Result<Self> {
+        let flow = Self::connect_with(self.inner.capture.clone()).await?;
+        flow.current_page().await?;
+        Ok(flow)
+    }
+
+    async fn connect_with(capture: Function) -> Result<Self> {
         let crypto = get(&js_sys::global(), "crypto").map_err(js_error)?;
         let nonce = call(&crypto, "randomUUID", &[])
             .map_err(js_error)?

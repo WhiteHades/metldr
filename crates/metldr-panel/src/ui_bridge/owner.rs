@@ -1,4 +1,8 @@
-use crate::model::{FlowError, RunId};
+use crate::{
+    flow::ConversationRequest,
+    history::Context,
+    model::{FlowError, RunId},
+};
 
 #[derive(Default)]
 pub(super) enum Owner {
@@ -13,7 +17,23 @@ pub(super) enum Owner {
         ui: String,
         native: RunId,
     },
+    Navigating(Navigation),
+    Retired,
     Uncertain,
+}
+
+pub(super) enum Navigation {
+    Pending(ConversationRequest),
+    Uncertain(ConversationRequest),
+    Sending(ConversationRequest),
+    Confirmed(Context),
+    Refreshing(Context),
+}
+
+pub(super) enum NavigationWork {
+    Send(ConversationRequest),
+    Retry(ConversationRequest),
+    Refresh(Context),
 }
 
 pub(super) enum Stop {
@@ -44,10 +64,73 @@ impl Owner {
     fn idle(&self) -> Result<(), FlowError> {
         match self {
             Self::Idle => Ok(()),
+            Self::Retired => Err(FlowError::HistoryStale),
             Self::Uncertain => Err(FlowError::Host(
                 "Reconnect and check saved work before starting again.".into(),
             )),
             _ => Err(FlowError::HistoryBusy),
+        }
+    }
+
+    pub(super) fn readable(&self) -> Result<(), FlowError> {
+        match self {
+            Self::Navigating(_) => Err(FlowError::HistoryBusy),
+            Self::Retired => Err(FlowError::HistoryStale),
+            _ => Ok(()),
+        }
+    }
+
+    pub(super) fn navigate(&mut self, request: ConversationRequest) -> Result<(), FlowError> {
+        self.idle()?;
+        *self = Self::Navigating(Navigation::Pending(request));
+        Ok(())
+    }
+
+    pub(super) fn navigation_step(&mut self) -> Result<NavigationWork, FlowError> {
+        match self {
+            Self::Navigating(Navigation::Pending(request)) => {
+                let request = request.clone();
+                *self = Self::Navigating(Navigation::Sending(request.clone()));
+                Ok(NavigationWork::Send(request))
+            }
+            Self::Navigating(Navigation::Confirmed(context)) => {
+                let context = context.clone();
+                *self = Self::Navigating(Navigation::Refreshing(context.clone()));
+                Ok(NavigationWork::Refresh(context))
+            }
+            Self::Navigating(Navigation::Uncertain(request)) => {
+                let request = request.clone();
+                *self = Self::Navigating(Navigation::Sending(request.clone()));
+                Ok(NavigationWork::Retry(request))
+            }
+            Self::Retired => Err(FlowError::HistoryStale),
+            _ => Err(FlowError::HistoryBusy),
+        }
+    }
+
+    pub(super) fn navigation_confirmed(&mut self, context: Context) {
+        *self = Self::Navigating(Navigation::Refreshing(context));
+    }
+
+    pub(super) fn navigation_failed(&mut self, error: &FlowError) {
+        if matches!(self, Self::Navigating(Navigation::Sending(_)))
+            && matches!(error, FlowError::HistoryBusy | FlowError::HistoryStale)
+        {
+            *self = Self::Idle;
+        } else {
+            self.navigation_interrupted();
+        }
+    }
+
+    pub(super) fn navigation_interrupted(&mut self) {
+        match self {
+            Self::Navigating(Navigation::Sending(request)) => {
+                *self = Self::Navigating(Navigation::Uncertain(request.clone()));
+            }
+            Self::Navigating(Navigation::Refreshing(context)) => {
+                *self = Self::Navigating(Navigation::Confirmed(context.clone()));
+            }
+            _ => {}
         }
     }
 
@@ -140,5 +223,12 @@ mod checks {
         capture.capture().unwrap();
         capture.capture_finished();
         capture.begin("after-permission-denied").unwrap();
+        let mut retired = Owner::Retired;
+        assert!(matches!(retired.readable(), Err(FlowError::HistoryStale)));
+        assert!(matches!(retired.capture(), Err(FlowError::HistoryStale)));
+        assert!(matches!(
+            retired.begin("retired"),
+            Err(FlowError::HistoryStale)
+        ));
     }
 }
