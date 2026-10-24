@@ -184,16 +184,10 @@ impl Owner {
     }
 
     pub(super) fn start_failed(&mut self, error: &FlowError) {
-        *self = match error {
-            FlowError::HostRejected(_)
-            | FlowError::InvalidInput(_)
-            | FlowError::HistoryBusy
-            | FlowError::HistoryStale
-            | FlowError::NoSource => Self::Idle,
-            FlowError::Disconnected
-            | FlowError::Timeout
-            | FlowError::Protocol(_)
-            | FlowError::Host(_) => Self::Uncertain,
+        *self = if error.may_have_committed() {
+            Self::Uncertain
+        } else {
+            Self::Idle
         };
     }
 
@@ -240,8 +234,13 @@ mod checks {
         assert!(owner.capture().is_err());
         let mut rejected = Owner::Idle;
         rejected.begin("rejected").unwrap();
-        rejected.start_failed(&FlowError::HostRejected("unavailable".into()));
-        rejected.begin("another").unwrap();
+        rejected.start_failed(&FlowError::Remote("unavailable".into()));
+        assert!(rejected.begin("another").is_err());
+        assert!(rejected.capture().is_err());
+        let mut invalid = Owner::Idle;
+        invalid.begin("invalid").unwrap();
+        invalid.start_failed(&FlowError::InvalidInput("invalid mode".into()));
+        invalid.begin("corrected").unwrap();
         let mut capture = Owner::Idle;
         capture.capture().unwrap();
         capture.capture_finished();

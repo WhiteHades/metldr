@@ -63,10 +63,7 @@ impl Operation {
             Self::Mutation(family)
                 if !matches!(
                     error,
-                    FlowError::InvalidInput(_)
-                        | FlowError::HostRejected(_)
-                        | FlowError::HistoryBusy
-                        | FlowError::HistoryStale
+                    FlowError::InvalidInput(_) | FlowError::HistoryBusy | FlowError::HistoryStale
                 ) =>
             {
                 Self::Unknown(family)
@@ -222,7 +219,13 @@ mod checks {
             state.confirmed(true);
             assert_eq!(state, Operation::Idle);
             state.begin(family, false).unwrap();
-            state.failed(&FlowError::HostRejected("revision changed".into()));
+            state.failed(&FlowError::Remote("revision changed".into()));
+            assert!(state.uncertain(family));
+            assert!(state.begin(family, false).is_err());
+            state.begin(family, true).unwrap();
+            state.confirmed(false);
+            state.begin(family, false).unwrap();
+            state.failed(&FlowError::InvalidInput("invalid model".into()));
             assert!(!state.blocked());
         }
         let mut owner = Owner::Idle;

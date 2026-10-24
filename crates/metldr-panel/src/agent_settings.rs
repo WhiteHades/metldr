@@ -422,18 +422,13 @@ async fn finish(
             super::apply_view(&panel, view, generation);
             set_status(&state.document, "Agent settings updated.");
         }
-        Err(error)
-            if matches!(
-                error,
-                FlowError::Timeout | FlowError::Disconnected | FlowError::Protocol(_)
-            ) && mutation.is_some() =>
-        {
+        Err(error) if error.may_have_committed() && mutation.is_some() => {
             state.unknown.set(true);
             *state.unknown_store.borrow_mut() = store.clone();
             let read_epoch = state.mutation_epoch.get();
             set_status(
                 &state.document,
-                "No receipt arrived. Checking saved agent settings before another change.",
+                "The result is unconfirmed. Checking saved agent settings before another change.",
             );
             let refreshed = flow.current_page().await;
             if panel.borrow().connection_generation != generation {
@@ -443,14 +438,15 @@ async fn finish(
                 Ok(view) => {
                     reconcile_current_page(&panel, &view, generation, read_epoch);
                     super::apply_view(&panel, view, generation);
-                    set_status(
-                        &state.document,
-                        if state.unknown.get() {
-                            "Agent outcome remains unknown. Refresh agent settings to reconcile it."
-                        } else {
-                            "Agent view reconciled. Review saved values before retrying."
-                        },
-                    );
+                    let message = if state.unknown.get() {
+                        "Agent outcome remains unknown. Refresh agent settings to reconcile it."
+                            .into()
+                    } else {
+                        format!(
+                            "Agent settings failed: {error}. Saved values were checked. Review them before retrying."
+                        )
+                    };
+                    set_status(&state.document, &message);
                 }
                 _ => set_status(
                     &state.document,

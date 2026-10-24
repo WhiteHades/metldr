@@ -475,7 +475,7 @@ impl Protocol {
             let (_, cell) = self.pending.remove(request_id).unwrap();
             return Ok(cell
                 .upgrade()
-                .and_then(|cell| cell.borrow_mut().fail(FlowError::HostRejected(message)))
+                .and_then(|cell| cell.borrow_mut().fail(FlowError::Remote(message)))
                 .into_iter()
                 .collect());
         }
@@ -1194,6 +1194,18 @@ mod tests {
     #[test]
     fn correlates_replies_and_coalesces_watch_to_one_terminal_snapshot() {
         let mut protocol = Protocol::new();
+        let failed = protocol
+            .register_request("failed-start".into(), ReplyKind::Start(scope()))
+            .unwrap();
+        protocol
+            .receive(json!({"v":crate::WIRE_VERSION,"request":"failed-start","kind":"error","message":"reply failed after commit"}))
+            .unwrap();
+        assert!(matches!(
+            failed
+                .borrow_mut()
+                .poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Ready(Err(FlowError::Remote(message))) if message == "reply failed after commit"
+        ));
         assert!(
             protocol
                 .receive(json!({"v":crate::WIRE_VERSION,"request":7,"kind":"started","run":RUN}))

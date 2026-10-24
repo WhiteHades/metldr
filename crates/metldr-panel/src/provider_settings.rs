@@ -497,17 +497,12 @@ async fn finish(
                 },
             );
         }
-        Err(error)
-            if matches!(
-                error,
-                FlowError::Timeout | FlowError::Disconnected | FlowError::Protocol(_)
-            ) && mutation.is_some() =>
-        {
+        Err(error) if error.may_have_committed() && mutation.is_some() => {
             state.unknown.set(true);
             *state.unknown_store.borrow_mut() = store.clone();
             status(
                 &state.document,
-                "No receipt arrived. Checking the saved provider view before another change.",
+                "The result is unconfirmed. Checking the saved provider view before another change.",
             );
             let refreshed = flow.current_page().await;
             if panel.borrow().connection_generation != generation {
@@ -523,14 +518,15 @@ async fn finish(
                     if !idle {
                         state.unknown.set(true);
                     }
-                    status(
-                        &state.document,
-                        if state.unknown.get() {
-                            "Provider outcome remains unknown. Refresh connections to reconcile it."
-                        } else {
-                            "Provider view reconciled. Review it before another change."
-                        },
-                    );
+                    let message = if state.unknown.get() {
+                        "Provider outcome remains unknown. Refresh connections to reconcile it."
+                            .into()
+                    } else {
+                        format!(
+                            "Provider settings failed: {error}. Saved values were checked. Review them before another change."
+                        )
+                    };
+                    status(&state.document, &message);
                 }
                 Err(_) => status(
                     &state.document,

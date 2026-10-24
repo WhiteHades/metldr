@@ -1391,8 +1391,23 @@ pub(crate) enum FlowError {
     InvalidInput(String),
     Protocol(String),
     Host(String),
-    HostRejected(String),
+    Remote(String),
     Timeout,
+}
+
+impl FlowError {
+    pub(crate) fn may_have_committed(&self) -> bool {
+        match self {
+            Self::HistoryBusy | Self::HistoryStale | Self::NoSource | Self::InvalidInput(_) => {
+                false
+            }
+            Self::Disconnected
+            | Self::Protocol(_)
+            | Self::Host(_)
+            | Self::Remote(_)
+            | Self::Timeout => true,
+        }
+    }
 }
 
 impl fmt::Display for FlowError {
@@ -1408,7 +1423,7 @@ impl fmt::Display for FlowError {
             Self::InvalidInput(message)
             | Self::Protocol(message)
             | Self::Host(message)
-            | Self::HostRejected(message) => f.write_str(message),
+            | Self::Remote(message) => f.write_str(message),
         }
     }
 }

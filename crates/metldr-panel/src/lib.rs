@@ -715,12 +715,18 @@ async fn follow_start(
     }
     .await;
     if awaiting_view && panel.borrow().connection_generation == generation {
-        panel.borrow_mut().start_pending = false;
+        panel.borrow_mut().start_pending =
+            result.as_ref().is_err_and(FlowError::may_have_committed);
         render(&panel.borrow());
     }
     if let Err(error) = result {
         if panel.borrow().connection_generation == generation {
-            set_panel_status(&panel, &format!("{label}: {error}"));
+            let recovery = if awaiting_view && error.may_have_committed() {
+                " Reload to check saved work before starting again."
+            } else {
+                ""
+            };
+            set_panel_status(&panel, &format!("{label}: {error}{recovery}"));
             render(&panel.borrow());
         }
     }

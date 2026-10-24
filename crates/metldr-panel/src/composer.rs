@@ -483,7 +483,7 @@ fn submit(panel: &Rc<RefCell<Panel>>) -> Result<(), FlowError> {
                                     .iter()
                                     .any(|receipt| receipt.request == request)
                             });
-                        let fully_absent = matches!(&error, FlowError::HostRejected(_))
+                        let fully_absent = matches!(&error, FlowError::Remote(_))
                             && same_run
                             && saved_run.as_ref().is_some_and(|saved| {
                                 saved.corrections.entries.len()
