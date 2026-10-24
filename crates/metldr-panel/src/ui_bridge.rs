@@ -20,13 +20,20 @@ use crate::{
 };
 
 mod active;
+mod agents;
 mod conversations;
 mod destinations;
 mod history;
 mod owner;
+mod providers;
+mod settings;
+mod settings_updates;
 pub use active::UiActiveRun;
+pub use agents::{UiAgentConfiguration, UiAgentProfile, UiAgentSettings};
 pub use destinations::UiDestination;
 use owner::{NavigationWork, Owner, Stop};
+pub use providers::{UiProviderConnection, UiProviderSettings};
+pub use settings_updates::{UiAgentSnapshot, UiProviderSnapshot, UiSettingsSubscription};
 
 #[wasm_bindgen]
 pub struct UiRunRequest {
@@ -74,12 +81,64 @@ pub struct UiBridge {
 }
 
 struct Core {
-    flow: RefCell<FlowClient>,
+    page: Rc<PageSession>,
     scope: Scope,
-    view: RefCell<PageView>,
     owner: RefCell<Owner>,
     history_loading: Cell<bool>,
     preparing: RefCell<Option<Waker>>,
+}
+
+struct PageSession {
+    flow: RefCell<FlowClient>,
+    view: RefCell<PageView>,
+    navigating: Cell<bool>,
+    settings: RefCell<settings::Operation>,
+    current: RefCell<std::rc::Weak<Core>>,
+    settings_subscriptions: RefCell<Vec<std::rc::Weak<settings_updates::Observer>>>,
+    invalidated: Cell<bool>,
+}
+
+impl PageSession {
+    fn accept(&self, view: PageView) -> Result<PageView, FlowError> {
+        let mut current = self.view.borrow_mut();
+        if self.invalidated.get() || view.store != current.store {
+            self.invalidated.set(true);
+            drop(current);
+            self.notify_settings();
+            return Err(FlowError::HistoryStale);
+        }
+        if !view.is_older_than(&current) {
+            *current = view;
+        }
+        let accepted = current.clone();
+        drop(current);
+        self.notify_settings();
+        Ok(accepted)
+    }
+
+    fn settings_blocked(&self) -> bool {
+        let view = self.view.borrow();
+        self.invalidated.get()
+            || self.settings.borrow().blocked()
+            || view.provider_settings.busy
+            || view.provider_settings.pending.is_some()
+            || view.agent_settings.busy
+    }
+
+    fn controls_ready(&self) -> bool {
+        !self.invalidated.get()
+            && !self.navigating.get()
+            && self
+                .current
+                .borrow()
+                .upgrade()
+                .is_none_or(|core| core.owner.borrow().settings_ready())
+    }
+
+    fn replace_flow(&self, flow: FlowClient) {
+        self.flow.replace(flow);
+        self.notify_settings();
+    }
 }
 
 struct HistoryRead<'a>(&'a Cell<bool>);
@@ -110,16 +169,30 @@ pub async fn connect_ui_bridge(capture: Function) -> Result<UiBridge, JsValue> {
 
 impl UiBridge {
     fn from_view(flow: FlowClient, view: PageView) -> Self {
-        Self {
+        let page = Rc::new(PageSession {
+            flow: RefCell::new(flow),
+            view: RefCell::new(view.clone()),
+            navigating: Cell::new(false),
+            settings: RefCell::new(settings::Operation::default()),
+            current: RefCell::new(std::rc::Weak::new()),
+            settings_subscriptions: RefCell::new(Vec::new()),
+            invalidated: Cell::new(false),
+        });
+        Self::from_session(page, &view)
+    }
+
+    fn from_session(page: Rc<PageSession>, view: &PageView) -> Self {
+        let bridge = Self {
             core: Rc::new(Core {
                 scope: view.selection.clone(),
-                flow: RefCell::new(flow),
-                view: RefCell::new(view),
+                page: Rc::clone(&page),
                 owner: RefCell::new(Owner::Idle),
                 history_loading: Cell::new(false),
                 preparing: RefCell::new(None),
             }),
-        }
+        };
+        page.current.replace(Rc::downgrade(&bridge.core));
+        bridge
     }
 }
 
@@ -132,14 +205,20 @@ impl UiBridge {
 
     pub fn active_run(&self) -> Result<Option<UiActiveRun>, JsValue> {
         self.core.owner.borrow().readable().map_err(js_error)?;
-        Ok(self
-            .core
-            .view
-            .borrow()
+        let view = self.core.cached().map_err(js_error)?;
+        Ok(view
             .runs
             .iter()
             .find(|run| !run.status.is_terminal())
             .map(|run| UiActiveRun::new(Rc::clone(&self.core), run)))
+    }
+
+    pub fn provider_settings(&self) -> UiProviderSettings {
+        UiProviderSettings::new(Rc::clone(&self.core.page))
+    }
+
+    pub fn agent_settings(&self) -> UiAgentSettings {
+        UiAgentSettings::new(Rc::clone(&self.core.page))
     }
 
     pub async fn execution_choices(&self) -> Result<Vec<UiDestination>, JsValue> {
@@ -201,13 +280,20 @@ impl UiBridge {
     }
 
     pub fn capture(&self) -> Result<Promise, JsValue> {
+        let view = self.core.cached().map_err(js_error)?;
+        if self.core.page.settings_blocked() {
+            return Err(js_error(FlowError::HistoryBusy));
+        }
         self.core.owner.borrow_mut().capture().map_err(js_error)?;
         // Prepare the permission request in the user's click, before yielding.
-        let capture = self.core.flow().capture_selected(&self.core.view.borrow());
+        let capture = self.core.flow().capture_selected(&view);
+        drop(view);
+        self.core.page.notify_settings();
         let core = Rc::clone(&self.core);
         Ok(future_to_promise(async move {
             let result = capture.await.and_then(|view| core.accept(view));
             core.owner.borrow_mut().capture_finished();
+            core.page.notify_settings();
             result.map(|_| JsValue::UNDEFINED).map_err(js_error)
         }))
     }
@@ -218,11 +304,15 @@ impl UiBridge {
                 "The UI request belongs to another conversation.",
             ));
         }
+        if self.core.page.settings_blocked() {
+            return Err(js_error(FlowError::HistoryBusy));
+        }
         self.core
             .owner
             .borrow_mut()
             .begin(&request.id)
             .map_err(js_error)?;
+        self.core.page.notify_settings();
         let prepared = async {
             let Some(view) = self.core.prepare_current().await? else {
                 return Ok(None);
@@ -247,10 +337,12 @@ impl UiBridge {
             Ok(Some(value)) => value,
             Ok(None) => {
                 self.core.owner.borrow_mut().not_sent();
+                self.core.page.notify_settings();
                 return Ok(());
             }
             Err(error) => {
                 self.core.owner.borrow_mut().not_sent();
+                self.core.page.notify_settings();
                 return Err(js_error(error));
             }
         };
@@ -267,10 +359,12 @@ impl UiBridge {
             Ok(native) => native,
             Err(error) => {
                 self.core.owner.borrow_mut().start_failed(&error);
+                self.core.page.notify_settings();
                 return Err(js_error(error));
             }
         };
         let stop = self.core.owner.borrow_mut().accepted(native.clone());
+        self.core.page.notify_settings();
         if stop {
             if let Err(error) = self
                 .core
@@ -279,6 +373,7 @@ impl UiBridge {
                 .await
             {
                 self.core.owner.borrow_mut().uncertain();
+                self.core.page.notify_settings();
                 return Err(js_error(error));
             }
         }
@@ -299,9 +394,11 @@ impl UiBridge {
                     .request_stop(self.core.scope.clone(), native)
                     .await;
                 self.core.owner.borrow_mut().uncertain();
+                self.core.page.notify_settings();
                 return Err(js_error(error));
             }
         }
+        self.core.page.notify_settings();
         Ok(())
     }
 
@@ -333,17 +430,28 @@ impl UiBridge {
 
 impl Core {
     fn flow(&self) -> FlowClient {
-        self.flow.borrow().clone()
+        self.page.flow.borrow().clone()
+    }
+
+    fn cached(&self) -> Result<std::cell::Ref<'_, PageView>, FlowError> {
+        let view = self.page.view.borrow();
+        if view.selection != self.scope {
+            return Err(FlowError::HistoryStale);
+        }
+        Ok(view)
     }
 
     fn begin_navigation(&self, change: Change) -> Result<(), FlowError> {
-        if self.history_loading.get() {
+        if self.history_loading.get() || self.page.settings_blocked() {
             return Err(FlowError::HistoryBusy);
         }
         let request = self
             .flow()
             .conversation_request(self.scope.clone(), change)?;
-        self.owner.borrow_mut().navigate(request)
+        self.owner.borrow_mut().navigate(request)?;
+        self.page.navigating.set(true);
+        self.page.notify_settings();
+        Ok(())
     }
 
     async fn navigate(&self) -> Result<UiBridge, FlowError> {
@@ -351,7 +459,17 @@ impl Core {
         let flow = self.flow();
         let flow = if matches!(&work, NavigationWork::Retry(_) | NavigationWork::Refresh(_)) {
             match flow.reconnect().await {
-                Ok(flow) => flow,
+                Ok(flow) => {
+                    let verified = flow
+                        .current_page()
+                        .await
+                        .and_then(|view| self.page.accept(view));
+                    if let Err(error) = verified {
+                        self.owner.borrow_mut().navigation_interrupted();
+                        return Err(error);
+                    }
+                    flow
+                }
                 Err(error) => {
                     self.owner.borrow_mut().navigation_interrupted();
                     return Err(error);
@@ -360,7 +478,7 @@ impl Core {
         } else {
             flow
         };
-        self.flow.replace(flow.clone());
+        self.page.replace_flow(flow.clone());
         let expected = match work {
             NavigationWork::Send(request) | NavigationWork::Retry(request) => {
                 match flow.change_conversation(&request).await {
@@ -371,7 +489,7 @@ impl Core {
                         receipt.current
                     }
                     Err(error) => {
-                        self.owner.borrow_mut().navigation_failed(&error);
+                        self.navigation_failed(&error);
                         return Err(error);
                     }
                 }
@@ -385,13 +503,28 @@ impl Core {
             {
                 return Err(FlowError::HistoryStale);
             }
-            Ok(UiBridge::from_view(flow.clone(), view))
+            let view = self.page.accept(view)?;
+            Ok(UiBridge::from_session(Rc::clone(&self.page), &view))
         });
         match &result {
-            Ok(_) => *self.owner.borrow_mut() = Owner::Retired,
-            Err(error) => self.owner.borrow_mut().navigation_failed(error),
+            Ok(_) => {
+                *self.owner.borrow_mut() = Owner::Retired;
+                self.page.navigating.set(false);
+                self.page.notify_settings();
+            }
+            Err(error) => self.navigation_failed(error),
         }
         result
+    }
+
+    fn navigation_failed(&self, error: &FlowError) {
+        let mut owner = self.owner.borrow_mut();
+        owner.navigation_failed(error);
+        self.page
+            .navigating
+            .set(matches!(*owner, Owner::Navigating(_)));
+        drop(owner);
+        self.page.notify_settings();
     }
 
     async fn prepare_current(&self) -> Result<Option<PageView>, FlowError> {
@@ -428,7 +561,10 @@ impl Core {
         if view.selection != self.scope {
             return Err(FlowError::HistoryStale);
         }
-        self.view.replace(view.clone());
+        let view = self.page.accept(view)?;
+        if view.selection != self.scope {
+            return Err(FlowError::HistoryStale);
+        }
         Ok(view)
     }
 

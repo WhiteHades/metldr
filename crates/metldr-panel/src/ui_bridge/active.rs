@@ -31,6 +31,7 @@ impl Drop for Watching {
             .owner
             .borrow_mut()
             .observation_finished(&self.0.native);
+        self.0.core.page.notify_settings();
     }
 }
 
@@ -87,6 +88,7 @@ impl UiActiveRun {
             .observe(self.active.native.clone())
             .map_err(js_error)?;
         *self.active.observation.borrow_mut() = Observation::Watching(None);
+        self.active.core.page.notify_settings();
         let watching = Watching(Rc::clone(&self.active));
         Ok(future_to_promise(async move {
             let result = watching.0.watch(stream, emit).await;

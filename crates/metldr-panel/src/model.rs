@@ -290,7 +290,7 @@ fn valid_agent_label(value: &str) -> bool {
     !value.trim().is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
 }
 
-fn valid_agent_profile(profile: &AgentProfile) -> bool {
+pub(crate) fn valid_agent_profile(profile: &AgentProfile) -> bool {
     match profile {
         AgentProfile::Pi {
             executable,

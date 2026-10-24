@@ -877,6 +877,9 @@ impl FlowClient {
     pub(super) fn is_connected(&self) -> bool {
         self.inner.protocol.borrow().connected
     }
+    pub(super) fn same_connection(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.inner, &other.inner)
+    }
     pub(super) fn source_epoch(&self) -> u64 {
         self.inner.epoch.get()
     }
@@ -928,7 +931,19 @@ struct WatchRequest {
 }
 impl Views {
     pub(crate) async fn changed(&mut self) -> Result<Option<PageView>> {
-        let view = poll_fn(|cx| self.cell.borrow_mut().poll(cx)).await?;
+        self.changed_when(|_| true).await
+    }
+
+    pub(super) async fn changed_when(
+        &mut self,
+        include: impl Fn(&PageView) -> bool,
+    ) -> Result<Option<PageView>> {
+        let view = loop {
+            let view = poll_fn(|cx| self.cell.borrow_mut().poll(cx)).await?;
+            if view.as_ref().is_none_or(&include) {
+                break view;
+            }
+        };
         match (view, self.connection.upgrade()) {
             (Some(view), Some(inner)) => Ok(Some(FlowClient { inner }.check_source(view).await)),
             (view, _) => Ok(view),

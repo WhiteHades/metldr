@@ -1,0 +1,83 @@
+[data-settings-editor] {
+  --provider-surface: light-dark(oklch(1 0 none), oklch(0.26 0.006 271.191));
+  --provider-field: light-dark(oklch(0.97 0.002 247.839), oklch(0.289 0.006 271.22));
+  --provider-ink: light-dark(oklch(0.247 0.006 258.361), oklch(0.964 0.002 247.839));
+  --provider-muted: light-dark(oklch(0.506 0.01 264.477), oklch(0.731 0.008 260.731));
+  --provider-line: light-dark(oklch(0.912 0.005 258.326), oklch(0.356 0.007 264.474));
+  --provider-focus: light-dark(oklch(0.626 0.205 254.947), oklch(0.68 0.173 253.301));
+  --provider-space: clamp(0.75rem, 0.5rem + 1vi, 1rem);
+  inline-size: 100%;
+  max-inline-size: 46rem;
+  margin-inline: auto;
+  margin-block: var(--provider-space);
+  padding: var(--provider-space);
+  color: var(--provider-ink);
+  background: var(--provider-surface);
+  border: 1px solid var(--provider-line);
+  border-radius: 0.875rem;
+  font: 0.875rem/1.5 Inter, "Inter Fallback", ui-sans-serif, system-ui, sans-serif;
+  interpolate-size: allow-keywords;
+}
+[data-settings-editor] :is(form, fieldset, input) { min-inline-size: 0; }
+[data-settings-editor] :is(p, fieldset, form) { margin: 0; }
+[data-settings-editor] > summary { font: inherit; font-weight: 600; }
+[data-settings-editor] summary { list-style: none; }
+[data-settings-editor] summary::-webkit-details-marker { display: none; }
+[data-settings-editor] summary::after,
+[data-settings-editor] details[open] > summary::after,
+[data-settings-editor][open] > summary::after { content: none; }
+[data-settings-editor] summary > svg { flex: none; block-size: 1cap; inline-size: auto; margin-inline-start: auto; fill: none; stroke: currentColor; stroke-width: 2; }
+[data-settings-editor][open] > summary > svg,
+[data-settings-editor] details[open] > summary > svg { rotate: 180deg; }
+[data-settings-body] { display: flex; flex-direction: column; gap: 0.75rem; padding-block-start: 0.75rem; }
+[data-settings-body] > button { align-self: start; }
+[data-settings-row] { border-block-start: 1px solid var(--provider-line); }
+[data-settings-row] > summary { font: inherit; min-block-size: 44px; }
+[data-settings-row] fieldset { display: grid; gap: 0.5rem; border: 0; padding-block: 0.75rem; padding-inline: 0.25rem; }
+[data-settings-row] label { color: var(--provider-muted); }
+[data-settings-row] input:not([type="checkbox"]) {
+  inline-size: 100%;
+  min-block-size: 44px;
+  padding-block: 0.5rem;
+  padding-inline: 0.75rem;
+  border: 1px solid var(--provider-muted);
+  border-radius: 0.5rem;
+  color: var(--provider-ink);
+  background: var(--provider-field);
+  font: inherit;
+  font-size: max(16px, 1rem);
+  caret-color: var(--provider-focus);
+}
+[data-settings-actions] { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 7.5rem), 1fr)); gap: 0.5rem; }
+[data-settings-conflict] { display: grid; gap: 0.5rem; }
+[data-settings-conflict] dl { display: grid; gap: 0.25rem; margin: 0; overflow-wrap: break-word; }
+[data-settings-conflict] dt { color: var(--provider-muted); }
+[data-settings-conflict] dd { margin-inline: 0; }
+[data-settings-editor] button { min-block-size: 44px; padding-block: 0.5rem; padding-inline: 0.75rem; font: inherit; color: var(--provider-ink); background: var(--provider-field); border: 1px solid var(--provider-line); border-radius: 0.5rem; }
+[data-settings-editor] button:not([id$="-reset"]) { text-box: trim-both cap alphabetic; }
+[data-settings-editor] button:disabled,
+[data-settings-editor] input:disabled { opacity: 0.65; cursor: default; }
+[data-settings-editor] :is(button, summary):active:not(:disabled) { background: color-mix(in oklch, var(--provider-ink) 12%, var(--provider-field)); }
+[data-settings-editor] :is(button, input, summary):focus-visible { outline: 2px solid var(--provider-focus); outline-offset: 3px; }
+[data-settings-editor] :is(p, summary) { overflow-wrap: break-word; }
+[data-settings-editor] [role="status"] { color: var(--provider-muted); }
+[data-settings-editor] [role="alert"] { color: var(--provider-ink); font-weight: 500; }
+[data-settings-editor] ::selection { background: color-mix(in oklch, var(--provider-focus) 25%, var(--provider-surface)); color: var(--provider-ink); }
+:is([data-settings-editor], [data-settings-editor] details)::details-content { block-size: 0; overflow: clip; }
+:is([data-settings-editor], [data-settings-editor] details)[open]::details-content { block-size: auto; }
+@media (hover: hover) and (pointer: fine) {
+  [data-settings-editor] :is(button, summary):hover:not(:disabled) { background: color-mix(in oklch, var(--provider-ink) 6%, var(--provider-field)); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-settings-editor] button { transition: background-color 150ms var(--ease-out, ease-out), scale 150ms var(--ease-out, ease-out); }
+  [data-settings-editor] button:active:not(:disabled) { scale: 0.97; }
+  :is([data-settings-editor], [data-settings-editor] details)::details-content { transition: block-size 240ms var(--ease-out, ease-out), content-visibility 240ms allow-discrete; }
+}
+@media (forced-colors: active) {
+  [data-settings-editor] :is(button, input) { border-color: ButtonText; }
+  [data-settings-editor] :is(button, input, summary):focus-visible { outline-color: Highlight; }
+}
+
+[data-settings-row] [data-settings-toggle] { display: inline-flex; align-items: baseline; gap: 0.5em; min-block-size: 44px; color: var(--provider-ink); }
+[data-settings-toggle] input { flex: none; inline-size: 1.25em; block-size: 1.25em; margin: 0; accent-color: var(--provider-focus); }
+[data-settings-toggle]:active { background: color-mix(in oklch, var(--provider-ink) 6%, var(--provider-field)); }

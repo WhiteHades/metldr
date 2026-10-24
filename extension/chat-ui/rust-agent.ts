@@ -55,6 +55,11 @@ export class RustAgent extends AbstractAgent {
     else if (this.isRunning) this.abortRequested = true;
   }
 
+  prepareRun(selection: Pick<RustAgentConfig, "destination" | "mode">): void {
+    if (this.isRunning || this.abortActive) throw new Error("This agent already has an active run.");
+    this.config = { ...this.config, ...selection };
+  }
+
   protected override connect(input: RunAgentInput): Observable<BaseEvent> {
     const recovery = this.config.recovery;
     if (!recovery) return super.connect(input);
@@ -165,7 +170,8 @@ export class RustAgent extends AbstractAgent {
         subscriber.error(new Error("This run only supports a plain text user message without tools or state."));
         return;
       }
-      if (!this.config.destination.trim() || !["configured", "plan"].includes(this.config.mode)) {
+      const { destination, mode } = this.config;
+      if (!destination.trim() || !["configured", "plan"].includes(mode)) {
         subscriber.error(new Error("A destination and supported mode are required."));
         return;
       }
@@ -216,9 +222,9 @@ export class RustAgent extends AbstractAgent {
             parsed.threadId,
             parsed.runId,
             lastMessage.id,
-            this.config.destination,
+            destination,
             text,
-            this.config.mode,
+            mode,
           );
           delivery = { phase: "submitted", bridge, stopRequested: false };
           await bridge.run(request, (eventJson: string) => {

@@ -43,6 +43,10 @@ pub(super) enum Stop {
 }
 
 impl Owner {
+    pub(super) fn settings_ready(&self) -> bool {
+        matches!(self, Self::Idle)
+    }
+
     pub(super) fn observe(&mut self, native: RunId) -> Result<(), FlowError> {
         self.idle()?;
         *self = Self::Observing(native);
