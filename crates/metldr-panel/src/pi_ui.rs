@@ -827,8 +827,8 @@ fn display_plain(value: &str) -> String {
                         index += 1;
                     }
                 }
-                Some(_) => index += 1,
-                None => {}
+                Some(byte) if byte.is_ascii() => index += 1,
+                _ => {}
             }
             continue;
         }
@@ -853,6 +853,7 @@ mod tests {
         assert_eq!(display_plain("a\u{1b}]0;title\u{7}b"), "ab");
         assert_eq!(display_plain("x\u{1b}[31"), "x");
         assert_eq!(display_plain("x\u{1b}]unfinished"), "x");
+        assert_eq!(display_plain("\u{1b}雪 🌱"), "雪 🌱");
     }
 }
 fn js_flow(error: JsValue) -> FlowError {
