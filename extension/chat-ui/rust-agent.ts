@@ -35,6 +35,9 @@ export class RustAgent extends AbstractAgent {
   constructor(config: RustAgentConfig) {
     super();
     this.config = { ...config };
+    this.subscribe({
+      onMessagesSnapshotEvent: ({ event }) => ({ messages: event.messages }),
+    });
   }
 
   clone(): RustAgent {
