@@ -16,6 +16,7 @@ pub(crate) struct Pins {
 }
 
 struct Pin {
+    request: String,
     identity: Identity,
     snapshot: Snapshot,
     last_used: Instant,
@@ -72,6 +73,7 @@ impl Pins {
 
     pub(super) fn find(
         &mut self,
+        request: &str,
         kind: DocumentKind,
         document: &str,
         revision: Counter,
@@ -79,7 +81,8 @@ impl Pins {
     ) -> Option<Identity> {
         self.expire(now);
         let pin = self.pins.iter_mut().find(|pin| {
-            pin.identity.kind == kind
+            pin.request == request
+                && pin.identity.kind == kind
                 && pin.identity.document == document
                 && pin.identity.revision == revision
         })?;
@@ -89,6 +92,7 @@ impl Pins {
 
     pub(super) fn insert(
         &mut self,
+        request: &str,
         kind: DocumentKind,
         document: &str,
         revision: Counter,
@@ -124,6 +128,7 @@ impl Pins {
         let snapshot = Snapshot::new(identity.clone(), value)?;
         self.next_ticket = next;
         self.pins.push(Pin {
+            request: request.to_owned(),
             identity: identity.clone(),
             snapshot,
             last_used: now,
@@ -198,6 +203,7 @@ mod checks {
         let generation = pins.context(&scope, now)?;
         pins.accept(&scope, &generation, now)?;
         let identity = pins.insert(
+            "first",
             DocumentKind::Run,
             &format!("{}:1", scope.store),
             Counter(1),
@@ -214,6 +220,7 @@ mod checks {
             "invalid requests must not extend idle lifetime"
         );
         let identity = pins.insert(
+            "new",
             DocumentKind::Run,
             &format!("{}:1", scope.store),
             Counter(2),

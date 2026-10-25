@@ -152,7 +152,10 @@ impl Owner {
     ) -> Result<()> {
         let scope = self.check_history(&scope, generation)?;
         let now = Instant::now();
-        if let Some(identity) = self.history_pins.find(kind, document, revision, now) {
+        if let Some(identity) = self
+            .history_pins
+            .find(request, kind, document, revision, now)
+        {
             return self.emit(json!({"v":crate::WIRE_VERSION,"request":request,"kind":"history_pinned","identity":identity}));
         }
         let ((observed, sequence), _) = self.persist_records(|edit, _| {
@@ -181,9 +184,14 @@ impl Owner {
         if kind == DocumentKind::Source && observed.value.is_null() {
             return self.emit(json!({"v":crate::WIRE_VERSION,"request":request,"kind":"history_unavailable","scope":Scope::from(&scope),"generation":generation,"document":document,"revision":revision}));
         }
-        let identity =
-            self.history_pins
-                .insert(kind, document, revision, &observed.value, Instant::now())?;
+        let identity = self.history_pins.insert(
+            request,
+            kind,
+            document,
+            revision,
+            &observed.value,
+            Instant::now(),
+        )?;
         self.emit(json!({"v":crate::WIRE_VERSION,"request":request,"kind":"history_pinned","identity":identity}))
     }
 

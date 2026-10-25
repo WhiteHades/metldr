@@ -322,8 +322,17 @@ fn saved_history_native_frames_pin_retry_release_and_restart() -> Result<()> {
     let first = host.reply("pin")?;
     assert_eq!(first["kind"], "history_pinned");
     let identity: Identity = serde_json::from_value(first["identity"].clone())?;
-    host.send("retry-pin", pin.clone())?;
-    assert_eq!(host.reply("retry-pin")?["identity"], first["identity"]);
+    host.send("pin", pin.clone())?;
+    assert_eq!(host.reply("pin")?["identity"], first["identity"]);
+    host.send("other-reader", pin.clone())?;
+    let other = host.reply("other-reader")?;
+    assert_eq!(other["kind"], "history_pinned");
+    assert_ne!(other["identity"], first["identity"]);
+    host.send(
+        "other-reader-release",
+        json!({"op":"history_release","identity":other["identity"]}),
+    )?;
+    assert_eq!(host.reply("other-reader-release")?["released"], true);
     let mut assembled = Assembler::new(identity.clone())?;
     let mut fragments = 0;
     loop {
