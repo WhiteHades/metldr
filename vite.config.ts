@@ -55,7 +55,7 @@ const rustWelcome = (): Plugin => ({
 
 const copyWasmAssets = () => ({
   name: 'copy-wasm-assets',
-  closeBundle() {
+  writeBundle() {
     if (!isContentBuild) {
       const assetsDir = resolve('dist/assets')
       if (!existsSync(assetsDir)) {
@@ -87,7 +87,7 @@ const copyWasmAssets = () => ({
 
 const copyInboxSDKPlugin = () => ({
   name: 'copy-inboxsdk-pageworld',
-  closeBundle() {
+  writeBundle() {
     if (!isContentBuild) {
       const src = resolve('node_modules/@inboxsdk/core/pageWorld.js')
       const dest = resolve('dist/pageWorld.js')
