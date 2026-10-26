@@ -13,14 +13,15 @@ impl PageSession {
         });
     }
 
-    fn refresh_action_source(self: &Rc<Self>) {
+    pub(super) fn refresh_action_source(self: &Rc<Self>) {
         if self.invalidated.get()
-            || !self
-                .view
-                .borrow()
-                .browser_actions
-                .iter()
-                .any(|action| action.phase == BrowserActionPhase::Pending)
+            || (!self.has_source_observers()
+                && !self
+                    .view
+                    .borrow()
+                    .browser_actions
+                    .iter()
+                    .any(|action| action.phase == BrowserActionPhase::Pending))
             || self.source_refreshing.replace(true)
         {
             return;

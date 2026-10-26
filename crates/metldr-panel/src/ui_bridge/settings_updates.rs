@@ -240,6 +240,7 @@ impl Observer {
 impl PageSession {
     pub(super) fn notify_settings(&self) {
         self.notify_connection();
+        self.notify_source();
         let observers: Vec<_> = {
             let mut subscriptions = self.settings_subscriptions.borrow_mut();
             subscriptions.retain(|weak| weak.upgrade().is_some_and(|item| !item.closed()));

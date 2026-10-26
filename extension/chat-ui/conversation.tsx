@@ -24,6 +24,7 @@ import { NativeToolChips } from "./native-tool-chips";
 import { RunDetails } from "./run-details";
 import { useConnection } from "./connection";
 import { useReviewDraft } from "./review-draft";
+import { SavedSource } from "./saved-source";
 import "./run-details.css";
 import "./chat-theme.css";
 
@@ -247,6 +248,7 @@ function Conversation({ initial, failure, bridge, recovery, enqueue, destination
   return <ChatLayout {...navigation} navigationDisabled={controlsDisabled}
     status={null} composer={prompt} content={visible.length ? {kind:"thread", body:<>
       {toolbar}
+      <SavedSource bridge={bridge} />
       <div data-bridge-messages=""><MessageThread messages={visible} liveMessageIds={liveIds} running={agent.isRunning || submitting || nativeRunning} renderActivity={renderActivityMessage} /></div>
       <NativePermissions bridge={bridge} onPendingChange={setApprovalPending} />
       <BrowserActions bridge={bridge} onPendingChange={setBrowserApprovalPending} />
@@ -255,6 +257,7 @@ function Conversation({ initial, failure, bridge, recovery, enqueue, destination
     </>} : {kind:"empty", body:<div className="chat-empty">
       <h1><span>Welcome to metldr</span><span>What do you want to do?</span></h1>
       {toolbar}
+      <SavedSource bridge={bridge} />
       <NativePermissions bridge={bridge} onPendingChange={setApprovalPending} />
       <BrowserActions bridge={bridge} onPendingChange={setBrowserApprovalPending} />
       <CodexInput bridge={bridge} />

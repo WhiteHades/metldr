@@ -36,6 +36,7 @@ mod pi_ui;
 mod providers;
 mod run_details;
 mod run_reference;
+mod saved_source;
 mod settings;
 mod settings_updates;
 mod source_updates;
@@ -64,6 +65,7 @@ pub use pi_ui::{
 };
 pub use providers::{UiProviderConnection, UiProviderSettings};
 pub use run_details::{UiRunDetails, UiRunReport, UiRunReportPage};
+pub use saved_source::{UiSavedSource, UiSourceSnapshot, UiSourceStatus, UiSourceSubscription};
 pub use settings_updates::{UiAgentSnapshot, UiProviderSnapshot, UiSettingsSubscription};
 
 #[wasm_bindgen]
@@ -140,6 +142,7 @@ struct PageSession {
     source_refreshing: Cell<bool>,
     recovery: RefCell<connection::Slot>,
     connection_subscriptions: RefCell<Vec<std::rc::Weak<connection::Observer>>>,
+    source_subscriptions: RefCell<Vec<std::rc::Weak<saved_source::Observer>>>,
     connection_waiter: RefCell<Option<Waker>>,
 }
 
@@ -224,6 +227,7 @@ impl UiBridge {
             source_refreshing: Cell::new(false),
             recovery: RefCell::new(connection::Slot::default()),
             connection_subscriptions: RefCell::new(Vec::new()),
+            source_subscriptions: RefCell::new(Vec::new()),
             connection_waiter: RefCell::new(None),
         });
         page.install_source_updates();

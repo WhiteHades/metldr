@@ -1,0 +1,66 @@
+.saved-source {
+  --source-ease: var(--ease-out, cubic-bezier(0.23, 1, 0.32, 1));
+  --source-duration: 180ms;
+  min-inline-size: 0;
+  color: var(--ink);
+  font-size: 13px;
+  interpolate-size: allow-keywords;
+}
+.saved-source > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5em;
+  min-block-size: 44px;
+  padding-block: 0.75rem;
+  list-style: none;
+  cursor: pointer;
+}
+.saved-source > summary::-webkit-details-marker { display: none; }
+.saved-source > summary > [role="status"] { color: var(--ink-2); }
+.saved-source > summary > svg {
+  flex: none;
+  inline-size: auto;
+  block-size: 1cap;
+  margin-inline-start: auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+}
+.saved-source[open] > summary > svg { rotate: 180deg; }
+.saved-source__body { display: flex; flex-direction: column; gap: 0.75rem; padding-block: 0.75rem; }
+.saved-source__body > :is(h2, p) { margin: 0; overflow-wrap: break-word; }
+.saved-source__body > h2 { font-size: 1rem; font-weight: 600; }
+.saved-source__body > [data-source-url] { color: var(--ink-2); }
+.saved-source__text {
+  max-block-size: 16lh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scrollbar-color: var(--ink-2) var(--page);
+  white-space: pre-wrap;
+}
+.saved-source button {
+  align-self: start;
+  min-block-size: 44px;
+  padding-block: 0.75rem;
+  padding-inline: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--field);
+  text-box: trim-both cap alphabetic;
+  cursor: pointer;
+}
+.saved-source button:disabled { opacity: 0.5; cursor: default; }
+.saved-source :is(button, summary):focus-visible { outline: 2px solid var(--ink-2); outline-offset: 3px; }
+.saved-source :is(button, summary):active:not(:disabled) { background: var(--hover-2); }
+.saved-source button:active:not(:disabled) { scale: 0.97; }
+.saved-source::details-content { block-size: 0; overflow: clip; }
+.saved-source[open]::details-content { block-size: auto; }
+@media (hover: hover) and (pointer: fine) {
+  .saved-source :is(button, summary):hover:not(:disabled) { background: var(--hover); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .saved-source::details-content { transition: block-size var(--source-duration) var(--source-ease), content-visibility var(--source-duration) allow-discrete; }
+  .saved-source button { transition: scale 150ms var(--source-ease); }
+}
