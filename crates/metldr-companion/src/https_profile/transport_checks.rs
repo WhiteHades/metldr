@@ -36,6 +36,13 @@ fn scripted(
     )
 }
 
+fn scripted_responses(
+    replies: Vec<(String, String)>,
+    key: &str,
+) -> (String, thread::JoinHandle<Vec<Value>>) {
+    scripted_protocol(replies, key, Protocol::Responses)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Protocol {
     Messages,
@@ -246,4 +253,263 @@ fn verifies_public_messages_tls_and_does_not_follow_redirects() {
             worker.join().unwrap();
         }
     });
+}
+
+#[test]
+fn public_responses_presentation_preserves_text_and_opaque_tool_continuation_over_tls() {
+    fn sse(mut events: Vec<Value>) -> String {
+        for (sequence, event) in events.iter_mut().enumerate() {
+            event["sequence_number"] = json!(sequence);
+        }
+        events
+            .iter()
+            .map(|event| {
+                format!(
+                    "event: {}\ndata: {event}\n\n",
+                    event["type"].as_str().unwrap()
+                )
+            })
+            .collect()
+    }
+
+    let args = json!({"surfaceId":"surface-owned","catalogId":"copilotkit://open-generative-ui-tables",
+        "components":[{"id":"root","component":"Table","title":"Quarterly sales",
+            "columns":["Quarter","Sales"],"rows":[["Q1","$100"],["Q2","$250"]],
+            "source":"User-provided data"}]});
+    let reasoning = json!({"type":"reasoning","id":"rs_owned","summary":[],
+        "encrypted_content":"opaque-final-owned"});
+    let before = json!({"type":"message","id":"msg_before","role":"assistant","status":"completed",
+        "content":[{"type":"output_text","text":"Before the table.","annotations":[]}]});
+    let call = json!({"type":"function_call","id":"fc_item_owned","call_id":"call_owned",
+        "name":"render_a2ui","arguments":args.to_string(),"status":"completed"});
+    let after = json!({"type":"message","id":"msg_after","role":"assistant","status":"completed",
+        "content":[{"type":"output_text","text":" After the table.","annotations":[]}]});
+    let mut first = vec![
+        json!({"type":"response.created","response":{"id":"resp_first",
+        "object":"response","model":"model","store":false,"status":"in_progress"}}),
+    ];
+    first.extend([
+        json!({"type":"response.output_item.added","output_index":0,
+            "item":{"type":"reasoning","id":"rs_owned","summary":[],"encrypted_content":"partial"}}),
+        json!({"type":"response.output_item.done","output_index":0,"item":reasoning.clone()}),
+        json!({"type":"response.output_item.added","output_index":1,
+            "item":{"type":"message","id":"msg_before","role":"assistant","status":"in_progress","content":[]}}),
+        json!({"type":"response.output_text.delta","output_index":1,"item_id":"msg_before","content_index":0,"delta":"Before the table."}),
+        json!({"type":"response.output_text.done","output_index":1,"item_id":"msg_before","content_index":0,"text":"Before the table."}),
+        json!({"type":"response.output_item.done","output_index":1,"item":before.clone()}),
+        json!({"type":"response.output_item.added","output_index":2,
+            "item":{"type":"function_call","id":"fc_item_owned","call_id":"call_owned","name":"render_a2ui","arguments":"","status":"in_progress"}}),
+        json!({"type":"response.function_call_arguments.delta","output_index":2,"item_id":"fc_item_owned","delta":args.to_string()}),
+        json!({"type":"response.function_call_arguments.done","output_index":2,"item_id":"fc_item_owned","arguments":args.to_string()}),
+        json!({"type":"response.output_item.done","output_index":2,"item":call.clone()}),
+        json!({"type":"response.output_item.added","output_index":3,
+            "item":{"type":"message","id":"msg_after","role":"assistant","status":"in_progress","content":[]}}),
+        json!({"type":"response.output_text.delta","output_index":3,"item_id":"msg_after","content_index":0,"delta":" After the table."}),
+        json!({"type":"response.output_text.done","output_index":3,"item_id":"msg_after","content_index":0,"text":" After the table."}),
+        json!({"type":"response.output_item.done","output_index":3,"item":after.clone()}),
+    ]);
+    let completed = json!({"type":"response.completed","response":{"id":"resp_first",
+        "object":"response","model":"model","store":false,"status":"completed",
+        "error":null,"incomplete_details":null,"output":[reasoning,before,call,after]}});
+    first.push(completed);
+
+    let final_message = json!({"type":"message","id":"msg_final","role":"assistant","status":"completed",
+        "content":[{"type":"output_text","text":" Finished.","annotations":[]}]});
+    let second = vec![
+        json!({"type":"response.created","response":{"id":"resp_second",
+        "object":"response","model":"model","store":false,"status":"in_progress"}}),
+        json!({"type":"response.output_item.added","output_index":0,
+            "item":{"type":"message","id":"msg_final","role":"assistant","status":"in_progress","content":[]}}),
+        json!({"type":"response.output_text.delta","output_index":0,"item_id":"msg_final","content_index":0,"delta":" Finished."}),
+        json!({"type":"response.output_text.done","output_index":0,"item_id":"msg_final","content_index":0,"text":" Finished."}),
+        json!({"type":"response.output_item.done","output_index":0,"item":final_message.clone()}),
+        json!({"type":"response.completed","response":{"id":"resp_second","object":"response",
+            "model":"model","store":false,"status":"completed","error":null,
+            "incomplete_details":null,"output":[final_message]}}),
+    ];
+    let first_body = sse(first);
+    let replies = vec![
+        ("200 OK".into(), first_body.clone()),
+        ("200 OK".into(), sse(second)),
+    ];
+    let (endpoint, worker) = scripted_responses(replies, "dummy-owned-browser-fixture");
+    let client = metldr_responses::Client::new(
+        &endpoint,
+        "model",
+        "dummy-owned-browser-fixture",
+        Some(include_bytes!("../../test-tls/ca.pem")),
+    )
+    .unwrap();
+    let mut conversation = client.start_presentation("present", "show sales").unwrap();
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let mut rendered = String::new();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let invocation = conversation
+            .next(&stop, |event| {
+                if let metldr_conversation::TextEvent::Delta(text) = event {
+                    rendered.push_str(&text);
+                }
+                Ok(())
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(rendered, "Before the table.");
+        assert_eq!(invocation.id, "call_owned");
+        assert_eq!(invocation.presentation.surface_id, "surface-owned");
+        assert_eq!(invocation.presentation.table.title(), "Quarterly sales");
+        assert_eq!(
+            invocation.presentation.table.columns(),
+            ["Quarter", "Sales"]
+        );
+        assert_eq!(invocation.presentation.table.rows()[1], ["Q2", "$250"]);
+        assert_eq!(invocation.presentation.table.source(), "User-provided data");
+        assert_eq!(
+            conversation
+                .next(&stop, |_| Ok(()))
+                .await
+                .err()
+                .unwrap()
+                .to_string(),
+            "Responses tool result missing"
+        );
+        conversation
+            .submit_tool_result(
+                &json!({"status":"saved","artifactId":"artifact-owned"}),
+                |event| {
+                    if let metldr_conversation::TextEvent::Delta(text) = event {
+                        rendered.push_str(&text);
+                    }
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert_eq!(rendered, "Before the table. After the table.");
+        assert!(
+            conversation
+                .next(&stop, |event| {
+                    if let metldr_conversation::TextEvent::Delta(text) = event {
+                        rendered.push_str(&text);
+                    }
+                    Ok(())
+                })
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(rendered, "Before the table. After the table. Finished.");
+    });
+    let requests = worker.join().unwrap();
+    assert_eq!(requests.len(), 2);
+    let continuation = requests[1]["input"].as_array().unwrap();
+    assert_eq!(continuation[1]["encrypted_content"], "opaque-final-owned");
+    assert_eq!(continuation[3]["id"], "fc_item_owned");
+    assert_eq!(continuation[3]["call_id"], "call_owned");
+    assert_ne!(continuation[3]["id"], continuation[3]["call_id"]);
+    assert_eq!(continuation[2]["content"][0]["text"], "Before the table.");
+    assert_eq!(continuation[4]["content"][0]["text"], " After the table.");
+    assert_eq!(continuation[5]["call_id"], "call_owned");
+    assert_eq!(
+        serde_json::from_str::<Value>(continuation[5]["output"].as_str().unwrap()).unwrap(),
+        json!({"status":"saved","artifactId":"artifact-owned"})
+    );
+
+    let (endpoint, worker) = scripted_responses(
+        vec![("200 OK".into(), first_body.clone())],
+        "dummy-owned-browser-fixture",
+    );
+    let client = metldr_responses::Client::new(
+        &endpoint,
+        "model",
+        "dummy-owned-browser-fixture",
+        Some(include_bytes!("../../test-tls/ca.pem")),
+    )
+    .unwrap();
+    let mut conversation = client.start_presentation("present", "show sales").unwrap();
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let error = runtime
+        .block_on(conversation.next(&stop, |event| {
+            if matches!(event, metldr_conversation::TextEvent::Delta(_)) {
+                stop.store(true, std::sync::atomic::Ordering::Release);
+            }
+            Ok(())
+        }))
+        .err()
+        .unwrap();
+    assert_eq!(error.to_string(), "Responses request cancelled");
+    assert_eq!(
+        runtime
+            .block_on(conversation.next(&std::sync::atomic::AtomicBool::new(false), |_| Ok(()),))
+            .err()
+            .unwrap()
+            .to_string(),
+        "Responses conversation is closed"
+    );
+    assert_eq!(worker.join().unwrap().len(), 1);
+
+    let (endpoint, server) = scripted_responses(
+        vec![("200 OK".into(), first_body)],
+        "dummy-owned-browser-fixture",
+    );
+    let client = metldr_responses::Client::new(
+        &endpoint,
+        "model",
+        "dummy-owned-browser-fixture",
+        Some(include_bytes!("../../test-tls/ca.pem")),
+    )
+    .unwrap();
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let worker_stop = Arc::clone(&stop);
+    let (tx, rx) = std::sync::mpsc::sync_channel(8);
+    let worker = thread::spawn(move || {
+        let mut output = crate::direct_output::DirectOutput::new("owned-run", &tx);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime
+            .block_on(crate::presentation::run(
+                client,
+                "present",
+                "show sales",
+                "owned-run",
+                &tx,
+                &worker_stop,
+                &mut output,
+            ))
+            .map_err(|error| error.to_string())
+    });
+    let mut prefix = String::new();
+    loop {
+        match rx.recv_timeout(Duration::from_secs(5)).unwrap() {
+            crate::flow::Event::Text {
+                change: metldr_conversation::Change::Append { text, .. },
+                ..
+            } => prefix.push_str(&text),
+            crate::flow::Event::Text {
+                change: metldr_conversation::Change::Final { .. },
+                ..
+            } => (),
+            crate::flow::Event::Table { ack, .. } => {
+                stop.store(true, std::sync::atomic::Ordering::Release);
+                let _ = ack.try_send(Ok(metldr_conversation::ArtifactId::new(
+                    "owned-artifact".into(),
+                )
+                .unwrap()));
+                break;
+            }
+            _ => panic!("unexpected presentation event"),
+        }
+    }
+    assert_eq!(
+        worker.join().unwrap().unwrap_err(),
+        "table response cancelled"
+    );
+    assert_eq!(prefix, "Before the table.");
+    assert!(rx.try_iter().next().is_none());
+    assert_eq!(server.join().unwrap().len(), 1);
 }

@@ -1,0 +1,51 @@
+/* Copyright (c) Atai Barkai. MIT notice in data-table.tsx. */
+.answer-table {
+  margin-block: 1rem;
+  margin-inline: 0;
+  border: 1px solid var(--color-border, var(--line, oklch(from #d8d8d8 l c none)));
+  border-radius: 12px;
+  min-inline-size: 0;
+  overflow: clip;
+}
+.answer-table-scroll {
+  overflow-x: auto;
+}
+.answer-table-scroll:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: -2px;
+}
+.answer-table table {
+  inline-size: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.answer-table caption {
+  padding: 1rem;
+  text-align: start;
+  font-weight: 600;
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+.answer-table th,
+.answer-table td {
+  text-align: start;
+  vertical-align: top;
+  padding-block: 0.75rem;
+  padding-inline: 1rem;
+  border-block-start: 1px solid var(--color-border, var(--line, oklch(from #d8d8d8 l c none)));
+  overflow-wrap: anywhere;
+  min-inline-size: 100px;
+  font-variant-numeric: tabular-nums;
+}
+.answer-table th {
+  font-weight: 600;
+  background: var(--color-background-secondary, var(--surface, oklch(from #f5f5f5 l c none)));
+}
+.answer-table-source {
+  padding-block: 0.75rem;
+  padding-inline: 1rem;
+  margin: 0;
+  font-size: 0.8rem;
+  opacity: 0.75;
+  overflow-wrap: anywhere;
+}

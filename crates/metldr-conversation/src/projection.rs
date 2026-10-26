@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::content::{Completion, Entry};
 use crate::key::validate_id;
-use crate::{MAX_ENTRIES, MAX_MESSAGES, MAX_TEXT_BYTES, MAX_TOOLS, MessageKey, ToolId};
+use crate::{ArtifactId, MAX_ENTRIES, MAX_MESSAGES, MAX_TEXT_BYTES, MAX_TOOLS, MessageKey, ToolId};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -15,6 +15,9 @@ pub enum ProjectedEntry {
     },
     Tool {
         id: ToolId,
+    },
+    Artifact {
+        id: ArtifactId,
     },
 }
 
@@ -34,6 +37,9 @@ pub enum EntryRef<'a> {
     },
     Tool {
         id: &'a ToolId,
+    },
+    Artifact {
+        id: &'a ArtifactId,
     },
 }
 
@@ -68,6 +74,7 @@ impl Display {
                     completion,
                 },
                 ProjectedEntry::Tool { id } => EntryRef::Tool { id },
+                ProjectedEntry::Artifact { id } => EntryRef::Artifact { id },
             })
     }
 }
@@ -78,6 +85,7 @@ pub(crate) fn from_native_entries(entries: &[Entry], length: usize) -> Projectio
         .iter()
         .map(|entry| match entry {
             Entry::Tool { id } => ProjectedEntry::Tool { id: id.clone() },
+            Entry::Artifact { id } => ProjectedEntry::Artifact { id: id.clone() },
             Entry::Message {
                 key,
                 text,
@@ -113,10 +121,15 @@ fn validate_projection(projection: &Projection) -> Result<(), String> {
     let mut cursor = 0;
     let mut messages: Vec<&MessageKey> = Vec::new();
     let mut tools: Vec<&ToolId> = Vec::new();
+    let mut artifacts: Vec<&ArtifactId> = Vec::new();
+    let mut open_text = false;
     for entry in &projection.conversation {
         match entry {
             ProjectedEntry::Message {
-                key, start, end, ..
+                key,
+                start,
+                end,
+                completion,
             } => {
                 key.validate()?;
                 if messages.contains(&key) {
@@ -132,6 +145,7 @@ fn validate_projection(projection: &Projection) -> Result<(), String> {
                     return Err("message ranges must partition output at UTF-8 boundaries".into());
                 }
                 cursor = *end;
+                open_text |= *completion == Completion::Streaming;
             }
             ProjectedEntry::Tool { id } => {
                 validate_id(id.as_str(), "tool id")?;
@@ -139,6 +153,15 @@ fn validate_projection(projection: &Projection) -> Result<(), String> {
                     return Err("duplicate tool id".into());
                 }
                 tools.push(id);
+            }
+            ProjectedEntry::Artifact { id } => {
+                if open_text {
+                    return Err("artifact requires completed preceding text".into());
+                }
+                if artifacts.contains(&id) || artifacts.len() >= crate::MAX_ARTIFACTS {
+                    return Err("duplicate or too many artifact references".into());
+                }
+                artifacts.push(id);
             }
         }
     }

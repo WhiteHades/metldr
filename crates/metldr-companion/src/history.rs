@@ -6,7 +6,9 @@ use std::{
     sync::Arc,
 };
 
+mod artifacts;
 mod context;
+pub(crate) use artifacts::Artifact;
 mod edit;
 pub(crate) use edit::{
     ConversationBusy, ConversationChange, ConversationChanged, ConversationPage, Cursor, Edit,
@@ -94,6 +96,7 @@ impl History {
         let profile: schema::Profile = schema::decode(bytes.value())?;
         profile.validate()?;
         schema::require_base_tables(&read)?;
+        artifacts::audit(&read, &profile)?;
         read.open_table(schema::NATIVE_CHOICES)?;
         read.open_table(schema::SELECTIONS)?;
         let order = read.open_table(schema::CONVERSATION_ORDER)?;

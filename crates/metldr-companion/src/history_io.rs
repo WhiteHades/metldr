@@ -175,6 +175,13 @@ impl Owner {
                         value: serde_json::to_value(observed.value)?,
                     }
                 }
+                DocumentKind::Artifact => {
+                    let observed = edit.artifact_detail(&scope, document)?;
+                    crate::history::Observed {
+                        revision: observed.revision,
+                        value: serde_json::to_value(observed.value)?,
+                    }
+                }
             };
             Ok(((value, edit.sequence()?), None))
         })?;

@@ -8,9 +8,12 @@ Install Node.js, the mise managed Portless command, and the pinned Rust toolchai
 rustup target add wasm32-unknown-unknown
 cargo install wasm-bindgen-cli --version 0.2.128 --locked
 npm ci
+npm run install:chat
 ```
 
-Run `npm run dev` to build the Rust modules and start the named metldr preview through Portless. Open the URL printed by Portless. Add `/welcome.html`, `/panel.html`, or `/index.html` to view the welcome page, browser agent, or current page tools. A web preview does not have Chrome extension access.
+The chat interface has its own pinned dependencies. Run `npm run install:chat` again when its lock file changes. `npm run check:chat` uses its Go based TypeScript compiler. The current page tools keep their existing compiler during migration.
+
+Run `npm run dev` to build the Rust modules and start the named metldr preview through Portless. Open the URL printed by Portless. Add `/welcome.html`, `/chat.html`, `/panel.html`, or `/index.html` to view the welcome page, chat interface, earlier browser agent, or current page tools. A web preview does not have Chrome extension access.
 
 Run `npm run build` to create the extension in `dist`. In Chrome, open `chrome://extensions`, enable Developer mode, choose **Load unpacked**, and select `dist`. After another build, reload the extension from the same page.
 
@@ -26,4 +29,6 @@ Open Help on the welcome page for Chrome AI and Ollama setup. Its Ollama guide i
 
 ## Checks
 
-Run `make check-rust`, `make check-panel` or `make check-companion` for the affected code. Run `make rust` after Rust changes during a preview session. See the [panel guide](../crates/metldr-panel/README.md) for browser setup and module details.
+Run `npm run check:chat` for the chat interface and `npm run build:chat` after generating its Rust bindings.
+
+Run `make check-rust`, `make check-panel` or `make check-companion` for the affected code. Run `make rust` after Rust changes during a preview session. The build also refreshes the chat's Rust bindings. See the [panel guide](../crates/metldr-panel/README.md) for browser setup and module details.

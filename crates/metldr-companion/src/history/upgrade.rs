@@ -12,7 +12,7 @@ pub(super) fn run(db: &Database) -> Result<()> {
     )?;
     match profile.format {
         FORMAT => return Ok(()),
-        10..=14 => (),
+        10..=15 => (),
         _ => return Err("unsupported history profile format".into()),
     }
     require_base_tables(&read)?;
@@ -42,7 +42,7 @@ pub(super) fn run(db: &Database) -> Result<()> {
         )?;
         match profile.format {
             FORMAT => return Ok(()),
-            10..=14 => (),
+            10..=15 => (),
             _ => return Err("unsupported history profile format".into()),
         }
         let format = profile.format;
@@ -85,6 +85,23 @@ pub(super) fn run(db: &Database) -> Result<()> {
             edit::native_choices::backfill(&write, &profile)?;
         } else {
             edit::native_choices::validate_index(&write, &profile)?;
+        }
+        if write.open_table(ARTIFACTS)?.len()? != 0 {
+            return Err("artifact upgrade table is not empty".into());
+        }
+        for row in write.open_table(RUNS)?.iter()? {
+            let (_, bytes) = row?;
+            let run: Record<crate::model::Run> = decode(bytes.value())?;
+            if run
+                .value
+                .output
+                .projection()
+                .conversation
+                .iter()
+                .any(|entry| matches!(entry, metldr_conversation::ProjectedEntry::Artifact { .. }))
+            {
+                return Err("old history contains artifact references".into());
+            }
         }
         profile.format = FORMAT;
         profile.validate()?;

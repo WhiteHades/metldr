@@ -1,5 +1,6 @@
 use super::{Directory, Output, Running};
 use crate::{Result, history::schema::*};
+use metldr_conversation::{ArtifactId, Change, Content, MessageKey};
 use redb::{ReadableDatabase, ReadableTable, ReadableTableMetadata, TableHandle};
 use serde_json::{Value, json};
 use std::{fs, path::Path, time::Duration};
@@ -25,7 +26,14 @@ fn profile(directory: &Path) -> Result<Value> {
         ACTIONS,
     ] {
         let mut rows = Vec::new();
-        for row in read.open_table(definition)?.iter()? {
+        let table = match read.open_table(definition) {
+            Err(redb::TableError::TableDoesNotExist(_)) if definition.name() == "runs" => {
+                tables.insert("runs".into(), Value::Null);
+                continue;
+            }
+            result => result?,
+        };
+        for row in table.iter()? {
             let (key, bytes) = row?;
             if definition.name() != "metadata" || key.value() != "profile" {
                 rows.push(json!([key.value(), bytes.value()]));
@@ -49,6 +57,14 @@ fn profile(directory: &Path) -> Result<Value> {
         }
         tables.insert(definition.name().into(), json!(rows));
     }
+    let mut artifact_rows = Vec::new();
+    if let Ok(table) = read.open_table(ARTIFACTS) {
+        for row in table.iter()? {
+            let (key, value) = row?;
+            artifact_rows.push(json!([key.value(), value.value()]));
+        }
+    }
+    tables.insert("artifacts".into(), json!(artifact_rows));
     let mut action_order = Vec::new();
     for row in read.open_table(ACTION_ORDER)?.iter()? {
         let (key, value) = row?;
@@ -95,7 +111,7 @@ fn index_rows(read: &redb::ReadTransaction) -> Result<Value> {
 }
 
 #[test]
-#[ignore = "requires METLDR_STARTUP_BINARY and METLDR_HISTORY_OLD_BINARY with history format 10 through 14"]
+#[ignore = "requires METLDR_STARTUP_BINARY and METLDR_HISTORY_OLD_BINARY with history format 10 through 15"]
 fn actual_old_private_host_upgrades_and_cannot_reopen_new_history() -> Result<()> {
     let directory = Directory::new()?;
     let mut legacy = crate::history::fixture::legacy();
@@ -121,8 +137,15 @@ fn actual_old_private_host_upgrades_and_cannot_reopen_new_history() -> Result<()
     let old_format = before["profile"]["format"]
         .as_u64()
         .ok_or("old format absent")?;
-    assert!(matches!(old_format, 10..=14));
-    assert_eq!(ready["v"], if old_format == 11 { 12 } else { old_format });
+    assert!(matches!(old_format, 10..=15));
+    assert_eq!(
+        ready["v"],
+        match old_format {
+            11 => 12,
+            15 => 16,
+            format => format,
+        }
+    );
     assert_eq!(before["tables"]["runs"].as_array().unwrap().len(), 11);
     assert_eq!(before["tables"]["starts"].as_array().unwrap().len(), 11);
     assert_eq!(
@@ -141,6 +164,8 @@ fn actual_old_private_host_upgrades_and_cannot_reopen_new_history() -> Result<()
         "origin digest",
         "native head",
         "index collision",
+        "artifact table",
+        "artifact reference",
     ] {
         let broken = Directory::new()?;
         for name in ["snapshot.json", "snapshot.v8.json", "history.redb"] {
@@ -171,6 +196,30 @@ fn actual_old_private_host_upgrades_and_cannot_reopen_new_history() -> Result<()
                     .clone()
                     .into();
                 workflows.insert(id.as_str(), serde_json::to_vec(&saved)?.as_slice())?;
+            } else if damage == "artifact table" {
+                write
+                    .open_table(ARTIFACTS)?
+                    .insert("unowned", b"invalid".as_slice())?;
+            } else if damage == "artifact reference" {
+                let mut runs = write.open_table(RUNS)?;
+                let (run_key, bytes) = runs.iter()?.next().ok_or("missing run")??;
+                let key = run_key.value().to_owned();
+                let run_bytes = bytes.value().to_vec();
+                drop(bytes);
+                drop(run_key);
+                let mut record: Record<crate::model::Run> = decode(&run_bytes)?;
+                record.value.output = Content::native();
+                let message = MessageKey::native("upgrade-artifact-message".into())?;
+                record.value.output.change(Change::Begin(message.clone()))?;
+                record.value.output.change(Change::Final {
+                    key: message,
+                    text: "old run".into(),
+                })?;
+                record
+                    .value
+                    .output
+                    .change(Change::Artifact(ArtifactId::new("old:artifact".into())?))?;
+                runs.insert(key.as_str(), encode(&record)?.as_slice())?;
             } else {
                 write
                     .open_table(NATIVE_CHOICES)?
@@ -189,7 +238,13 @@ fn actual_old_private_host_upgrades_and_cannot_reopen_new_history() -> Result<()
                 },
             )
         };
+        let before_state = profile(&broken.0)?;
         refused(Running::start(&broken.0)?)?;
+        assert_eq!(
+            profile(&broken.0)?,
+            before_state,
+            "refused upgrade changed {damage}"
+        );
         let db = redb::Database::open(broken.0.join("history.redb"))?;
         let read = db.begin_read()?;
         let meta = read.open_table(META)?;
@@ -230,6 +285,9 @@ fn actual_old_private_host_upgrades_and_cannot_reopen_new_history() -> Result<()
     {
         let db = redb::Database::open(directory.0.join("history.redb"))?;
         assert_eq!(db.begin_read()?.open_table(NATIVE_CHOICES)?.len()?, 3);
+        if old_format == 15 {
+            assert_eq!(db.begin_read()?.open_table(ARTIFACTS)?.len()?, 0);
+        }
         if let Some(original_index) = original_index {
             assert_eq!(index_rows(&db.begin_read()?)?, original_index);
         }

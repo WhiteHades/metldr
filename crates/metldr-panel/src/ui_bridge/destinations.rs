@@ -29,4 +29,9 @@ impl UiDestination {
     pub fn enabled(&self) -> bool {
         self.choice.enabled
     }
+
+    #[wasm_bindgen(getter)]
+    pub fn supports_plan(&self) -> bool {
+        self.choice.value == "codex" || self.choice.value.starts_with("codex:")
+    }
 }

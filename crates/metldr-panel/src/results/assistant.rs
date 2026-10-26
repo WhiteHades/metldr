@@ -16,6 +16,7 @@ enum Part<'a> {
         completion: &'a Completion,
         tools: Vec<&'a str>,
     },
+    Artifact(&'a str),
     Flat(&'a str),
 }
 
@@ -39,6 +40,7 @@ fn parts(display: &Display) -> Vec<Part<'_>> {
                 Some(Part::Message { tools, .. } | Part::Leading(tools)) => tools.push(id.as_str()),
                 _ => parts.push(Part::Leading(vec![id.as_str()])),
             },
+            EntryRef::Artifact { id } => parts.push(Part::Artifact(id.as_str())),
         }
     }
     if parts.is_empty() {
@@ -64,6 +66,7 @@ pub(super) fn render(doc: &Document, card: &Element, run: &RunView) -> Result<bo
         let slot = match &item {
             Part::Message { key, .. } => key.dom_key(),
             Part::Leading(_) => "leading-tools".into(),
+            Part::Artifact(id) => format!("artifact:{id}"),
             Part::Flat(_) => "flat".into(),
         };
         let element = match existing
@@ -72,7 +75,12 @@ pub(super) fn render(doc: &Document, card: &Element, run: &RunView) -> Result<bo
         {
             Some(node) => node.clone(),
             None => {
-                let node = if matches!(&item, Part::Leading(_)) {
+                let node = if matches!(&item, Part::Artifact(_)) {
+                    let node = doc.create_element("a")?;
+                    node.set_attribute("href", "chat.html")?;
+                    node.set_text_content(Some("Open table in chat"));
+                    node
+                } else if matches!(&item, Part::Leading(_)) {
                     let template = doc.create_element("div")?;
                     template.set_inner_html(include_str!("assistant.html"));
                     part(&template, "message-tools")?
@@ -87,6 +95,7 @@ pub(super) fn render(doc: &Document, card: &Element, run: &RunView) -> Result<bo
             }
         };
         let ids = match item {
+            Part::Artifact(_) => Vec::new(),
             Part::Leading(ids) => {
                 tools::reconcile(doc, &element, &ids, &run.activity, &calls)?;
                 ids
@@ -211,6 +220,25 @@ fn update_text(doc: &Document, output: &Element, value: &str) -> Result<bool, Js
 mod tests {
     use super::*;
     use metldr_conversation::Projection;
+
+    #[test]
+    fn keeps_saved_tables_visible_between_messages() {
+        let display = Display::new(serde_json::from_value(serde_json::json!({
+            "output":"beforeafter", "conversation":[
+                {"kind":"message","key":{"kind":"observed","ordinal":1},"start":0,"end":6,"completion":"final_snapshot"},
+                {"kind":"artifact","id":"saved-table"},
+                {"kind":"message","key":{"kind":"observed","ordinal":2},"start":6,"end":11,"completion":"final_snapshot"}
+            ]
+        })).unwrap()).unwrap();
+        assert!(matches!(
+            parts(&display).as_slice(),
+            [
+                Part::Message { text: "before", .. },
+                Part::Artifact("saved-table"),
+                Part::Message { text: "after", .. }
+            ]
+        ));
+    }
 
     #[test]
     fn groups_only_observed_tools_under_the_preceding_message() {

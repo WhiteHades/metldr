@@ -122,9 +122,10 @@ impl Work {
         let result = async {
             let flow = self.page.flow.borrow().clone();
             let (flow, current) = if !flow.is_connected() {
-                let flow = flow.reconnect().await?;
-                let current = self.page.accept(flow.current_page().await?)?;
-                self.page.replace_flow(flow.clone());
+                let recovery = connection::Recovery::begin(Rc::clone(&self.page))?;
+                let current = recovery.exact().await?;
+                let flow = self.page.flow.borrow().clone();
+                drop(recovery);
                 (flow, current)
             } else {
                 let current = self.page.accept(flow.current_page().await?)?;

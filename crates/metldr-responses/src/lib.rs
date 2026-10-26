@@ -7,7 +7,9 @@ mod sse;
 mod stream;
 
 pub use client::Client;
+pub use client::{Presentation, PresentationConversation, PresentationInvocation};
 pub use metldr_browser_tools::Invocation;
+use metldr_browser_tools::decode_call;
 pub use metldr_conversation::TextEvent;
 use serde_json::{Value, json};
 use std::sync::atomic::AtomicBool;
@@ -63,8 +65,18 @@ impl Conversation {
         }
         // An interrupted or failed request must never be replayed implicitly.
         self.phase = Phase::Closed;
-        let turn = self.client.send(&self.request, stop, emit).await?;
-        let invocation = turn.call.clone();
+        let turn = self
+            .client
+            .send(&self.request, stop, emit, client::BROWSER_BOUNDS)
+            .await?;
+        let invocation = if let Some(call) = turn.call.as_ref() {
+            Some(Invocation {
+                id: call.id.clone(),
+                call: decode_call(&call.name, call.arguments.clone())?,
+            })
+        } else {
+            None
+        };
         if invocation.is_some() {
             self.phase = Phase::Pending(turn);
         }

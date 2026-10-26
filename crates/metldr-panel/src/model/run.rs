@@ -124,6 +124,9 @@ impl WireRun {
                     &self.route,
                     RunRoute::Pi { .. } | RunRoute::Codex { .. } | RunRoute::OpenCode { .. }
                 ))
+            || self.conversation.iter().any(|entry| matches!(entry,
+                ProjectedEntry::Artifact { id } if !valid_id(id.as_str())
+                    || !matches!(&self.route, RunRoute::Text { protocol: super::ProviderProtocol::Responses, .. })))
             || matches!(&self.route, RunRoute::Text { .. } if !self.activity.is_empty()
             || self.conversation.iter().any(|entry| matches!(entry, ProjectedEntry::Tool { .. }))
             || match self.kind {

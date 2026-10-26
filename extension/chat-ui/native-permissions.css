@@ -1,0 +1,76 @@
+#native-permissions {
+  display: grid;
+  gap: 0.75rem;
+  inline-size: 100%;
+  min-inline-size: 0;
+  max-inline-size: 46rem;
+  margin-inline: auto;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+#native-permissions > [data-native-permission-card] {
+  display: grid;
+  gap: 0.5rem;
+  min-inline-size: 0;
+  padding: clamp(0.75rem, 0.5rem + 1vi, 1rem);
+  border: 1px solid var(--line);
+  border-radius: 0.875rem;
+  background: var(--surface);
+}
+
+#native-permissions :is(h3, p, pre) { margin: 0; }
+#native-permissions h3 { font-size: 1rem; font-weight: 600; }
+#native-permissions [data-part="agent"],
+#native-permissions [data-part="tool"] { color: var(--ink-2); }
+#native-permissions [data-part="input"] {
+  min-inline-size: 0;
+  max-block-size: 12rem;
+  padding: 0.75rem;
+  border-radius: 0.5rem;
+  color: var(--ink);
+  background: var(--field);
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: auto;
+}
+
+#native-permissions [data-native-permission-options] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+#native-permissions button {
+  min-block-size: 44px;
+  padding-block: 0.5rem;
+  padding-inline: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  color: var(--ink);
+  background: var(--field);
+  font: inherit;
+}
+
+#native-permissions button:disabled { opacity: 0.6; }
+#native-permissions button:active:not(:disabled) { background: var(--hover-2); }
+#native-permissions :is(button, pre):focus-visible { outline: 2px solid var(--ink-2); outline-offset: 3px; }
+#native-permissions [role="status"] { color: var(--ink-2); }
+#native-permissions [role="alert"] { color: var(--ink); font-weight: 500; }
+
+@media (hover: hover) and (pointer: fine) {
+  #native-permissions button:hover:not(:disabled) {
+    background: color-mix(in oklch, var(--ink) 6%, var(--field));
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  #native-permissions button { transition: background-color 150ms var(--ease-out, ease-out), scale 150ms var(--ease-out, ease-out); }
+  #native-permissions button:active:not(:disabled) { scale: 0.97; }
+}
+
+@media (forced-colors: active) {
+  #native-permissions button { border-color: ButtonText; }
+  #native-permissions :is(button, pre):focus-visible { outline-color: Highlight; }
+}

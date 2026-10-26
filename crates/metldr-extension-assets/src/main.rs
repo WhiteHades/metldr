@@ -9,9 +9,5 @@ fn main() -> Result<(), Box<dyn Error>> {
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(20))
         .build()?;
-    assets::prepare(
-        &client,
-        &root.join("public/rust-panel/assets"),
-        &root.join(".tmp/rust-panel-assets"),
-    )
+    assets::prepare(&client, &root.join("public/rust-panel/assets"))
 }

@@ -11,6 +11,7 @@ use redb::{
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{cell::Cell, collections::BTreeMap};
 
+mod artifacts;
 mod browser_read;
 mod browser_view;
 mod browser_write;
@@ -329,6 +330,7 @@ impl Edit<'_> {
         if run.conversation != expected.conversation {
             return Err("run belongs to a different conversation".into());
         }
+        self.validate_artifacts(expected, &run.value)?;
         Ok(run.value)
     }
 
@@ -474,6 +476,11 @@ impl Edit<'_> {
         }
         let source = self.source(&run.source)?;
         storage(|| self.validate_flat(&before.value, &launch.value, source.clone()))?;
+        let previous = super::artifacts::artifact_refs(&before.value);
+        let current = super::artifacts::artifact_refs(&run);
+        if !current.starts_with(&previous) {
+            return Err("saved artifact references cannot be removed or reordered".into());
+        }
         if run.status.terminal() {
             run.output.end(if run.status == Status::Complete {
                 metldr_conversation::Ending::Complete
@@ -482,6 +489,7 @@ impl Edit<'_> {
             })?;
         }
         self.validate_flat(&run, &launch.value, source)?;
+        self.validate_artifacts(expected, &run)?;
         let revision = before
             .revision
             .checked_add(1)

@@ -21,21 +21,15 @@ struct Asset {
     bytes: u64,
 }
 
-pub(super) fn prepare(client: &Client, output: &Path, temp: &Path) -> Result<(), Box<dyn Error>> {
+pub(super) fn prepare(client: &Client, output: &Path) -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(output)?;
-    fs::create_dir_all(temp)?;
     for asset in serde_json::from_str::<Vec<Asset>>(include_str!("../assets.json"))? {
-        install(client, output, temp, &asset)?;
+        install(client, output, &asset)?;
     }
     Ok(())
 }
 
-fn install(
-    client: &Client,
-    output: &Path,
-    temp: &Path,
-    asset: &Asset,
-) -> Result<(), Box<dyn Error>> {
+fn install(client: &Client, output: &Path, asset: &Asset) -> Result<(), Box<dyn Error>> {
     if Path::new(&asset.name)
         .file_name()
         .and_then(|name| name.to_str())
@@ -66,7 +60,7 @@ fn install(
 
     let (temporary, mut file) = loop {
         let id = TEMP_ID.fetch_add(1, Ordering::Relaxed);
-        let path = temp.join(format!("{}-{id}.tmp", std::process::id()));
+        let path = output.join(format!(".metldr-asset-{}-{id}.tmp", std::process::id()));
         match fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -121,9 +115,7 @@ mod tests {
         fs::create_dir_all(test_dir.parent().unwrap()).unwrap();
         fs::create_dir(&test_dir).unwrap();
         let output = test_dir.join("output");
-        let temp = test_dir.join("temp");
         fs::create_dir_all(&output).unwrap();
-        fs::create_dir_all(&temp).unwrap();
         let asset = Asset {
             name: "sample.bin".into(),
             url: String::new(),
@@ -156,12 +148,14 @@ mod tests {
             .unwrap();
         let mut asset = asset;
         asset.url = url;
-        assert!(install(&client, &output, &temp, &asset).is_err());
+        assert!(install(&client, &output, &asset).is_err());
         assert_eq!(fs::read(&destination).unwrap(), b"previous");
-        install(&client, &output, &temp, &asset).unwrap();
+        assert_eq!(fs::read_dir(&output).unwrap().count(), 1);
+        install(&client, &output, &asset).unwrap();
         assert_eq!(fs::read(&destination).unwrap(), b"good");
+        assert_eq!(fs::read_dir(&output).unwrap().count(), 1);
         server.join().unwrap();
-        install(&client, &output, &temp, &asset).unwrap();
+        install(&client, &output, &asset).unwrap();
         fs::remove_dir_all(test_dir).unwrap();
     }
 }

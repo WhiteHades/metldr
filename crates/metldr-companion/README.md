@@ -4,6 +4,8 @@ The companion runs provider requests, installed agents and browser tasks for the
 
 Page summaries and questions have a separate text path for configured Messages, Responses, Google Interactions and Chat Completions endpoints. The request contains the saved page and completed text answers from the same page and provider selection. It offers no browser tools. Changing the provider, model or connection revision starts a separate history. The companion keeps at most six prior turns and removes whole oldest turns when the context limit is reached. It refuses a source and question that cannot fit without truncation.
 
+Responses page questions can also produce validated tables. Tables are saved separately and reopen inside chat. They cannot run code or perform browser actions.
+
 Text results use the same local run storage, streaming, Stop and restart handling. Partial output can remain after failure or cancellation. A native restart interrupts an active request and does not send it again. Stop closes the local stream; remote inference and billing cancellation depend on the provider.
 
 Pi receives the shared browser tools through a temporary MCP registration for each run. Pi loads its native skills, and skill prompts receive the saved page and browser rules. Its installed tools, authentication and saved session remain under Pi control. Browser field changes use the same separate metldr approval as other execution routes. The registration file contains no endpoint secret and is removed after Pi exits. An uncertain action or unconfirmed release blocks that session from continuing automatically.
@@ -42,7 +44,7 @@ Pair the executable with an extension that implements metldr's native wire versi
 
 Conversations and complete saved results are stored in a local record database. Startup preserves the original snapshot backup before installing the new format. New chat creates an empty conversation, while selecting a saved conversation restores its page and results. Switching is unavailable during active work. A lost confirmation requires an explicit Retry using the same request rather than another creation. Viewing saved work does not change or replay an active task. History search covers the loaded conversation pages, and More loads the next page.
 
-Saved native sessions remain selectable after a model task and browser restart. The chooser shows up to 16 recent sessions for each agent, saved page and current profile in the selected conversation. Earlier results stay in saved history. History format 12 adds the session index and upgrades formats 10 and 11 in one transaction. An older companion refuses the new format.
+Saved native sessions remain selectable after a model task and browser restart. The chooser shows up to 16 recent sessions for each agent, saved page and current profile in the selected conversation. Earlier results stay in saved history. History format 16 adds saved tables and upgrades formats 10 through 15 in one transaction. Older companions refuse the upgraded history. Keep a copy of the history database before downgrading.
 
 To register the companion with Chrome:
 

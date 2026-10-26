@@ -1,0 +1,100 @@
+#codex-input {
+  --codex-card-padding: clamp(0.75rem, 0.5rem + 1vi, 1rem);
+  display: grid;
+  gap: 0.75rem;
+  inline-size: 100%;
+  min-inline-size: 0;
+  max-inline-size: 46rem;
+  margin-inline: auto;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+#codex-input[hidden] { display: none; }
+#codex-input-cards { display: grid; gap: 0.75rem; min-inline-size: 0; }
+#codex-input-cards > [data-codex-card] {
+  display: grid;
+  gap: 0.75rem;
+  min-inline-size: 0;
+  padding: var(--codex-card-padding);
+  border: 1px solid var(--line);
+  border-radius: calc(0.5rem + var(--codex-card-padding));
+  background: var(--surface);
+}
+
+#codex-input :is(h3, p, pre) { margin-block: 0; }
+#codex-input h3 { font-size: 1rem; font-weight: 600; }
+#codex-input [data-part="message"],
+#codex-input [data-part="field"] small,
+#codex-input [data-part="option"] small { color: var(--ink-2); }
+#codex-input [data-part="answer-form"] { display: grid; gap: 0.75rem; min-inline-size: 0; }
+#codex-input fieldset { display: grid; gap: 0.5rem; min-inline-size: 0; margin: 0; padding: 0; border: 0; }
+#codex-input legend { margin-block-end: 0.25rem; font-weight: 600; }
+#codex-input [data-part="choices"],
+#codex-input [data-part="actions"] { display: flex; flex-wrap: wrap; align-items: start; gap: 0.5rem; }
+#codex-input [data-part="option"],
+#codex-input [data-part="field"] { display: flex; align-items: start; gap: 0.5rem; min-block-size: 44px; min-inline-size: 0; }
+#codex-input [data-part="option"] > span,
+#codex-input [data-part="field"] { overflow-wrap: anywhere; }
+#codex-input [data-part="option"] > span,
+#codex-input [data-part="field"] > span { display: grid; gap: 0.125rem; }
+#codex-input [data-part="option"] input { flex: none; margin-block-start: 0.35em; accent-color: var(--ink); }
+#codex-input [data-part="field"] { display: grid; gap: 0.25rem; }
+#codex-input :is(input[type="text"], select) {
+  inline-size: 100%;
+  min-block-size: 44px;
+  min-inline-size: 0;
+  padding-block: 0.5rem;
+  padding-inline: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  color: var(--ink);
+  background: var(--field);
+  font: inherit;
+}
+#codex-input [data-part="field"] select { margin-block-start: 0.25rem; }
+#codex-input [data-part="review"] { display: grid; gap: 0.5rem; min-inline-size: 0; }
+#codex-input [data-part="review"] pre {
+  min-inline-size: 0;
+  max-block-size: 16rem;
+  padding: 0.75rem;
+  border-radius: 0.5rem;
+  color: var(--ink);
+  background: var(--field);
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: auto;
+}
+#codex-input button {
+  min-block-size: 44px;
+  padding-block: 0.5rem;
+  padding-inline: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  color: var(--ink);
+  background: var(--field);
+  font: inherit;
+}
+#codex-input button[data-variant="primary"] { color: var(--page); background: var(--ink); }
+#codex-input button:disabled { opacity: 0.6; }
+#codex-input button:active:not(:disabled) { background: var(--hover-2); }
+#codex-input button[data-variant="primary"]:active:not(:disabled) { background: var(--ink-2); }
+#codex-input :is(button, input, select, [data-codex-card]):focus-visible { outline: 2px solid var(--ink-2); outline-offset: 3px; }
+#codex-input [role="status"] { color: var(--ink-2); }
+#codex-input [role="alert"] { color: var(--ink); font-weight: 600; }
+
+@media (hover: hover) and (pointer: fine) {
+  #codex-input button:hover:not(:disabled) { background: var(--hover); }
+  #codex-input button[data-variant="primary"]:hover:not(:disabled) { background: var(--ink-2); }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  #codex-input button { transition: background-color 150ms var(--ease-out, ease-out), scale 150ms var(--ease-out, ease-out); }
+  #codex-input button:active:not(:disabled) { scale: 0.97; }
+}
+
+@media (forced-colors: active) {
+  #codex-input button { border-color: ButtonText; }
+  #codex-input :is(button, input, select):focus-visible { outline-color: Highlight; }
+}

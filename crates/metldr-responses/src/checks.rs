@@ -1,5 +1,4 @@
 use super::*;
-use metldr_browser_tools::Call;
 use stream::Turn;
 
 fn events(tool: bool) -> Vec<Value> {
@@ -98,7 +97,7 @@ fn streams_unicode_and_preserves_finalized_opaque_tool_history() {
         assert_eq!(turn.output[1]["phase"], "final_answer");
         let (tool, text) = replay(&events(true), size).unwrap();
         assert!(text.is_empty());
-        assert_eq!(tool.call.as_ref().unwrap().call, Call::Observe);
+        assert_eq!(tool.call.as_ref().unwrap().name, "observe_page");
         let mut conversation = client().start(prompt()).unwrap();
         conversation.phase = Phase::Pending(tool);
         let result = json!({"kind":"page_observation","untrusted":true});
@@ -296,6 +295,103 @@ fn emits_completed_messages_before_an_interrupted_current_message() {
         ),
         [TextEvent::Delta("partial".into())]
     );
+}
+
+#[test]
+fn accepts_only_the_source_table_presentation_shape() {
+    let args = json!({"surfaceId":"surface_1","catalogId":"copilotkit://open-generative-ui-tables",
+        "components":[{"id":"root","component":"Table","title":"Quarterly sales",
+            "columns":["Quarter","Sales"],"rows":[["Q1","$100"],["Q2","$250"]],
+            "source":"User-provided data"}]});
+    let presentation = client::decode_presentation("render_a2ui", &args).unwrap();
+    assert_eq!(presentation.surface_id, "surface_1");
+    assert_eq!(presentation.table.title(), "Quarterly sales");
+    assert_eq!(presentation.table.rows()[1], ["Q2", "$250"]);
+    assert!(client::decode_presentation("observe_page", &args).is_err());
+
+    for (key, value) in [
+        ("catalogId", json!("other")),
+        ("surfaceId", json!("")),
+        ("surfaceId", json!("x\n")),
+        ("surfaceId", json!("😀".repeat(129))),
+    ] {
+        let mut invalid = args.clone();
+        invalid[key] = value;
+        assert!(client::decode_presentation("render_a2ui", &invalid).is_err());
+    }
+    let mut wrong_component = args.clone();
+    wrong_component["components"][0]["id"] = json!("other");
+    assert!(client::decode_presentation("render_a2ui", &wrong_component).is_err());
+    let mut bad_rows = args;
+    bad_rows["components"][0]["rows"][0] = json!(["short"]);
+    assert!(client::decode_presentation("render_a2ui", &bad_rows).is_err());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn presentation_pending_turn_keeps_exact_tool_continuation() {
+    let args = json!({"surfaceId":"surface_1","catalogId":"copilotkit://open-generative-ui-tables",
+        "components":[{"id":"root","component":"Table","title":"Quarterly sales",
+            "columns":["Quarter","Sales"],"rows":[["Q1","$100"],["Q2","$250"]],
+            "source":"User-provided data"}]});
+    let encoded = args.to_string();
+    let mut frames = events(true);
+    frames[3]["item"]["name"] = json!("render_a2ui");
+    frames[3]["item"]["arguments"] = json!("");
+    frames[4]["delta"] = json!(encoded);
+    frames[5]["delta"] = json!("");
+    frames[6]["arguments"] = json!(encoded);
+    frames[7]["item"]["name"] = json!("render_a2ui");
+    frames[7]["item"]["arguments"] = json!(encoded);
+    frames[8]["response"]["output"][1]["name"] = json!("render_a2ui");
+    frames[8]["response"]["output"][1]["arguments"] = json!(encoded);
+    let (turn, _) = replay(&frames, 37).unwrap();
+
+    let mut conversation = client()
+        .start_presentation("Show a table", "Present the sales")
+        .unwrap();
+    assert_eq!(conversation.request["tools"].as_array().unwrap().len(), 1);
+    assert_eq!(conversation.request["tools"][0]["name"], "render_a2ui");
+    conversation.phase = Phase::Pending(turn);
+    let stop = AtomicBool::new(false);
+    assert!(conversation.next(&stop, |_| Ok(())).await.is_err());
+    conversation
+        .submit_tool_result(&json!({"accepted":true}), |_| Ok(()))
+        .unwrap();
+
+    assert_eq!(
+        conversation.request["input"][1]["encrypted_content"],
+        "opaque-final-owned"
+    );
+    assert_eq!(conversation.request["input"][2]["id"], "fc_owned");
+    assert_eq!(conversation.request["input"][3]["call_id"], "call_owned");
+    assert_eq!(
+        serde_json::from_str::<Value>(conversation.request["input"][3]["output"].as_str().unwrap())
+            .unwrap(),
+        json!({"accepted":true})
+    );
+    assert!(matches!(conversation.phase, Phase::Ready));
+}
+
+#[test]
+fn presentation_fragmentation_has_a_separate_bounded_event_budget() {
+    let created = &events(true)[0];
+    for (limit, accepted) in [(4_096, false), (65_536, true)] {
+        let mut state = stream::State::with_limits(393_216, limit, true);
+        state
+            .frame("response.created", &created.to_string())
+            .unwrap();
+        let mut result = Ok(Vec::new());
+        for sequence in 1..=5_000 {
+            result = state.frame(
+                "response.in_progress",
+                &json!({"type":"response.in_progress","sequence_number":sequence}).to_string(),
+            );
+            if result.is_err() {
+                break;
+            }
+        }
+        assert_eq!(result.is_ok(), accepted);
+    }
 }
 
 #[test]

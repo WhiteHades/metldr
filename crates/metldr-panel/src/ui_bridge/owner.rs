@@ -191,8 +191,10 @@ impl Owner {
         };
     }
 
-    pub(super) fn uncertain(&mut self) {
-        *self = Self::Uncertain;
+    pub(super) fn run_uncertain(&mut self, ui_id: &str, run: &RunId) {
+        if matches!(self, Self::Running { ui, native } if ui == ui_id && native == run) {
+            *self = Self::Uncertain;
+        }
     }
 
     pub(super) fn finished(&mut self, run: &RunId) {
@@ -227,7 +229,17 @@ mod checks {
         assert!(owner.accepted(native.clone()));
         assert!(!owner.stop_pending());
         assert!(matches!(owner.stop("first").unwrap(), Stop::Native(id) if id == native));
+        owner.run_uncertain("different-ui-run", &native);
+        assert!(matches!(&owner, Owner::Running { .. }));
         owner.finished(&native);
+        owner.begin("second").unwrap();
+        assert!(!owner.accepted(native.clone()));
+        owner.run_uncertain("first", &native);
+        assert!(matches!(&owner, Owner::Running { .. }));
+        owner.run_uncertain("second", &native);
+        assert!(matches!(&owner, Owner::Uncertain));
+        assert!(owner.begin("must-not-replay").is_err());
+        owner = Owner::Idle;
         owner.begin("second").unwrap();
         owner.start_failed(&FlowError::Timeout);
         assert!(owner.begin("second").is_err());

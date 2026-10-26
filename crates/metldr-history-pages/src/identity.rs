@@ -69,6 +69,7 @@ pub enum DocumentKind {
     Run,
     Source,
     Action,
+    Artifact,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -41,6 +41,11 @@ pub(super) enum Event {
         run: String,
         change: Change,
     },
+    Table {
+        run: String,
+        invocation: metldr_responses::PresentationInvocation,
+        ack: SyncSender<std::result::Result<metldr_conversation::ArtifactId, String>>,
+    },
     ToolProgress {
         run: String,
         call: crate::tool_report::Call,
@@ -686,6 +691,9 @@ impl Owner {
     }
 
     pub(super) fn text(&mut self, run: &str, change: Change) -> Result<()> {
+        if matches!(change, Change::Artifact(_)) {
+            return Err("artifact references require a committed table record".into());
+        }
         if self.record_history.is_some() {
             self.record_change(|edit, selection| {
                 let mut record = edit.run(selection, run)?;

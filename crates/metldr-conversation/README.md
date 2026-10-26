@@ -32,6 +32,10 @@ Tools are recorded by their actual call IDs in order of first observation. Recor
 
 `Content::projection` joins message text without inserting separators and includes ordered message ranges and tool IDs. Ranges count UTF8 bytes. `Display::new` rejects duplicate IDs, invalid ranges, incomplete text coverage and ranges that split a Unicode character. `Display::entries` borrows text from the validated projection. Tools never contribute text to the projection.
 
-Content is limited to 8192 UTF8 bytes, 64 messages, 64 tools and 128 entries. IDs must be nonempty, contain no control characters and use at most 128 UTF8 bytes. Callers must bound incoming frames before deserialization. Serialized flat content is a string; native content is an object with an `entries` array. Unknown fields are rejected.
+Artifact references preserve their position beside messages. Each run can contain four unique references. Their contents belong to the application's separate saved records. An artifact cannot follow unfinished text, and rejected changes preserve the prior content.
+
+`Table` validates column and row shapes, source string limits and a 256 KiB encoded size limit. String limits count UTF16 code units to match the source component. Callers must bound incoming frames before deserialization.
+
+Content is limited to 8192 UTF8 bytes, 64 messages, 64 tools and 132 entries. IDs must be nonempty, contain no control characters and use at most 128 UTF8 bytes. Serialized flat content is a string; native content is an object with an `entries` array. Unknown fields are rejected.
 
 Use `make check-conversation` from the repository root to run the checks and example with the pinned Rust toolchain.

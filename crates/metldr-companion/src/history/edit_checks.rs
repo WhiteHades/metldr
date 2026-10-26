@@ -78,6 +78,172 @@ fn counts(history: &History) -> Result<(u64, u64, u64, u64, u64)> {
 }
 
 #[test]
+fn table_records_are_atomic_scoped_idempotent_and_survive_reopen() -> Result<()> {
+    use metldr_conversation::{Change, Content, MessageKey, Table};
+    use metldr_history_pages::{Assembler, DocumentKind, Identity, Snapshot};
+    let directory = Directory::new();
+    let disk = crate::store::Disk::lock(directory.0.clone())?;
+    let path = directory.0.join("history.redb");
+    let mut history = History::import_new(&path, &empty_snapshot()?, disk.lease())?;
+    let scope = history.selection()?;
+    let table = || {
+        Table::new(
+            "Quarterly sales".into(),
+            vec!["Quarter 🐈".into(), "Sales\\\"".into()],
+            vec![
+                vec![format!("Q1\n{}", "🐈".repeat(700)), "$100".into()],
+                vec!["Q2".into(), "$250".into()],
+            ],
+            "User-provided data".into(),
+        )
+    };
+    let run_id = history.edit(|edit| {
+        let id = edit.id()?;
+        let mut record = run(id.clone());
+        record.output = Content::native();
+        edit.admit(
+            &scope,
+            "table:start",
+            record,
+            Launch::Text {
+                input_digest: "a".repeat(64),
+                protocol: crate::provider_settings::Protocol::Responses,
+                binding: crate::https_profile::Binding {
+                    endpoint: "https://example.test/v1/responses".into(),
+                    model: "model".into(),
+                    revision: 1,
+                    fingerprint: "a".repeat(64),
+                },
+            },
+        )?;
+        let mut record = edit.run(&scope, &id)?;
+        record.output.change(Change::Final {
+            key: MessageKey::observed(1)?,
+            text: "Before".into(),
+        })?;
+        edit.put_run(&scope, record)?;
+        Ok(id)
+    })?;
+    let before = serde_json::to_value(profile(&history)?)?;
+    let aborted: Result<()> = history.edit(|edit| {
+        edit.accept_table(&scope, &run_id, "call:aborted", "surface", table()?)?;
+        Err("synthetic rollback".into())
+    });
+    assert!(aborted.is_err());
+    assert_eq!(serde_json::to_value(profile(&history)?)?, before);
+    assert_eq!(history.db.begin_read()?.open_table(ARTIFACTS)?.len()?, 0);
+    let id =
+        history.edit(|edit| edit.accept_table(&scope, &run_id, "call:1", "surface", table()?))?;
+    assert_eq!(
+        id,
+        history.edit(|edit| edit.accept_table(&scope, &run_id, "call:1", "surface", table()?))?
+    );
+    assert_eq!(history.db.begin_read()?.open_table(ARTIFACTS)?.len()?, 1);
+    let before = serde_json::to_value(profile(&history)?)?;
+    assert!(
+        history
+            .edit(|edit| edit.accept_table(&scope, &run_id, "call:1", "changed", table()?))
+            .is_err()
+    );
+    assert_eq!(serde_json::to_value(profile(&history)?)?, before);
+    let mut foreign = scope.clone();
+    foreign.epoch += 1;
+    assert!(
+        history
+            .edit(|edit| edit.artifact_detail(&foreign, id.as_str()))
+            .is_err()
+    );
+    let mut foreign_conversation = scope.clone();
+    foreign_conversation.conversation = format!("{}:61", scope.store);
+    assert!(
+        history
+            .edit(|edit| edit.artifact_detail(&foreign_conversation, id.as_str()))
+            .is_err()
+    );
+    history.edit(|edit| {
+        let mut record = edit.run(&scope, &run_id)?;
+        assert!(!serde_json::to_string(&record)?.contains("Quarterly sales"));
+        record.output.change(Change::Final {
+            key: MessageKey::observed(2)?,
+            text: "After".into(),
+        })?;
+        record.status = Status::StopRequested;
+        edit.put_run(&scope, record)
+    })?;
+    assert!(
+        history
+            .edit(|edit| edit.accept_table(&scope, &run_id, "call:2", "surface", table()?))
+            .is_err()
+    );
+    assert_eq!(
+        id,
+        history.edit(|edit| edit.accept_table(&scope, &run_id, "call:1", "surface", table()?))?
+    );
+    history.edit(|edit| {
+        let mut record = edit.run(&scope, &run_id)?;
+        record.status = Status::Interrupted;
+        edit.put_run(&scope, record)
+    })?;
+    drop(history);
+    let mut history = History::open(&path, disk.lease())?;
+    let saved = history.edit(|edit| edit.artifact_detail(&scope, id.as_str()))?;
+    assert_eq!(saved.revision.0, 1);
+    assert_eq!(saved.value.table, table()?);
+    let identity = Identity {
+        store: scope.store.clone(),
+        conversation: scope.conversation.clone(),
+        epoch: metldr_history_pages::Counter(scope.epoch),
+        kind: DocumentKind::Artifact,
+        document: id.as_str().to_owned(),
+        revision: saved.revision,
+        generation: "g1".into(),
+        ticket: "artifact-ticket".into(),
+    };
+    let snapshot = Snapshot::new(identity.clone(), &saved.value)?;
+    let mut assembler = Assembler::new(identity)?;
+    let mut pages = 0;
+    loop {
+        let page = snapshot.page("artifact-ticket", assembler.next_offset())?;
+        pages += 1;
+        if assembler.push(&page, "artifact-ticket")? {
+            break;
+        }
+    }
+    assert!(pages > 1);
+    let assembled = assembler.finish()?;
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&assembled)?,
+        serde_json::to_value(&saved.value)?
+    );
+    let serialized = std::str::from_utf8(&assembled)?;
+    assert!(serialized.contains("🐈"));
+    assert!(serialized.contains("\\n"));
+    let content = history.edit(|edit| Ok(edit.run(&scope, &run_id)?.output))?;
+    let display = metldr_conversation::Display::new(content.projection())?;
+    assert!(
+        matches!(&display.entries().collect::<Vec<_>>()[..], [metldr_conversation::EntryRef::Message {text:"Before",..}, metldr_conversation::EntryRef::Artifact { id: observed }, metldr_conversation::EntryRef::Message {text:"After",..}] if *observed == &id)
+    );
+    let orphan_id = history.edit(|edit| edit.id())?;
+    let mut orphan = saved.value;
+    orphan.id = metldr_conversation::ArtifactId::new(orphan_id.clone())?;
+    orphan.call = "orphan".into();
+    let write = history.db.begin_write()?;
+    write.open_table(ARTIFACTS)?.insert(
+        orphan_id.as_str(),
+        encode(&Record {
+            conversation: scope.conversation,
+            revision: 1,
+            value: orphan,
+        })?
+        .as_slice(),
+    )?;
+    write.commit()?;
+    drop(history);
+    assert!(History::open(&path, disk.lease()).is_err());
+    Ok(())
+}
+
+#[test]
 fn actual_records_commit_update_retry_abort_and_reopen() -> Result<()> {
     let directory = Directory::new();
     let disk = crate::store::Disk::lock(directory.0.clone())?;

@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { copyFileSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -52,7 +53,7 @@ if (!isCheck) {
 
 for (const crate of crates) {
   const crateDir = join('crates', crate.name);
-  const targetDir = join(crateDir, 'target');
+  const targetDir = process.env.CARGO_TARGET_DIR || join(crateDir, 'target');
   const cargoArgs = ['--locked', '--manifest-path', join(crateDir, 'Cargo.toml'), '--lib', '--target', 'wasm32-unknown-unknown'];
   if (isCheck) {
     run('cargo', ['check', ...cargoArgs], 'Cargo');
@@ -65,14 +66,22 @@ for (const crate of crates) {
   }
 }
 
+if (!isCheck) {
+  const destination = join(repoRoot, 'public/chat/wasm');
+  mkdirSync(destination, { recursive: true });
+  for (const name of ['metldr_panel.js', 'metldr_panel_bg.wasm']) {
+    copyFileSync(join(repoRoot, 'crates/metldr-panel/pkg', name), join(destination, name));
+  }
+}
+
 run('cargo', [
   isCheck ? 'check' : 'build', '--locked', '--release',
   '--manifest-path', 'crates/metldr-welcome/Cargo.toml', '--bin', 'welcome-guide',
-  '--target-dir', 'crates/metldr-welcome/target',
+  '--target-dir', process.env.CARGO_TARGET_DIR || 'crates/metldr-welcome/target',
 ], 'welcome generator');
 
 run('cargo', [
   isCheck ? 'check' : 'run', '--locked', '--release',
   '--manifest-path', 'crates/metldr-extension-assets/Cargo.toml',
-  '--target-dir', 'crates/metldr-extension-assets/target',
+  '--target-dir', process.env.CARGO_TARGET_DIR || 'crates/metldr-extension-assets/target',
 ], 'panel assets');

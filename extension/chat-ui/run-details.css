@@ -1,0 +1,68 @@
+[data-run-details] {
+  min-inline-size: 0;
+  color: var(--ink-2);
+  overflow-wrap: break-word;
+}
+
+[data-run-details] > p {
+  margin-block: 0;
+}
+
+[data-run-details] > p + p,
+[data-run-details] > p + details {
+  margin-block-start: 0.25rem;
+}
+
+[data-run-details] [data-part="route"],
+[data-run-details] [data-part="state"],
+[data-run-report],
+[data-run-report] > span {
+  min-inline-size: 0;
+}
+
+[data-run-details] details {
+  border-block-start: 1px solid var(--line);
+}
+
+[data-run-details] summary {
+  inline-size: fit-content;
+  max-inline-size: 100%;
+  padding-block: 0.25rem;
+  color: var(--ink-2);
+  cursor: pointer;
+  overflow-wrap: break-word;
+}
+
+[data-run-details] summary:focus-visible {
+  outline: 2px solid var(--ink-2);
+  outline-offset: 2px;
+}
+
+[data-run-details] summary:active {
+  color: var(--ink);
+}
+
+[data-run-details] details > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-inline-size: 0;
+  padding-inline-start: 0.75rem;
+}
+
+[data-run-report] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  padding-block: 0.125rem;
+  overflow-wrap: break-word;
+}
+
+[data-run-report] [data-part="tool"] {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  [data-run-details] summary:hover { color: var(--ink); }
+}

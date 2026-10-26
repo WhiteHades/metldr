@@ -1,0 +1,321 @@
+/* PromptBar tall mode. All overrides stay inside the composer field. */
+[data-metldr-prompt] {
+  color-scheme: dark;
+  --composer-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  anchor-scope: --prompt-composer, --prompt-model;
+  font-synthesis: none;
+  --composer-surface: light-dark(oklch(1 0 none), oklch(0.26 0.006 271.191));
+  --composer-hover: light-dark(oklch(0.97 0.002 247.839), oklch(0.289 0.006 271.22));
+  --composer-ink: light-dark(oklch(0.247 0.006 258.361), oklch(0.964 0.002 247.839));
+  --composer-ink-2: light-dark(oklch(0.506 0.01 264.477), oklch(0.731 0.008 260.731));
+  --composer-ink-3: light-dark(oklch(0.695 0.009 264.505), oklch(0.541 0.01 264.484));
+  --composer-line: light-dark(oklch(0.946 0.003 264.542), oklch(0.308 0.006 258.354));
+  --composer-line-strong: light-dark(oklch(0.912 0.005 258.326), oklch(0.356 0.007 264.474));
+  --composer-accent: light-dark(oklch(0.626 0.205 254.947), oklch(0.68 0.173 253.301));
+  --composer-shadow-card: 0 0 0 1px oklch(1 0 none / 0.11), 0 1px 2px oklch(0 0 none / 0.2), 0 2px 6px oklch(0 0 none / 0.2);
+  --composer-shadow-raised: 0 0 0 1px oklch(1 0 none / 0.13), 0 2px 10px oklch(0 0 none / 0.22);
+  color: var(--composer-ink);
+  font-family: Inter, "Inter Fallback", ui-sans-serif, system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+html[data-theme="light"] [data-metldr-prompt] {
+  color-scheme: light;
+  --composer-shadow-card: 0 0 0 1px var(--composer-line), 0 18px 47px 0 oklch(0 0 none / 3.137255%), 0 7.5px 19px 0 oklch(0 0 none / 1.960784%), 0 4px 10.5px 0 oklch(0 0 none / 1.960784%), 0 2.3px 5.8px 0 oklch(0 0 none / 1.176471%), 0 1.2px 3.1px 0 oklch(0 0 none / 1.176471%), 0 0.5px 1.3px 0 oklch(0 0 none / 1.176471%);
+  --composer-shadow-raised: 0 0 0 1px var(--composer-line), 0 17.54px 23.39px 0 oklch(0 0 none / 3.921569%), 0 9.4px 12.5px 0 oklch(0 0 none / 3.137255%), 0 5.25px 7px 0 oklch(0 0 none / 1.960784%), 0 2.79px 3.72px -2px oklch(0 0 none / 1.176471%), 0 1.16px 1.5px 0 oklch(0 0 none / 1.176471%);
+}
+
+[data-metldr-prompt] [hidden],
+[data-metldr-prompt] [data-prompt-controls] > button[hidden] { display: none; }
+[data-metldr-prompt] .composer-anchor { position: relative; inline-size: 100%; }
+[data-metldr-prompt] [data-prompt-frame] {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: clip;
+  padding: 14px;
+  border: 1px solid var(--composer-line);
+  border-radius: 22px;
+  background: var(--composer-surface);
+  box-shadow: var(--composer-shadow-card);
+  transition: border-color 150ms var(--composer-ease-out);
+}
+[data-metldr-prompt] [data-prompt-frame]:focus-within { border-color: var(--composer-line-strong); }
+[data-metldr-prompt] [data-prompt-controls] {
+  display: grid;
+  grid-template-columns: 28px auto minmax(0, 1fr) 28px 28px;
+  align-items: end;
+  column-gap: 4px;
+  row-gap: 6px;
+}
+
+/* Override the shell's generic 44px button and textarea rules for this surface. */
+[data-metldr-prompt] [data-prompt-controls] > button {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  justify-self: start;
+  min-inline-size: 0;
+  min-block-size: 0;
+  inline-size: 28px;
+  block-size: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--composer-ink-3);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: color 150ms var(--composer-ease-out), background-color 150ms var(--composer-ease-out);
+}
+[data-metldr-prompt] [data-prompt-controls] > button:focus-visible { outline: 2px solid var(--composer-accent); outline-offset: 2px; }
+/* Match the reference input; its frame supplies focus styling. */
+[data-metldr-prompt] [data-prompt-field]:focus-visible { outline: 2px solid transparent; outline-offset: 2px; }
+@media (forced-colors: active) {
+  [data-metldr-prompt] [data-prompt-frame]:has([data-prompt-field]:focus-visible) { outline: 2px solid CanvasText; outline-offset: 2px; }
+}
+[data-metldr-prompt] [data-prompt-controls] > button:disabled { cursor: default; }
+[data-metldr-prompt] [data-prompt-controls] > button svg {
+  display: block;
+  flex: none;
+  inline-size: 16px;
+  block-size: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+[data-metldr-prompt] [data-prompt-field] {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  inline-size: 100%;
+  min-inline-size: 0;
+  min-block-size: 68px;
+  max-block-size: 100px;
+  padding: 8px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--composer-ink);
+  font: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  field-sizing: content;
+  overflow-wrap: anywhere;
+  resize: none;
+  text-wrap: stable;
+}
+[data-metldr-prompt] [data-prompt-field]::placeholder { color: var(--composer-ink-3); opacity: 1; }
+[data-metldr-prompt] [data-prompt-add] { grid-column: 1; grid-row: 2; }
+[data-metldr-prompt] [data-prompt-add][aria-expanded="true"] { background: var(--composer-hover); color: var(--composer-ink); }
+[data-metldr-prompt] [data-prompt-controls] > button[data-prompt-model] {
+  grid-column: 2;
+  grid-row: 2;
+  inline-size: auto;
+  max-inline-size: min(160px, 42vw);
+  min-inline-size: 0;
+  justify-content: flex-start;
+  gap: 4px;
+  padding-inline: 6px;
+  color: var(--composer-ink-2);
+}
+[data-metldr-prompt] [data-prompt-model-label] {
+  display: block;
+  min-inline-size: 0;
+  max-inline-size: min(136px, 36vw);
+  overflow: clip;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+[data-metldr-prompt] [data-prompt-model] svg { inline-size: 11px; block-size: 11px; stroke-width: 2.4; }
+[data-metldr-prompt] [data-prompt-dictate] { grid-column: 4; grid-row: 2; }
+[data-metldr-prompt] [data-prompt-dictate] svg { inline-size: 15px; block-size: 15px; }
+[data-metldr-prompt] [data-prompt-dictate]:disabled { color: var(--composer-ink-3); opacity: 0.48; }
+[data-metldr-prompt] [data-prompt-controls] > button[data-prompt-send],
+[data-metldr-prompt] [data-prompt-controls] > button[data-prompt-stop] {
+  grid-column: 5;
+  grid-row: 2;
+  background: var(--composer-ink);
+  color: var(--composer-surface);
+}
+[data-metldr-prompt] [data-prompt-controls] > button[data-prompt-send]:disabled {
+  background: var(--composer-line-strong);
+  color: var(--composer-ink-2);
+}
+[data-metldr-prompt] [data-prompt-controls] > button[data-prompt-send] svg,
+[data-metldr-prompt] [data-prompt-controls] > button[data-prompt-stop] svg { inline-size: 16px; block-size: 16px; stroke-width: 2.4; }
+[data-metldr-prompt] [data-prompt-stop] svg rect { fill: currentColor; stroke: none; }
+
+[data-metldr-prompt] .composer-menu,
+[data-metldr-prompt] .composer-model-menu {
+  position: absolute;
+  z-index: 10;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--composer-surface);
+  box-shadow: var(--composer-shadow-raised);
+}
+[data-metldr-prompt] .composer-menu { inset-inline: 0; inset-block-end: calc(100% + 8px); }
+[data-metldr-prompt] .composer-menu { transform-origin: bottom center; }
+[data-metldr-prompt] .composer-model-menu {
+  inset-inline-start: var(--menu-inline, 0px);
+  inset-block-end: var(--menu-block, calc(100% + 8px));
+  inline-size: max-content;
+  min-inline-size: 176px;
+  max-block-size: min(384px, var(--menu-max-block, calc(100dvh - 2rem)));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  transform-origin: bottom left;
+}
+[data-metldr-prompt] .composer-menu-highlight,
+[data-metldr-prompt] .composer-model-highlight {
+  position: absolute;
+  inset-inline: 4px;
+  inset-block-start: var(--row-block, 0px);
+  block-size: var(--row-size, 0px);
+  border-radius: 6px;
+  background: var(--composer-hover);
+  opacity: var(--row-opacity, 0);
+  pointer-events: none;
+  transition: opacity 150ms var(--composer-ease-out);
+}
+[data-metldr-prompt] [data-prompt-menu-rows] > button,
+[data-metldr-prompt] [data-prompt-model-rows] > button {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  inline-size: 100%;
+  min-inline-size: 0;
+  min-block-size: 36px;
+  padding-block: 0;
+  padding-inline: 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--composer-ink);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: start;
+  cursor: pointer;
+}
+[data-metldr-prompt] [data-prompt-model-rows] > button { min-block-size: 30px; gap: 8px; }
+[data-metldr-prompt] .composer-row-name {
+  flex: none;
+  max-inline-size: 55%;
+  overflow: clip;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--composer-ink);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+[data-metldr-prompt] .composer-row-description {
+  flex: 1;
+  min-inline-size: 0;
+  overflow: clip;
+  color: var(--composer-ink-3);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+[data-metldr-prompt] .composer-model-name {
+  flex: 1;
+  min-inline-size: 0;
+  overflow: clip;
+  color: var(--composer-ink);
+  font-size: 12.5px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+[data-metldr-prompt] .composer-model-tag { flex: none; color: var(--composer-ink-3); font-size: 11px; }
+[data-metldr-prompt] .composer-model-check { display: flex; flex: none; align-items: center; justify-content: center; color: var(--composer-ink); }
+[data-metldr-prompt] .composer-model-check svg { inline-size: 13px; block-size: 13px; stroke: currentColor; stroke-width: 2.5; }
+[data-metldr-prompt] [data-prompt-menu-footer] {
+  margin-block-start: 4px;
+  padding-block: 6px 4px;
+  padding-inline: 8px;
+  border-block-start: 1px solid var(--composer-line);
+  color: var(--composer-ink-3);
+  font-size: 11px;
+}
+[data-metldr-prompt] .composer-visually-hidden {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: clip;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+[data-metldr-prompt] .composer-native-field { display: none; }
+
+@media (hover: hover) and (pointer: fine) {
+  [data-metldr-prompt] [data-prompt-controls] > button:not(:disabled):hover,
+  [data-metldr-prompt] [data-prompt-menu-rows] > button:hover,
+  [data-metldr-prompt] [data-prompt-model-rows] > button:hover {
+    background: var(--composer-hover);
+    color: var(--composer-ink);
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-metldr-prompt] [data-prompt-controls] > button {
+    transition: color 150ms var(--composer-ease-out), background-color 150ms var(--composer-ease-out), transform 150ms var(--composer-ease-out);
+  }
+  [data-metldr-prompt] [data-prompt-controls] > button:active:not(:disabled) { scale: 0.94; }
+  [data-metldr-prompt] .composer-menu,
+  [data-metldr-prompt] .composer-model-menu { animation: metldr-prompt-pop-in 180ms var(--composer-ease-out) both; }
+  [data-metldr-prompt] .composer-menu-highlight,
+  [data-metldr-prompt] .composer-model-highlight { transition: inset-block-start 220ms var(--composer-ease-out), block-size 220ms var(--composer-ease-out), opacity 150ms var(--composer-ease-out); }
+  @keyframes metldr-prompt-pop-in {
+    from { opacity: 0; transform: scale(0.95); }
+    to { opacity: 1; transform: scale(1); }
+  }
+}
+
+[data-metldr-prompt], [data-metldr-prompt] * { box-sizing: border-box; }
+[data-metldr-prompt] button { touch-action: manipulation; user-select: none; }
+[data-metldr-prompt] button:focus-visible { outline: 2px solid var(--composer-accent); outline-offset: 2px; }
+[data-metldr-prompt] button:not([data-prompt-send], [data-prompt-stop]):active:not(:disabled) { background: var(--composer-hover); }
+[data-metldr-prompt] button:disabled { cursor: default; }
+[data-metldr-prompt] .composer-anchor { anchor-name: --prompt-composer; }
+[data-metldr-prompt] [data-prompt-model] { anchor-name: --prompt-model; }
+[data-metldr-prompt] .composer-glimm { position: absolute; inset-block: 0; inset-inline: 0; z-index: -1; block-size: 100%; inline-size: 100%; pointer-events: none; border-radius: inherit; }
+[data-metldr-prompt] [data-prompt-field] { overflow-y: auto; caret-color: var(--composer-ink); }
+[data-metldr-prompt] ::selection { background: color-mix(in oklch, var(--composer-accent) 28%, transparent); color: var(--composer-ink); }
+[data-metldr-prompt] .composer-empty { margin-block: 0; margin-inline: 0; padding-block: 8px; padding-inline: 8px; font-size: 12px; color: var(--composer-ink-3); }
+[data-metldr-prompt] :is(.composer-menu, .composer-model-menu) { position: fixed; inset-block: 0; inset-inline: 0; margin-block: auto; margin-inline: auto; block-size: max-content; border: 0; max-inline-size: min(26rem, calc(100% - 24px)); color: var(--composer-ink); font: inherit; scrollbar-color: var(--composer-line-strong) transparent; }
+[data-metldr-prompt] .composer-menu { anchor-scope: --prompt-row; }
+[data-metldr-prompt] .composer-model-menu { anchor-scope: --prompt-model-row; }
+[data-metldr-prompt] .composer-menu button[data-active="true"] { anchor-name: --prompt-row; }
+[data-metldr-prompt] .composer-model-menu button[data-active="true"] { anchor-name: --prompt-model-row; }
+[data-metldr-prompt] .composer-menu-highlight { position-anchor: --prompt-row; inset-block-start: anchor(top); block-size: anchor-size(block); }
+[data-metldr-prompt] .composer-model-highlight { position-anchor: --prompt-model-row; inset-block-start: anchor(top); block-size: anchor-size(block); }
+[data-metldr-prompt] [data-prompt-menu-rows] > button > svg { flex: none; inline-size: 22px; block-size: 22px; padding-block: 3.5px; padding-inline: 3.5px; color: var(--composer-ink-2); }
+[data-metldr-prompt] [data-prompt-model-rows] > button:disabled { opacity: 0.55; cursor: default; }
+@supports (position-area: block-start) {
+  [data-metldr-prompt] .composer-menu { inset-block: auto; inset-inline: auto; margin-block: 0; margin-inline: 0; position-anchor: --prompt-composer; position-area: block-start span-inline-end; margin-block-end: 8px; inline-size: anchor-size(inline); position-try-fallbacks: flip-block; }
+  [data-metldr-prompt] .composer-model-menu { inset-block: auto; inset-inline: auto; margin-block: 0; margin-inline: 0; position-anchor: --prompt-model; position-area: block-start span-inline-end; margin-block-end: 8px; position-try-fallbacks: flip-inline, flip-block, --metldr-prompt-menu-fit; }
+  @position-try --metldr-prompt-menu-fit {
+    position-area: none;
+    inset-inline: 12px;
+    inset-block-end: calc(anchor(top) + 8px);
+    margin-inline: auto;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-metldr-prompt] button { transition: scale 150ms var(--composer-ease-out), color 150ms var(--composer-ease-out), background-color 150ms var(--composer-ease-out); }
+  [data-metldr-prompt] button:active:not(:disabled) { scale: 0.94; }
+}

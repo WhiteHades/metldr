@@ -212,30 +212,35 @@ impl Owner {
                     .build()?;
                 runtime.block_on(async {
                     let mut output = crate::direct_output::DirectOutput::new(&worker_run, &tx);
-                    let emit = |event| output.accept(event);
                     match protocol {
                         Protocol::Messages => {
                             profile
                                 .messages_client(&worker_stop)?
-                                .text(SYSTEM, &input, &worker_stop, emit)
+                                .text(SYSTEM, &input, &worker_stop, |event| output.accept(event))
                                 .await
                         }
                         Protocol::Responses => {
-                            profile
-                                .responses_client(&worker_stop)?
-                                .text(SYSTEM, &input, &worker_stop, emit)
-                                .await
+                            crate::presentation::run(
+                                profile.responses_client(&worker_stop)?,
+                                SYSTEM,
+                                &input,
+                                &worker_run,
+                                &tx,
+                                &worker_stop,
+                                &mut output,
+                            )
+                            .await
                         }
                         Protocol::GoogleInteractions => {
                             profile
                                 .google_client(&worker_stop)?
-                                .text(SYSTEM, &input, &worker_stop, emit)
+                                .text(SYSTEM, &input, &worker_stop, |event| output.accept(event))
                                 .await
                         }
                         Protocol::ChatCompletions => {
                             profile
                                 .chat_client(&worker_stop)?
-                                .text(SYSTEM, &input, &worker_stop, emit)
+                                .text(SYSTEM, &input, &worker_stop, |event| output.accept(event))
                                 .await
                         }
                     }

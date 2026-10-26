@@ -1,7 +1,7 @@
 mod menu;
 mod token;
 
-use crate::{Panel, active_run, err};
+use crate::{Panel, active_run, err, execution_preference::ExecutionPreference};
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -12,8 +12,8 @@ use web_sys::{Document, Element, Event, HtmlSelectElement, HtmlTextAreaElement, 
 
 #[derive(Default)]
 pub(super) struct State {
-    restore_choice: RefCell<Option<String>>,
-    remembered_choice: RefCell<Option<String>>,
+    restore_pending: Cell<bool>,
+    preference: RefCell<ExecutionPreference>,
     plus: Cell<bool>,
     models: Cell<bool>,
     dismissed: Cell<bool>,
@@ -25,13 +25,12 @@ pub(super) struct State {
 
 pub(super) fn install(panel: &Rc<RefCell<Panel>>) -> Result<(), JsValue> {
     let doc = panel.borrow().document.clone();
-    if let Some(window) = web_sys::window()
-        && let Ok(Some(storage)) = window.local_storage()
-        && let Ok(Some(value)) = storage.get_item("metldr.composer.destination")
-        && value.len() <= 1024
+    let preference = ExecutionPreference::load();
+    let restore_pending = preference.value().is_some();
     {
-        *panel.borrow().composer.restore_choice.borrow_mut() = Some(value.clone());
-        *panel.borrow().composer.remembered_choice.borrow_mut() = Some(value);
+        let panel = panel.borrow();
+        panel.composer.restore_pending.set(restore_pending);
+        *panel.composer.preference.borrow_mut() = preference;
     }
     let form = element(&doc, "composer")?;
     for (name, handler) in [
@@ -125,7 +124,11 @@ pub(super) fn restore_choice(panel: &Panel) -> Result<(), JsValue> {
     if !panel.connected || panel.snapshot.is_none() {
         return Ok(());
     }
-    let Some(value) = panel.composer.restore_choice.borrow_mut().take() else {
+    if !panel.composer.restore_pending.get() {
+        return Ok(());
+    }
+    let Some(value) = panel.composer.preference.borrow().value() else {
+        panel.composer.restore_pending.set(false);
         return Ok(());
     };
     let select = select(&panel.document)?;
@@ -148,23 +151,15 @@ pub(super) fn restore_choice(panel: &Panel) -> Result<(), JsValue> {
         select.append_child(&option)?;
     }
     select.set_value(&value);
+    panel.composer.restore_pending.set(false);
     Ok(())
 }
 
 pub(super) fn remember_choice(panel: &Panel, value: &str) {
-    if panel.composer.restore_choice.borrow().is_some()
-        || panel.composer.remembered_choice.borrow().as_deref() == Some(value)
-    {
+    if panel.composer.restore_pending.get() {
         return;
     }
-    if let Some(window) = web_sys::window()
-        && let Ok(Some(storage)) = window.local_storage()
-        && storage
-            .set_item("metldr.composer.destination", value)
-            .is_ok()
-    {
-        *panel.composer.remembered_choice.borrow_mut() = Some(value.into());
-    }
+    panel.composer.preference.borrow_mut().remember(value);
 }
 
 pub(super) fn render(panel: &Panel) -> Result<(), JsValue> {

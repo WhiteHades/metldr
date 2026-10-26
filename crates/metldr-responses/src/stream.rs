@@ -1,13 +1,19 @@
-use crate::{Invocation, Result};
-use metldr_browser_tools::decode_call;
+use crate::Result;
 use metldr_conversation::TextEvent;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
 pub(crate) struct Turn {
     pub output: Vec<Value>,
-    pub call: Option<Invocation>,
+    pub call: Option<FunctionCall>,
     pub text: String,
+    pub deferred: Vec<TextEvent>,
+}
+
+pub(crate) struct FunctionCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: Value,
 }
 
 #[derive(Default)]
@@ -35,6 +41,36 @@ pub(super) struct State {
     text_bytes: usize,
     emit_item: u64,
     emit_part: u64,
+    limits: Limits,
+}
+
+struct Limits {
+    arguments: usize,
+    events: usize,
+    pause_at_call: bool,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            arguments: 16_384,
+            events: 4_096,
+            pause_at_call: false,
+        }
+    }
+}
+
+impl State {
+    pub fn with_limits(arguments: usize, events: usize, pause_at_call: bool) -> Self {
+        Self {
+            limits: Limits {
+                arguments,
+                events,
+                pause_at_call,
+            },
+            ..Self::default()
+        }
+    }
 }
 
 fn string<'a>(value: &'a Value, key: &str) -> Result<&'a str> {
@@ -79,7 +115,7 @@ impl State {
             return Err("Responses event after completion".into());
         }
         self.events += 1;
-        if self.events > 4096 {
+        if self.events > self.limits.events {
             return Err("Responses event count exceeds bound".into());
         }
         let value: Value =
@@ -130,7 +166,7 @@ impl State {
                 } else {
                     String::new()
                 };
-                if arguments.len() > 16_384 {
+                if arguments.len() > self.limits.arguments {
                     return Err("Responses arguments exceed bound".into());
                 }
                 self.items.insert(
@@ -145,9 +181,11 @@ impl State {
                 );
             }
             "response.function_call_arguments.delta" => {
+                let argument_limit = self.limits.arguments;
                 let item = self.item(&value, "function_call")?;
                 let delta = string(&value, "delta")?;
-                if item.arguments_done || item.arguments.len().saturating_add(delta.len()) > 16_384
+                if item.arguments_done
+                    || item.arguments.len().saturating_add(delta.len()) > argument_limit
                 {
                     return Err("invalid Responses argument delta".into());
                 }
@@ -283,6 +321,9 @@ impl State {
     fn emit_ready(&mut self) -> Vec<TextEvent> {
         let mut output = Vec::new();
         while let Some(item) = self.items.get_mut(&self.emit_item) {
+            if self.limits.pause_at_call && item.initial["type"] == "function_call" {
+                break;
+            }
             if item.initial["type"] != "message" {
                 if item.done.is_none() {
                     break;
@@ -317,9 +358,10 @@ impl State {
         output
     }
 
-    pub fn finish(self) -> Result<Turn> {
+    pub fn finish(mut self) -> Result<Turn> {
         let output = self
             .terminal
+            .take()
             .ok_or("Responses stream ended without completion")?;
         let mut text = String::new();
         let mut call = None;
@@ -338,15 +380,23 @@ impl State {
                 let id = identity(item, "call_id")?;
                 let arguments = serde_json::from_str(string(item, "arguments")?)
                     .map_err(|_| "invalid Responses function arguments JSON")?;
-                call = Some(Invocation {
+                call = Some(FunctionCall {
                     id,
-                    call: decode_call(string(item, "name")?, arguments)?,
+                    name: string(item, "name")?.into(),
+                    arguments,
                 });
             }
         }
         if call.is_none() && text.is_empty() {
             return Err("Responses completed without a result".into());
         }
-        Ok(Turn { output, call, text })
+        self.limits.pause_at_call = false;
+        let deferred = self.emit_ready();
+        Ok(Turn {
+            output,
+            call,
+            text,
+            deferred,
+        })
     }
 }

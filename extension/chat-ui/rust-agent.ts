@@ -26,6 +26,8 @@ type Delivery =
 const emptyRecord = (value: unknown): boolean =>
   typeof value === "object" && value !== null && !Array.isArray(value) && Object.keys(value).length === 0;
 
+const asError = (error: unknown): Error => error instanceof Error ? error : new Error(String(error));
+
 export class RustAgent extends AbstractAgent {
   private bridgePromise?: Promise<UiBridge>;
   private config: RustAgentConfig;
@@ -77,7 +79,7 @@ export class RustAgent extends AbstractAgent {
           throw new Error("The active run belongs to another conversation.");
         }
       } catch (error) {
-        subscriber.error(error);
+        subscriber.error(asError(error));
         return;
       }
 
@@ -97,7 +99,7 @@ export class RustAgent extends AbstractAgent {
             try {
               this.config.onStopFailure(error);
             } catch (reportingError) {
-              if (!subscriber.closed) subscriber.error(reportingError);
+              if (!subscriber.closed) subscriber.error(asError(reportingError));
             }
           });
       };
@@ -117,11 +119,11 @@ export class RustAgent extends AbstractAgent {
             subscriber.next(event);
             if (terminal) subscriber.complete();
           } catch (error) {
-            if (!subscriber.closed) subscriber.error(error);
+            if (!subscriber.closed) subscriber.error(asError(error));
           }
         });
       } catch (error) {
-        subscriber.error(error);
+        subscriber.error(asError(error));
         return () => {
           if (this.abortActive === requestStop) this.abortActive = undefined;
         };
@@ -137,7 +139,7 @@ export class RustAgent extends AbstractAgent {
           }
         })
         .catch((error) => {
-          if (!subscriber.closed) subscriber.error(error);
+          if (!subscriber.closed) subscriber.error(asError(error));
         });
 
       return () => {
@@ -184,6 +186,7 @@ export class RustAgent extends AbstractAgent {
       }
 
       const text = lastMessage.content;
+      let accepted = false;
       let delivery: Delivery = { phase: "connecting" };
       const requestStop = () => {
         switch (delivery.phase) {
@@ -233,6 +236,14 @@ export class RustAgent extends AbstractAgent {
           await bridge.run(request, (eventJson: string) => {
             const payload: unknown = JSON.parse(eventJson);
             const event = EventSchemas.parse(payload);
+            if ((event.type === "RUN_STARTED" || event.type === "RUN_FINISHED") &&
+                (event.threadId !== parsed.threadId || event.runId !== parsed.runId)) {
+              throw new Error("The native run emitted an event for another conversation.");
+            }
+            if (event.type === "RUN_STARTED") {
+              if (accepted) throw new Error("The native run was accepted more than once.");
+              accepted = true;
+            }
             const terminal = event.type === "RUN_FINISHED" || event.type === "RUN_ERROR";
             if (terminal) delivery = { phase: "settled" };
             subscriber.next(event);
@@ -244,7 +255,7 @@ export class RustAgent extends AbstractAgent {
           }
         } catch (error) {
           delivery = { phase: "settled" };
-          if (!subscriber.closed) subscriber.error(error);
+          if (!subscriber.closed) subscriber.error(asError(error));
         } finally {
           delivery = { phase: "settled" };
           if (this.abortActive === requestStop) this.abortActive = undefined;

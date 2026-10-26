@@ -1,3 +1,4 @@
+import { watchChat } from './scripts/build-chat.mjs'
 import { defineConfig, normalizePath, type Plugin } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import tailwindcss from '@tailwindcss/vite'
@@ -10,7 +11,7 @@ const privateFiles = [
   '**/.tmp/**', '**/prototypes/**', '**/docs/**',
   '**/{AGENTS,CLAUDE,PRODUCT,DESIGN}.md', '**/crates/**/target/**',
 ]
-const welcomeGenerator = resolve('crates/metldr-welcome/target/release',
+const welcomeGenerator = resolve(process.env.CARGO_TARGET_DIR || 'crates/metldr-welcome/target', 'release',
   process.platform === 'win32' ? 'welcome-guide.exe' : 'welcome-guide')
 
 const rustWelcome = (): Plugin => ({
@@ -52,6 +53,14 @@ const rustWelcome = (): Plugin => ({
   },
 })
 
+
+const chatDevelopment = (): Plugin => ({
+  name: 'metldr-chat-development',
+  async configureServer(server) {
+    const dispose = await watchChat()
+    server.httpServer?.once('close', () => { void dispose() })
+  },
+})
 
 const copyWasmAssets = () => ({
   name: 'copy-wasm-assets',
@@ -113,7 +122,7 @@ export default defineConfig({
     watch: { ignored: privateFiles },
     fs: { deny: ['.env', '.env.*', '*.{crt,pem}', '**/.git/**', ...privateFiles] },
   },
-  plugins: isContentBuild ? [] : [rustWelcome(), vue(), tailwindcss(), copyInboxSDKPlugin(), copyWasmAssets()],
+  plugins: isContentBuild ? [] : [rustWelcome(), chatDevelopment(), vue(), tailwindcss(), copyInboxSDKPlugin(), copyWasmAssets()],
   resolve: {
     alias: {
       '@': resolve(__dirname, './src')
@@ -143,6 +152,7 @@ export default defineConfig({
       input: {
         side_panel: 'index.html',
         panel: 'panel.html',
+        chat: 'chat.html',
         welcome: 'welcome.html',
         background: 'src/background/index.ts',
       },

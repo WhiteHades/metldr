@@ -1,9 +1,6 @@
 use crate::{
     Panel, active_run, composer, err,
-    model::{
-        BrowserActionIntent, BrowserActionOutcome, BrowserActionPhase, Control, ControlReceipt,
-        ScrollDirection, SourceStatus,
-    },
+    model::{BrowserActionPhase, SourceStatus},
     results,
 };
 use wasm_bindgen::closure::Closure;
@@ -393,18 +390,9 @@ fn render_browser_actions(panel: &Panel) -> Result<(), JsValue> {
         {
             attention.get_or_insert_with(|| card.clone());
         }
-        update_action_card(panel, &card, action, &mut restore_focus)?;
-        let (parent, position) = if action.phase == BrowserActionPhase::Settled
-            && matches!(
-                action.outcome,
-                Some(
-                    BrowserActionOutcome::Verified
-                        | BrowserActionOutcome::ClickObserved
-                        | BrowserActionOutcome::SelectionObserved
-                        | BrowserActionOutcome::ScrollObserved
-                        | BrowserActionOutcome::ControlObserved
-                )
-            ) {
+        let display = crate::browser_action_display::display(action);
+        update_action_card(panel, &card, action, &display, &mut restore_focus)?;
+        let (parent, position) = if display.receipt {
             (&receipt_rows, &mut receipt_position)
         } else {
             (&current_actions, &mut current_position)
@@ -493,6 +481,7 @@ fn update_action_card(
     panel: &Panel,
     card: &Element,
     action: &crate::model::BrowserActionView,
+    display: &crate::browser_action_display::Display,
     restore_focus: &mut bool,
 ) -> Result<(), JsValue> {
     card.set_attribute("data-browser-action", action.id.as_str())?;
@@ -500,241 +489,16 @@ fn update_action_card(
     let heading = card
         .query_selector("h2")?
         .ok_or_else(|| err("Browser action heading is missing."))?;
-    heading.set_text_content(Some(match &action.intent {
-        BrowserActionIntent::Navigate { .. } if action.phase == BrowserActionPhase::Pending => {
-            "Approve navigation"
-        }
-        BrowserActionIntent::Navigate { .. } => "Navigation",
-        BrowserActionIntent::ActivateButton { .. }
-            if action.phase == BrowserActionPhase::Pending =>
-        {
-            "Approve button click"
-        }
-        BrowserActionIntent::ActivateButton { .. } => "Button action",
-        BrowserActionIntent::Field { .. } => "Browser action",
-        BrowserActionIntent::SelectOption { .. } if action.phase == BrowserActionPhase::Pending => {
-            "Approve option selection"
-        }
-        BrowserActionIntent::SelectOption { .. } => "Option selection",
-        BrowserActionIntent::Scroll { .. } if action.phase == BrowserActionPhase::Pending => {
-            "Approve scroll"
-        }
-        BrowserActionIntent::Scroll { .. } => "Page scroll",
-        BrowserActionIntent::SetNativeControl { .. }
-            if action.phase == BrowserActionPhase::Pending =>
-        {
-            "Approve control change"
-        }
-        BrowserActionIntent::SetNativeControl { .. } => "Control change",
-    }));
-    match &action.intent {
-        BrowserActionIntent::Field {
-            field_label,
-            previous_value,
-            value,
-            ..
-        } => {
-            update_detail(card, "destination", &action.url)?;
-            update_detail(card, "field", field_label)?;
-            update_detail(card, "previous-value", previous_value)?;
-            update_detail(card, "value", value)?;
-            show_rows(
-                card,
-                &["destination", "field", "previous-value", "value", "status"],
-            )?;
-        }
-        BrowserActionIntent::Navigate { destination } => {
-            update_detail(
-                card,
-                "destination",
-                &format!("{} → {destination}", action.url),
-            )?;
-            show_rows(card, &["destination", "status"])?;
-        }
-        BrowserActionIntent::ActivateButton { button_label, .. } => {
-            update_row_label(card, "destination", "Source")?;
-            update_detail(card, "destination", &action.url)?;
-            update_detail(card, "button", button_label)?;
-            show_rows(card, &["destination", "button", "status"])?;
-        }
-        BrowserActionIntent::SelectOption { selection } => {
-            update_detail(card, "destination", &action.url)?;
-            update_row_label(card, "field", "Control")?;
-            update_detail(card, "field", &selection.control_label)?;
-            update_row_label(card, "previous-value", "Previous selection")?;
-            update_detail(
-                card,
-                "previous-value",
-                &selection.previous.as_ref().map_or_else(
-                    || "No selection".to_owned(),
-                    |choice| format!("{} (option {})", choice.label, choice.index + 1),
-                ),
-            )?;
-            update_row_label(card, "value", "Chosen option")?;
-            update_detail(
-                card,
-                "value",
-                &format!(
-                    "{} (option {})",
-                    selection.selected.label,
-                    selection.selected.index + 1
-                ),
-            )?;
-            show_rows(
-                card,
-                &["destination", "field", "previous-value", "value", "status"],
-            )?;
-        }
-        BrowserActionIntent::Scroll { scroll } => {
-            update_detail(card, "destination", &action.url)?;
-            update_detail(card, "scroll-target", &scroll.label)?;
-            update_detail(
-                card,
-                "scroll-motion",
-                &format!(
-                    "{} {} px",
-                    match scroll.direction {
-                        ScrollDirection::Up => "Up",
-                        ScrollDirection::Down => "Down",
-                        ScrollDirection::Left => "Left",
-                        ScrollDirection::Right => "Right",
-                    },
-                    scroll.pixels
-                ),
-            )?;
-            update_detail(
-                card,
-                "scroll-before",
-                &format!("x: {}, y: {}", scroll.before.x, scroll.before.y),
-            )?;
-            let after = action
-                .observed_scroll
-                .as_ref()
-                .map_or_else(String::new, |point| {
-                    format!("x: {}, y: {}", point.x, point.y)
-                });
-            update_detail(card, "scroll-after", &after)?;
-            show_rows(
-                card,
-                if action.observed_scroll.is_some() {
-                    &[
-                        "destination",
-                        "scroll-target",
-                        "scroll-motion",
-                        "scroll-before",
-                        "scroll-after",
-                        "status",
-                    ]
-                } else {
-                    &[
-                        "destination",
-                        "scroll-target",
-                        "scroll-motion",
-                        "scroll-before",
-                        "status",
-                    ]
-                },
-            )?;
-        }
-        BrowserActionIntent::SetNativeControl { control } => {
-            update_detail(card, "destination", &action.url)?;
-            let (label, previous, requested, group, peer) = match control {
-                Control::Checkbox {
-                    control_label,
-                    before,
-                    checked,
-                    ..
-                } => (
-                    control_label.as_str(),
-                    checkbox_state(before.checked, before.indeterminate),
-                    checkbox_state(*checked, false).into(),
-                    String::new(),
-                    String::new(),
-                ),
-                Control::Radio {
-                    control_label,
-                    index,
-                    group,
-                    ..
-                } => (
-                    control_label.as_str(),
-                    "Not checked",
-                    format!("Select {} (option {})", control_label, index + 1),
-                    if group.member_count == 1 {
-                        "1 option".into()
-                    } else {
-                        format!("{} options", group.member_count)
-                    },
-                    group
-                        .prior_selected
-                        .as_ref()
-                        .map_or_else(|| "None selected".into(), radio_choice),
-                ),
-            };
-            update_detail(card, "control-target", label)?;
-            update_detail(card, "control-previous", &previous)?;
-            update_detail(card, "control-requested", &requested)?;
-            update_detail(card, "control-group", &group)?;
-            update_detail(card, "control-peer", &peer)?;
-            let observed = match &action.observed_control {
-                Some(ControlReceipt::Checkbox {
-                    checked,
-                    indeterminate,
-                }) => checkbox_state(*checked, *indeterminate).into(),
-                Some(ControlReceipt::Radio {
-                    selected,
-                    cleared_peer,
-                    ..
-                }) => format!(
-                    "Selected {} (option {}). Cleared {}.",
-                    selected.label,
-                    selected.index + 1,
-                    cleared_peer
-                        .as_ref()
-                        .map_or("no other choice".into(), radio_choice)
-                ),
-                None => "".into(),
-            };
-            update_detail(card, "control-observed", &observed)?;
-            let mut rows = vec![
-                "destination",
-                "control-target",
-                "control-previous",
-                "control-requested",
-            ];
-            if matches!(control, Control::Radio { .. }) {
-                rows.extend(["control-group", "control-peer"]);
-            }
-            if action.observed_control.is_some() {
-                rows.push("control-observed");
-            }
-            rows.push("status");
-            show_rows(card, &rows)?;
-        }
+    heading.set_text_content(Some(display.title));
+    let mut parts = Vec::with_capacity(display.details.len() + 1);
+    for detail in &display.details {
+        update_row_label(card, detail.part, detail.label)?;
+        update_detail(card, detail.part, &detail.value)?;
+        parts.push(detail.part);
     }
-    let status = match action.outcome {
-        Some(BrowserActionOutcome::ClickObserved) => "Button click observed".to_owned(),
-        Some(BrowserActionOutcome::SelectionObserved) => "Selection observed".to_owned(),
-        Some(BrowserActionOutcome::ScrollObserved) if action.observed_scroll.as_ref().is_some_and(|after| {
-            matches!(&action.intent, BrowserActionIntent::Scroll { scroll } if scroll.before == *after)
-        }) => "No movement observed".to_owned(),
-        Some(BrowserActionOutcome::ScrollObserved) => "Scroll position observed".to_owned(),
-        Some(BrowserActionOutcome::ControlObserved) => "Control state observed on this page".to_owned(),
-        _ => format!(
-            "{}{}{}",
-            action.phase,
-            action
-                .outcome
-                .map(|outcome| format!(" ({outcome})"))
-                .unwrap_or_default(),
-            action
-                .reason
-                .as_ref()
-                .map(|reason| format!(": {reason}"))
-                .unwrap_or_default()
-        ),
-    };
-    update_detail(card, "status", &status)?;
+    update_detail(card, "status", &display.status)?;
+    parts.push("status");
+    show_rows(card, &parts)?;
     let controls = card.query_selector("[data-part='controls']")?;
     if action.phase != BrowserActionPhase::Pending {
         if let Some(controls) = controls {
@@ -856,24 +620,4 @@ fn write_text(element: &Element, value: &str) {
 
 pub(super) fn status(doc: &Document, value: &str) {
     set_text(doc, "status", value);
-}
-
-fn checkbox_state(checked: bool, indeterminate: bool) -> &'static str {
-    if indeterminate {
-        "Mixed"
-    } else if checked {
-        "Checked"
-    } else {
-        "Not checked"
-    }
-}
-
-fn radio_choice(member: &crate::model::RadioMember) -> String {
-    format!(
-        "{} (option {}{}{})",
-        member.label,
-        member.index + 1,
-        if member.hidden { ", hidden" } else { "" },
-        if member.disabled { ", disabled" } else { "" }
-    )
 }

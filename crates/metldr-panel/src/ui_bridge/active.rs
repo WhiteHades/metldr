@@ -65,6 +65,10 @@ impl UiActiveRun {
     }
 
     pub fn watch(&self, ui_run_id: String, emit: Function) -> Result<Promise, JsValue> {
+        self.active.core.ensure_current().map_err(js_error)?;
+        if self.active.core.page.recovery.borrow().active() {
+            return Err(js_error(FlowError::HistoryBusy));
+        }
         if !matches!(*self.active.observation.borrow(), Observation::Ready) {
             return Err(crate::err("Reconnect to observe this run again."));
         }
@@ -72,9 +76,8 @@ impl UiActiveRun {
             .active
             .question
             .as_ref()
-            .map(|question| AgUiMessage {
+            .map(|question| AgUiMessage::User {
                 id: format!("{}:question", self.active.native),
-                role: MessageRole::User,
                 content: question.clone(),
             })
             .into_iter()
@@ -119,15 +122,20 @@ impl UiActiveRun {
 
     pub fn stop(&self) -> Result<Promise, JsValue> {
         let active = Rc::clone(&self.active);
-        active.core.owner.borrow().readable().map_err(js_error)?;
+        active.core.ensure_current().map_err(js_error)?;
+        let flow = active.core.flow();
         if active.stopping.replace(true) {
             return Err(js_error(FlowError::HistoryBusy));
         }
         Ok(future_to_promise(async move {
             let _stopping = Stopping(&active.stopping);
-            match active
-                .core
-                .flow()
+            active.core.ensure_current().map_err(js_error)?;
+            if active.core.page.recovery.borrow().active()
+                || !flow.same_connection(&active.core.flow())
+            {
+                return Err(js_error(FlowError::HistoryStale));
+            }
+            match flow
                 .request_stop(active.core.scope.clone(), active.native.clone())
                 .await
                 .map_err(js_error)?
@@ -141,37 +149,22 @@ impl UiActiveRun {
 
 impl Active {
     async fn watch(&self, mut stream: RunStream, emit: Function) -> Result<(), FlowError> {
-        let mut views = self
-            .core
-            .flow()
-            .watch(self.core.scope.clone(), self.native.clone())
-            .await?;
-        loop {
-            let view = {
-                let mut changed = std::pin::pin!(views.changed());
-                std::future::poll_fn(|context| {
-                    let mut state = self.observation.borrow_mut();
-                    match &mut *state {
-                        Observation::Watching(wake) => *wake = Some(context.waker().clone()),
-                        _ => return Poll::Ready(Ok(None)),
-                    }
-                    drop(state);
-                    changed
-                        .as_mut()
-                        .poll(context)
-                        .map(|result| result.map(Some))
-                })
-                .await?
-            };
-            let Some(view) = view else { return Ok(()) };
-            let view = view.ok_or(FlowError::Disconnected)?;
-            if self
-                .core
-                .emit_view(view, &self.native, &mut stream, &emit)?
-            {
-                *self.observation.borrow_mut() = Observation::Terminal;
-                return Ok(());
+        self.core.ensure_current()?;
+        let mut observing = std::pin::pin!(self.core.stream(&self.native, &mut stream, &emit));
+        std::future::poll_fn(|context| {
+            let mut state = self.observation.borrow_mut();
+            match &mut *state {
+                Observation::Watching(wake) => *wake = Some(context.waker().clone()),
+                _ => return Poll::Ready(Ok(())),
             }
-        }
+            drop(state);
+            observing.as_mut().poll(context).map(|result| {
+                if result.is_ok() {
+                    *self.observation.borrow_mut() = Observation::Terminal;
+                }
+                result
+            })
+        })
+        .await
     }
 }

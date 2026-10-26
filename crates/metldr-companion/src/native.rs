@@ -243,6 +243,11 @@ pub(super) fn run() -> Result<()> {
                 _ => (),
             },
             Event::Text { run, change } => owner.text(&run, change)?,
+            Event::Table {
+                run,
+                invocation,
+                ack,
+            } => owner.table(&run, invocation, ack)?,
             Event::Settled { run, result } => owner.settled(&run, result, closed)?,
             Event::PiBound {
                 run,

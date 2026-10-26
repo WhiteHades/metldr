@@ -1,0 +1,90 @@
+#browser-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  inline-size: 100%;
+  min-inline-size: 0;
+  max-inline-size: 46rem;
+  margin-inline: auto;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+#browser-actions > :is(p, article, details) { margin: 0; }
+#browser-actions > article,
+#browser-actions [data-browser-receipts] article {
+  display: grid;
+  gap: 0.5rem;
+  min-inline-size: 0;
+  padding: clamp(0.75rem, 0.5rem + 1vi, 1rem);
+  border: 1px solid var(--line);
+  border-radius: 0.875rem;
+  background: var(--surface);
+}
+
+#browser-actions :is(h3, p) { margin: 0; }
+#browser-actions h3 { font-size: 1rem; font-weight: 600; }
+#browser-actions [data-part="status"],
+#browser-actions [data-part="url"] { color: var(--ink-2); }
+#browser-actions [data-part="url"] { overflow-wrap: anywhere; }
+#browser-actions [data-part="controls"] { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+#browser-receipt-rows { display: flex; flex-direction: column; gap: 0.5rem; padding-block: 0.5rem; }
+#browser-actions button {
+  min-block-size: 44px;
+  padding-block: 0.5rem;
+  padding-inline: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  color: var(--ink);
+  background: var(--field);
+}
+#browser-actions button:disabled { opacity: 0.6; }
+#browser-actions button:active:not(:disabled),
+#browser-actions [data-browser-receipts] > summary:active { background: var(--hover-2); }
+#browser-actions :is(button, summary):focus-visible { outline: 2px solid var(--ink-2); outline-offset: 3px; }
+#browser-actions [role="status"] { color: var(--ink-2); }
+#browser-actions [role="alert"] { color: var(--ink); font-weight: 500; }
+#browser-actions [data-browser-receipts] > summary {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  list-style: none;
+  inline-size: fit-content;
+  max-inline-size: 100%;
+  min-block-size: 44px;
+  padding-block: 0.5rem;
+  padding-inline: 0.25rem;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+#browser-actions [data-browser-receipts] > summary::-webkit-details-marker { display: none; }
+#browser-actions [data-browser-receipts] > summary::after {
+  content: "";
+  inline-size: 0.4em;
+  block-size: 0.4em;
+  border-inline-end: 1px solid currentColor;
+  border-block-end: 1px solid currentColor;
+  rotate: 45deg;
+  align-self: center;
+}
+#browser-actions [data-browser-receipts][open] > summary::after { rotate: 225deg; }
+#browser-actions [data-browser-receipts] { interpolate-size: allow-keywords; }
+#browser-actions [data-browser-receipts]::details-content { block-size: 0; overflow: clip; }
+#browser-actions [data-browser-receipts][open]::details-content { block-size: auto; }
+
+@media (prefers-reduced-motion: no-preference) {
+  #browser-actions [data-browser-receipts]::details-content {
+    transition: block-size 0.3s var(--ease-out, ease-out), content-visibility 0.3s allow-discrete;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  #browser-actions button:hover:not(:disabled),
+  #browser-actions [data-browser-receipts] > summary:hover { background: var(--hover); }
+}
+
+@media (forced-colors: active) {
+  #browser-actions button { border-color: ButtonText; }
+  #browser-actions :is(button, summary):focus-visible { outline-color: Highlight; }
+}

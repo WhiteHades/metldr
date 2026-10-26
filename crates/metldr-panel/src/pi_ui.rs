@@ -795,7 +795,7 @@ fn selected_matches_pi(selected: Option<&str>, workflow: &str) -> bool {
 }
 
 /// Strip terminal control sequences for presentation. Payloads used as selection values remain unchanged.
-fn display_plain(value: &str) -> String {
+pub(crate) fn display_plain(value: &str) -> String {
     let bytes = value.as_bytes();
     let mut out = String::with_capacity(value.len());
     let mut index = 0;

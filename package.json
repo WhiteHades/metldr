@@ -9,7 +9,7 @@
     "predev": "npm run build:rust",
     "build": "npm run build:main && npm run build:content && npm run build:sandbox && npm run build:offscreen && npm run build:models",
     "build:rust": "node scripts/build-rust.mjs",
-    "prebuild:main": "npm run build:rust",
+    "prebuild:main": "npm run build:rust && npm run build:chat",
     "build:main": "vite build",
     "prebuild:content": "npm run build:rust",
     "build:content": "cross-env BUILD_TARGET=content vite build",
@@ -17,7 +17,10 @@
     "build:offscreen": "npx esbuild src/offscreen/offscreen.ts --bundle --outfile=dist/offscreen.js --format=esm --target=esnext --minify && cp public/offscreen.html dist/offscreen.html",
     "build:models": "[ -d public/models ] && cp -r public/models dist/ || echo 'No models to copy (run npm run download:models first)'",
     "download:models": "node scripts/download-models.mjs",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "build:chat": "node scripts/build-chat.mjs",
+    "check:chat": "npm --prefix extension/chat-ui run check",
+    "install:chat": "npm ci --prefix extension/chat-ui"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.8.1",

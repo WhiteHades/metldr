@@ -39,6 +39,7 @@ mod opencode_model;
 mod opencode_owner;
 mod page_text;
 mod pi_ui;
+mod presentation;
 mod provider;
 mod provider_settings;
 mod public_view;

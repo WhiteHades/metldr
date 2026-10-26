@@ -21,6 +21,15 @@ impl Prepared {
         }
         let state: Store = serde_json::from_slice(original)?;
         state.validate()?;
+        if state.view.runs.iter().any(|run| {
+            run.output
+                .projection()
+                .conversation
+                .iter()
+                .any(|entry| matches!(entry, metldr_conversation::ProjectedEntry::Artifact { .. }))
+        }) {
+            return Err("legacy snapshot cannot contain artifact references".into());
+        }
         let conversation = format!("{}:{}", state.view.store, state.next);
         let next = state
             .next
@@ -151,6 +160,7 @@ impl Prepared {
             let mut meta = write.open_table(META)?;
             meta.insert("profile", encode(&profile)?.as_slice())?;
             meta.insert("legacy_snapshot", original)?;
+            write.open_table(ARTIFACTS)?;
             write.open_table(CONVERSATIONS)?.insert(
                 self.conversation.as_str(),
                 encode(&conversation)?.as_slice(),

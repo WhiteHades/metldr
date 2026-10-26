@@ -1,8 +1,10 @@
 # metldr Responses client
 
-This Rust client streams plain text and browser tool calls through the OpenAI
-Responses protocol. A browser conversation keeps request history and finalized
-reasoning. The application owns browser permissions, approvals and actions.
+This Rust client streams plain text, browser tool calls, or a single validated
+table presentation through the OpenAI Responses protocol. Browser conversations
+keep request history and finalized reasoning. Presentation conversations expose
+only the source table catalog and keep their tool continuation in the client.
+The application owns browser permissions, approvals and actions.
 
 ```no_run
 use metldr_responses::{Client, Prompt, Result, TextEvent};
@@ -56,8 +58,8 @@ client.text("Answer using the supplied source.", "The report lists 17 units.",
 The text request includes no tool definitions or browser policy and uses
 `store: false`. It rejects tool calls, empty answers and incomplete streams.
 Partial text can arrive before an error. The caller owns source selection,
-history and the final run status. The same transport bounds and cancellation
-behavior apply to both paths.
+history and the final run status. All modes share transport and cancellation
+behavior, with mode-specific resource bounds.
 
 After approving and executing a returned invocation, pass the actual browser
 result to `conversation.submit_tool_result(&result)`, then call `next` again.
@@ -75,11 +77,20 @@ header. Endpoint user information, query strings and fragments are rejected.
 The caller owns credential storage and must trust its configured endpoint.
 
 Requests use `store: false`, encrypted reasoning, strict tool schemas and one
-tool call at a time. The client validates event ordering, identifiers, output
+tool call at a time. Presentation mode offers only `render_a2ui` for
+`copilotkit://open-generative-ui-tables`, with one root `Table` component.
+It validates the surface id and converts table fields through the shared
+validated table type. The client validates event ordering, identifiers, output
 items and terminal output, then requires clean HTTP completion before returning
 a tool call. It retains finalized opaque reasoning for the next request.
-Request bodies are limited to 128 KiB and response streams to 512 KiB. Text is
-limited to 8 KiB per response. The application must also bound complete runs.
+Browser and text requests remain limited to 128 KiB, 16 KiB per tool argument,
+128 KiB per SSE line/event, and 512 KiB per stream. Presentation requests are
+limited to 2 MiB, tool arguments to 384 KiB, SSE lines/events to 1 MiB, and
+streams to 8 MiB. Text is limited to 8 KiB per response. The application must
+also bound complete runs.
+
+Browser and text responses allow at most 4096 events. Presentation responses
+allow at most 65536 events.
 
 Run `make check-responses` from the repository root. The compiled guide and
 focused Rust checks cover request construction, streaming, finalized history

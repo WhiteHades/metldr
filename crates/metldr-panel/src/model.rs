@@ -13,13 +13,13 @@ pub(crate) use control::{Control, ControlReceipt, RadioMember};
 
 const MAX_FRAME: usize = 65_536;
 const MAX_RUNS: usize = 16;
-const MAX_ACTIVITY: usize = 64;
+pub(crate) const MAX_ACTIVITY: usize = 64;
 const MAX_BROWSER_ACTIONS: usize = 16;
 const MAX_PAGE_TEXT: usize = 8_192;
 const MAX_PI_UI: usize = 32_768;
 const MAX_CORRECTIONS: usize = 16;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct RunId(String);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -108,7 +108,7 @@ impl UserText {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum RunStatus {
     Running,
@@ -317,7 +317,7 @@ pub(crate) fn valid_agent_profile(profile: &AgentProfile) -> bool {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ProviderProtocol {
     Messages,
@@ -823,7 +823,7 @@ pub(crate) fn valid_correction_receipt(
         )
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum RunRoute {
     LegacyUnspecified,
@@ -1190,7 +1190,7 @@ pub(crate) struct ActivityView {
     pub(crate) call: Option<ToolCallView>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ActivityOutcome {
     Succeeded,
@@ -1222,14 +1222,14 @@ pub(crate) struct ToolCallView {
     pub(crate) output: Option<ToolPreviewView>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ToolPreviewView {
     pub(crate) text: String,
     pub(crate) truncated: bool,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ActivityPhase {
     Started,

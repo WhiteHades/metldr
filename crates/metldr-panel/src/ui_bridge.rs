@@ -12,27 +12,58 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
 
 use crate::{
-    ag_ui::{AgUiMessage, MessageRole, RunStream},
+    ag_ui::{AgUiMessage, Event, RunStream},
     composer,
+    execution_preference::{ExecutionPreference, MAX_EXECUTION_CHOICE_BYTES},
     flow::{FlowClient, StopReceipt},
     history::Change,
     model::{FlowError, PageView, RunId, UserText},
 };
 
+mod activation;
 mod active;
 mod agents;
+mod browser_actions;
+mod codex_input;
+mod connection;
 mod conversations;
 mod destinations;
 mod history;
+mod native_permissions;
+mod native_tools;
 mod owner;
+mod pi_ui;
 mod providers;
+mod run_details;
+mod run_reference;
 mod settings;
 mod settings_updates;
+mod source_updates;
 pub use active::UiActiveRun;
 pub use agents::{UiAgentConfiguration, UiAgentProfile, UiAgentSettings};
+pub use browser_actions::{
+    UiBrowserAction, UiBrowserActionDetail, UiBrowserActionSnapshot, UiBrowserActionSubscription,
+    UiBrowserActions,
+};
+pub use codex_input::{
+    UiCodexAnswer, UiCodexField, UiCodexFieldAnswer, UiCodexInput, UiCodexOption,
+    UiCodexPromptKind, UiCodexQuestion, UiCodexQuestionAnswer, UiCodexRequest, UiCodexSnapshot,
+    UiCodexSubscription,
+};
+pub use connection::{UiConnection, UiConnectionSnapshot, UiConnectionSubscription};
 pub use destinations::UiDestination;
+pub use native_permissions::{
+    UiNativePermission, UiNativePermissionOption, UiNativePermissionSnapshot,
+    UiNativePermissionSubscription, UiNativePermissions,
+};
+pub use native_tools::{UiNativeTool, UiNativeToolPage, UiNativeTools, UiToolPreview};
 use owner::{NavigationWork, Owner, Stop};
+pub use pi_ui::{
+    UiPiDialogKind, UiPiNotice, UiPiOption, UiPiRequest, UiPiSnapshot, UiPiStatus,
+    UiPiSubscription, UiPiUi, UiPiWidget,
+};
 pub use providers::{UiProviderConnection, UiProviderSettings};
+pub use run_details::{UiRunDetails, UiRunReport, UiRunReportPage};
 pub use settings_updates::{UiAgentSnapshot, UiProviderSnapshot, UiSettingsSubscription};
 
 #[wasm_bindgen]
@@ -86,16 +117,30 @@ struct Core {
     owner: RefCell<Owner>,
     history_loading: Cell<bool>,
     preparing: RefCell<Option<Waker>>,
+    stream_waiter: RefCell<Option<Waker>>,
+    native_operation: RefCell<native_permissions::Operation>,
+    native_subscriptions: RefCell<Vec<std::rc::Weak<native_permissions::Observer>>>,
+    browser_operation: RefCell<browser_actions::Operation>,
+    browser_subscriptions: RefCell<Vec<std::rc::Weak<browser_actions::Observer>>>,
+    pi_operation: RefCell<pi_ui::Operation>,
+    pi_subscriptions: RefCell<Vec<std::rc::Weak<pi_ui::Observer>>>,
+    codex_operation: RefCell<codex_input::Operation>,
+    codex_subscriptions: RefCell<Vec<std::rc::Weak<codex_input::Observer>>>,
 }
 
 struct PageSession {
     flow: RefCell<FlowClient>,
     view: RefCell<PageView>,
+    execution_preference: RefCell<ExecutionPreference>,
     navigating: Cell<bool>,
     settings: RefCell<settings::Operation>,
     current: RefCell<std::rc::Weak<Core>>,
     settings_subscriptions: RefCell<Vec<std::rc::Weak<settings_updates::Observer>>>,
     invalidated: Cell<bool>,
+    source_refreshing: Cell<bool>,
+    recovery: RefCell<connection::Slot>,
+    connection_subscriptions: RefCell<Vec<std::rc::Weak<connection::Observer>>>,
+    connection_waiter: RefCell<Option<Waker>>,
 }
 
 impl PageSession {
@@ -119,6 +164,7 @@ impl PageSession {
     fn settings_blocked(&self) -> bool {
         let view = self.view.borrow();
         self.invalidated.get()
+            || self.recovery.borrow().active()
             || self.settings.borrow().blocked()
             || view.provider_settings.busy
             || view.provider_settings.pending.is_some()
@@ -127,17 +173,13 @@ impl PageSession {
 
     fn controls_ready(&self) -> bool {
         !self.invalidated.get()
+            && !self.recovery.borrow().active()
             && !self.navigating.get()
             && self
                 .current
                 .borrow()
                 .upgrade()
                 .is_none_or(|core| core.owner.borrow().settings_ready())
-    }
-
-    fn replace_flow(&self, flow: FlowClient) {
-        self.flow.replace(flow);
-        self.notify_settings();
     }
 }
 
@@ -164,21 +206,29 @@ pub async fn connect_ui_bridge(capture: Function) -> Result<UiBridge, JsValue> {
     crate::flow::install_capture(capture);
     let flow = FlowClient::connect().await.map_err(js_error)?;
     let view = flow.current_page().await.map_err(js_error)?;
-    Ok(UiBridge::from_view(flow, view))
+    UiBridge::from_view(flow, view).map_err(js_error)
 }
 
 impl UiBridge {
-    fn from_view(flow: FlowClient, view: PageView) -> Self {
+    fn from_view(flow: FlowClient, view: PageView) -> Result<Self, FlowError> {
+        let views = flow.observe()?;
         let page = Rc::new(PageSession {
-            flow: RefCell::new(flow),
+            flow: RefCell::new(flow.clone()),
             view: RefCell::new(view.clone()),
+            execution_preference: RefCell::new(ExecutionPreference::load()),
             navigating: Cell::new(false),
             settings: RefCell::new(settings::Operation::default()),
             current: RefCell::new(std::rc::Weak::new()),
             settings_subscriptions: RefCell::new(Vec::new()),
             invalidated: Cell::new(false),
+            source_refreshing: Cell::new(false),
+            recovery: RefCell::new(connection::Slot::default()),
+            connection_subscriptions: RefCell::new(Vec::new()),
+            connection_waiter: RefCell::new(None),
         });
-        Self::from_session(page, &view)
+        page.install_source_updates();
+        page.install_connection_updates(flow, views);
+        Ok(Self::from_session(page, &view))
     }
 
     fn from_session(page: Rc<PageSession>, view: &PageView) -> Self {
@@ -189,6 +239,15 @@ impl UiBridge {
                 owner: RefCell::new(Owner::Idle),
                 history_loading: Cell::new(false),
                 preparing: RefCell::new(None),
+                stream_waiter: RefCell::new(None),
+                native_operation: RefCell::new(native_permissions::Operation::default()),
+                native_subscriptions: RefCell::new(Vec::new()),
+                browser_operation: RefCell::new(browser_actions::Operation::default()),
+                browser_subscriptions: RefCell::new(Vec::new()),
+                pi_operation: RefCell::new(pi_ui::Operation::default()),
+                pi_subscriptions: RefCell::new(Vec::new()),
+                codex_operation: RefCell::new(codex_input::Operation::default()),
+                codex_subscriptions: RefCell::new(Vec::new()),
             }),
         };
         page.current.replace(Rc::downgrade(&bridge.core));
@@ -203,8 +262,13 @@ impl UiBridge {
         self.core.scope.conversation.clone()
     }
 
+    #[wasm_bindgen(getter)]
+    pub fn navigation_pending(&self) -> bool {
+        matches!(*self.core.owner.borrow(), Owner::Navigating(_))
+    }
+
     pub fn active_run(&self) -> Result<Option<UiActiveRun>, JsValue> {
-        self.core.owner.borrow().readable().map_err(js_error)?;
+        self.core.ensure_current().map_err(js_error)?;
         let view = self.core.cached().map_err(js_error)?;
         Ok(view
             .runs
@@ -230,6 +294,38 @@ impl UiBridge {
             .collect())
     }
 
+    pub async fn run_details(&self, encoded: String) -> Result<UiRunDetails, JsValue> {
+        run_details::open(Rc::clone(&self.core), encoded)
+            .await
+            .map_err(js_error)
+    }
+
+    pub fn preferred_execution_choice(&self) -> Result<Option<String>, JsValue> {
+        self.core.ensure_current().map_err(js_error)?;
+        Ok(self.core.page.execution_preference.borrow().value())
+    }
+
+    pub fn select_execution_choice(&self, value: String) -> Result<(), JsValue> {
+        self.core.ensure_current().map_err(js_error)?;
+        if self.core.page.recovery.borrow().active() || !self.core.owner.borrow().settings_ready() {
+            return Err(js_error(FlowError::HistoryBusy));
+        }
+        if value.len() > MAX_EXECUTION_CHOICE_BYTES {
+            return Err(crate::err("The execution choice exceeds its limit."));
+        }
+        if !value.is_empty() {
+            composer::resolve(&self.core.page.view.borrow(), &value)
+                .map_err(FlowError::InvalidInput)
+                .map_err(js_error)?;
+        }
+        self.core
+            .page
+            .execution_preference
+            .borrow_mut()
+            .remember(&value);
+        Ok(())
+    }
+
     pub async fn snapshot(&self) -> Result<String, JsValue> {
         let view = self.core.current().await.map_err(js_error)?;
         let snapshot = Snapshot {
@@ -244,6 +340,31 @@ impl UiBridge {
     pub async fn load_older(&self, cursor: String) -> Result<String, JsValue> {
         let page = self.core.history(Some(&cursor)).await.map_err(js_error)?;
         bounded_json(&page).map_err(js_error)
+    }
+
+    pub async fn table(&self, run: String, artifact: String) -> Result<String, JsValue> {
+        let _read = self.core.begin_read().map_err(js_error)?;
+        let run: RunId = serde_json::from_value(serde_json::Value::String(run))
+            .map_err(|_| crate::err("Invalid table run."))?;
+        let artifact = metldr_conversation::ArtifactId::new(artifact)
+            .map_err(|_| crate::err("Invalid table identity."))?;
+        let flow = self.core.flow();
+        let context = flow.history_current().await.map_err(js_error)?;
+        if context.scope != self.core.scope {
+            return Err(js_error(FlowError::HistoryStale));
+        }
+        let table = flow
+            .history_artifact(&context, &run, &artifact)
+            .await
+            .map_err(js_error)?;
+        self.core.owner.borrow().readable().map_err(js_error)?;
+        serde_json::to_string(&table).map_err(|error| crate::err(&error.to_string()))
+    }
+
+    pub async fn native_tools(&self, reference: String) -> Result<UiNativeTools, JsValue> {
+        native_tools::open(Rc::clone(&self.core), reference)
+            .await
+            .map_err(js_error)
     }
 
     pub async fn conversations(&self, cursor: Option<String>) -> Result<String, JsValue> {
@@ -280,6 +401,7 @@ impl UiBridge {
     }
 
     pub fn capture(&self) -> Result<Promise, JsValue> {
+        self.core.ensure_current().map_err(js_error)?;
         let view = self.core.cached().map_err(js_error)?;
         if self.core.page.settings_blocked() {
             return Err(js_error(FlowError::HistoryBusy));
@@ -299,6 +421,7 @@ impl UiBridge {
     }
 
     pub async fn run(&self, request: UiRunRequest, emit: Function) -> Result<(), JsValue> {
+        self.core.ensure_current().map_err(js_error)?;
         if request.thread != self.core.scope.conversation {
             return Err(crate::err(
                 "The UI request belongs to another conversation.",
@@ -323,9 +446,8 @@ impl UiBridge {
             let source = view.source().cloned().ok_or(FlowError::NoSource)?;
             let destination =
                 composer::resolve(&view, &request.destination).map_err(FlowError::InvalidInput)?;
-            let messages = vec![AgUiMessage {
+            let messages = vec![AgUiMessage::User {
                 id: request.message.clone(),
-                role: MessageRole::User,
                 content: request.text.as_str().into(),
             }];
             let stream = RunStream::new(request.thread, request.id.clone(), messages)
@@ -346,8 +468,10 @@ impl UiBridge {
                 return Err(js_error(error));
             }
         };
+        self.core.ensure_current().map_err(js_error)?;
+        let flow = self.core.flow();
         let started = composer::dispatch(
-            &self.core.flow(),
+            &flow,
             self.core.scope.clone(),
             source,
             destination,
@@ -363,37 +487,41 @@ impl UiBridge {
                 return Err(js_error(error));
             }
         };
+        self.core.ensure_current().map_err(js_error)?;
+        if !self.core.flow().same_connection(&flow) {
+            return Err(js_error(FlowError::HistoryStale));
+        }
         let stop = self.core.owner.borrow_mut().accepted(native.clone());
         self.core.page.notify_settings();
-        if stop {
-            if let Err(error) = self
-                .core
-                .flow()
-                .request_stop(self.core.scope.clone(), native.clone())
-                .await
-            {
-                self.core.owner.borrow_mut().uncertain();
-                self.core.page.notify_settings();
-                return Err(js_error(error));
-            }
-        }
         let result = async {
-            stream
+            let events = stream
                 .accept_question(&native)
                 .map_err(FlowError::Protocol)?;
+            emit_events(events, &emit)?;
+            if stop {
+                flow.request_stop(self.core.scope.clone(), native.clone())
+                    .await?;
+            }
             self.core.stream(&native, &mut stream, &emit).await
         }
         .await;
         match result {
             Ok(()) => self.core.owner.borrow_mut().finished(&native),
             Err(error) => {
-                // Losing a listener is not evidence that native work stopped.
-                let _ = self
-                    .core
-                    .flow()
-                    .request_stop(self.core.scope.clone(), native)
-                    .await;
-                self.core.owner.borrow_mut().uncertain();
+                if self.core.ensure_current().is_ok()
+                    && self.core.flow().same_connection(&flow)
+                    && !matches!(error, FlowError::Disconnected)
+                {
+                    let _ = flow
+                        .request_stop(self.core.scope.clone(), native.clone())
+                        .await;
+                }
+                if self.core.ensure_current().is_ok() {
+                    self.core
+                        .owner
+                        .borrow_mut()
+                        .run_uncertain(&request.id, &native);
+                }
                 self.core.page.notify_settings();
                 return Err(js_error(error));
             }
@@ -403,6 +531,10 @@ impl UiBridge {
     }
 
     pub async fn stop(&self, id: String) -> Result<String, JsValue> {
+        self.core.ensure_current().map_err(js_error)?;
+        if self.core.page.recovery.borrow().active() {
+            return Err(js_error(FlowError::HistoryBusy));
+        }
         let stop = self.core.owner.borrow_mut().stop(&id).map_err(js_error)?;
         match stop {
             Stop::Pending => {
@@ -429,6 +561,22 @@ impl UiBridge {
 }
 
 impl Core {
+    fn ensure_current(&self) -> Result<(), FlowError> {
+        self.owner.borrow().readable()?;
+        if self.page.invalidated.get()
+            || self.page.view.borrow().selection != self.scope
+            || !self
+                .page
+                .current
+                .borrow()
+                .upgrade()
+                .is_some_and(|owner| std::ptr::eq(owner.as_ref(), self))
+        {
+            return Err(FlowError::HistoryStale);
+        }
+        Ok(())
+    }
+
     fn flow(&self) -> FlowClient {
         self.page.flow.borrow().clone()
     }
@@ -442,6 +590,7 @@ impl Core {
     }
 
     fn begin_navigation(&self, change: Change) -> Result<(), FlowError> {
+        self.ensure_current()?;
         if self.history_loading.get() || self.page.settings_blocked() {
             return Err(FlowError::HistoryBusy);
         }
@@ -457,19 +606,24 @@ impl Core {
     async fn navigate(&self) -> Result<UiBridge, FlowError> {
         let work = self.owner.borrow_mut().navigation_step()?;
         let flow = self.flow();
+        let mut recovery = None;
         let flow = if matches!(&work, NavigationWork::Retry(_) | NavigationWork::Refresh(_)) {
-            match flow.reconnect().await {
-                Ok(flow) => {
-                    let verified = flow
-                        .current_page()
-                        .await
-                        .and_then(|view| self.page.accept(view));
-                    if let Err(error) = verified {
-                        self.owner.borrow_mut().navigation_interrupted();
-                        return Err(error);
-                    }
-                    flow
+            let reconnect = async {
+                let guard = connection::Recovery::begin(Rc::clone(&self.page))?;
+                let flow = guard.connect().await?;
+                let view = flow.current_page().await?;
+                if view.selection.store != self.scope.store
+                    || (view.selection != self.scope
+                        && view.selection.epoch.0 <= self.scope.epoch.0)
+                {
+                    return Err(FlowError::HistoryStale);
                 }
+                recovery = Some(guard);
+                Ok::<_, FlowError>(flow)
+            }
+            .await;
+            match reconnect {
+                Ok(flow) => flow,
                 Err(error) => {
                     self.owner.borrow_mut().navigation_interrupted();
                     return Err(error);
@@ -478,7 +632,6 @@ impl Core {
         } else {
             flow
         };
-        self.page.replace_flow(flow.clone());
         let expected = match work {
             NavigationWork::Send(request) | NavigationWork::Retry(request) => {
                 match flow.change_conversation(&request).await {
@@ -497,13 +650,13 @@ impl Core {
             NavigationWork::Refresh(expected) => expected,
         };
         let result = flow.current_page().await.and_then(|view| {
-            if view.selection.store != expected.scope.store
-                || (view.selection != expected.scope
-                    && view.selection.epoch.0 <= expected.scope.epoch.0)
-            {
+            if view.selection != expected.scope {
                 return Err(FlowError::HistoryStale);
             }
-            let view = self.page.accept(view)?;
+            let view = match &recovery {
+                Some(recovery) => recovery.navigation(flow.clone(), view, &expected)?,
+                None => self.page.accept(view)?,
+            };
             Ok(UiBridge::from_session(Rc::clone(&self.page), &view))
         });
         match &result {
@@ -514,6 +667,7 @@ impl Core {
             }
             Err(error) => self.navigation_failed(error),
         }
+        drop(recovery);
         result
     }
 
@@ -550,7 +704,7 @@ impl Core {
     }
 
     fn begin_read(&self) -> Result<HistoryRead<'_>, FlowError> {
-        self.owner.borrow().readable()?;
+        self.ensure_current()?;
         if self.history_loading.replace(true) {
             return Err(FlowError::HistoryBusy);
         }
@@ -558,6 +712,7 @@ impl Core {
     }
 
     fn accept(&self, view: PageView) -> Result<PageView, FlowError> {
+        self.ensure_current()?;
         if view.selection != self.scope {
             return Err(FlowError::HistoryStale);
         }
@@ -569,8 +724,13 @@ impl Core {
     }
 
     async fn current(&self) -> Result<PageView, FlowError> {
-        self.owner.borrow().readable()?;
-        self.accept(self.flow().current_page().await?)
+        self.ensure_current()?;
+        let flow = self.flow();
+        let view = flow.current_page().await?;
+        if !flow.same_connection(&self.flow()) {
+            return Err(FlowError::HistoryStale);
+        }
+        self.accept(view)
     }
 
     async fn stream(
@@ -579,16 +739,52 @@ impl Core {
         stream: &mut RunStream,
         emit: &Function,
     ) -> Result<(), FlowError> {
-        let mut views = self
-            .flow()
-            .watch(self.scope.clone(), native.clone())
-            .await?;
-        while let Some(view) = views.changed().await? {
-            if self.emit_view(view, native, stream, emit)? {
-                return Ok(());
+        loop {
+            self.ensure_current()?;
+            let flow = self.flow();
+            let result = async {
+                let mut views = flow.watch(self.scope.clone(), native.clone()).await?;
+                while let Some(view) = views.changed().await? {
+                    self.ensure_current()?;
+                    if !flow.same_connection(&self.flow()) {
+                        return Err(FlowError::Disconnected);
+                    }
+                    if self.emit_view(view, native, stream, emit)? {
+                        return Ok(());
+                    }
+                }
+                Err(FlowError::Disconnected)
+            }
+            .await;
+            if !matches!(result, Err(FlowError::Disconnected)) {
+                return result;
+            }
+            self.page.notify_settings();
+            self.wait_for_connection(&flow).await?;
+        }
+    }
+
+    async fn wait_for_connection(&self, flow: &FlowClient) -> Result<(), FlowError> {
+        struct Waiting<'a>(&'a RefCell<Option<Waker>>);
+        impl Drop for Waiting<'_> {
+            fn drop(&mut self) {
+                self.0.borrow_mut().take();
             }
         }
-        Err(FlowError::Disconnected)
+        let _waiting = Waiting(&self.stream_waiter);
+        std::future::poll_fn(|context| {
+            if let Err(error) = self.ensure_current() {
+                return Poll::Ready(Err(error));
+            }
+            if !self.page.recovery.borrow().active()
+                && (flow.is_connected() || !flow.same_connection(&self.flow()))
+            {
+                return Poll::Ready(Ok(()));
+            }
+            self.stream_waiter.replace(Some(context.waker().clone()));
+            Poll::Pending
+        })
+        .await
     }
 
     fn emit_view(
@@ -604,13 +800,18 @@ impl Core {
             .iter()
             .find(|run| run.id == *native)
             .ok_or_else(|| FlowError::Protocol("The watched UI run is missing.".into()))?;
-        for event in stream.push(run).map_err(FlowError::Protocol)? {
-            let encoded = bounded_json(&event)?;
-            emit.call1(&JsValue::UNDEFINED, &encoded.into())
-                .map_err(|_| FlowError::Host("The UI event consumer disconnected.".into()))?;
-        }
+        emit_events(stream.push(run).map_err(FlowError::Protocol)?, emit)?;
         Ok(run.status.is_terminal())
     }
+}
+
+fn emit_events(events: Vec<Event>, emit: &Function) -> Result<(), FlowError> {
+    for event in events {
+        let encoded = bounded_json(&event)?;
+        emit.call1(&JsValue::UNDEFINED, &encoded.into())
+            .map_err(|_| FlowError::Host("The UI event consumer disconnected.".into()))?;
+    }
+    Ok(())
 }
 
 fn bounded_json(value: &impl Serialize) -> Result<String, FlowError> {

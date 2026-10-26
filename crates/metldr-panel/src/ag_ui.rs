@@ -1,23 +1,21 @@
 use std::collections::HashSet;
 
-use metldr_conversation::{Completion, EntryRef};
+use metldr_conversation::{Completion, EntryRef, MAX_MESSAGES};
 use serde::{Deserialize, Serialize};
 
 use crate::model::{RunId, RunStatus, RunView};
 
 const MAX_FRAME: usize = 65_536;
-const MAX_MESSAGES: usize = 64;
 const MAX_TEXT: usize = 8_192;
 const MAX_ID: usize = 512;
-pub(crate) const MAX_HISTORY_MESSAGES: usize = 16 * (MAX_MESSAGES + 1);
+pub(crate) const MAX_HISTORY_MESSAGES: usize =
+    16 * (MAX_MESSAGES + metldr_conversation::MAX_ARTIFACTS + metldr_conversation::MAX_TOOLS + 2);
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct AgUiMessage {
-    pub(crate) id: String,
-    pub(crate) role: MessageRole,
-    pub(crate) content: String,
-}
+mod message;
+pub(crate) mod run_details;
+pub(crate) mod tools;
+pub(crate) use message::{Activity, AgUiMessage, RunOrigin, TableReference};
+use run_details::RunDetailsReference;
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -42,6 +40,13 @@ pub(crate) enum Event {
     TextMessageEnd { message_id: String },
     #[serde(rename = "MESSAGES_SNAPSHOT")]
     MessagesSnapshot { messages: Vec<AgUiMessage> },
+    #[serde(rename = "ACTIVITY_SNAPSHOT")]
+    ActivitySnapshot {
+        message_id: String,
+        #[serde(flatten)]
+        activity: Activity,
+        replace: bool,
+    },
     #[serde(rename = "RUN_FINISHED")]
     RunFinished {
         thread_id: String,
@@ -65,17 +70,65 @@ struct MessageState {
     completion: Completion,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum EntryState {
+    Text(MessageState),
+    Artifact {
+        id: String,
+        reference: TableReference,
+    },
+    Tools {
+        id: String,
+        reference: tools::ToolGroupReference,
+    },
+    RunDetails {
+        id: String,
+        reference: RunDetailsReference,
+    },
+}
+
+impl EntryState {
+    fn id(&self) -> &str {
+        match self {
+            Self::Text(message) => &message.id,
+            Self::Artifact { id, .. } | Self::Tools { id, .. } | Self::RunDetails { id, .. } => id,
+        }
+    }
+
+    fn text(&self) -> Option<&MessageState> {
+        match self {
+            Self::Text(message) => Some(message),
+            Self::Artifact { .. } | Self::Tools { .. } | Self::RunDetails { .. } => None,
+        }
+    }
+
+    fn snapshot(&self) -> AgUiMessage {
+        match self {
+            Self::Text(message) => AgUiMessage::Assistant {
+                id: message.id.clone(),
+                content: message.content.clone(),
+            },
+            Self::Artifact { id, reference } => AgUiMessage::Activity {
+                id: id.clone(),
+                activity: Activity::Table(reference.clone()),
+            },
+            Self::Tools { reference, .. } => AgUiMessage::native_tools(reference.clone()),
+            Self::RunDetails { reference, .. } => AgUiMessage::run_details(reference.clone()),
+        }
+    }
+}
+
 pub(crate) struct RunStream {
     thread_id: String,
     run_id: String,
     prior_messages: Vec<AgUiMessage>,
-    messages: Vec<MessageState>,
+    messages: Vec<EntryState>,
     started: bool,
     finished: bool,
 }
 
 impl RunStream {
-    pub(crate) fn accept_question(&mut self, native: &RunId) -> Result<(), String> {
+    pub(crate) fn accept_question(&mut self, native: &RunId) -> Result<Vec<Event>, String> {
         let index = self
             .prior_messages
             .len()
@@ -83,18 +136,18 @@ impl RunStream {
             .ok_or("the submitted question is missing")?;
         let id = format!("{native}:question");
         if self.started
-            || self.prior_messages[index].role != MessageRole::User
+            || !matches!(self.prior_messages[index], AgUiMessage::User { .. })
             || !valid_id(&id)
             || self.prior_messages[..index]
                 .iter()
-                .any(|message| message.id == id)
+                .any(|message| message.id() == id)
         {
             return Err("the submitted question cannot bind to this native run".into());
         }
-        let previous = std::mem::replace(&mut self.prior_messages[index].id, id);
-        let result = self.check_frame_bound();
+        let previous = std::mem::replace(self.prior_messages[index].id_mut(), id);
+        let result = self.push_messages(Vec::new(), RunStatus::Running, None);
         if result.is_err() {
-            self.prior_messages[index].id = previous;
+            *self.prior_messages[index].id_mut() = previous;
         }
         result
     }
@@ -113,11 +166,12 @@ impl RunStream {
         let mut ids = HashSet::with_capacity(prior_messages.len());
         let mut text_bytes = 0;
         for message in &prior_messages {
-            if !valid_id(&message.id) || !ids.insert(&message.id) {
+            if !valid_id(message.id()) || !ids.insert(message.id()) {
                 return Err("invalid or duplicate AG-UI message id".into());
             }
-            text_bytes += message.content.len();
-            if message.content.len() > MAX_TEXT || text_bytes > MAX_FRAME {
+            let text = message.text().unwrap_or("");
+            text_bytes += text.len();
+            if text.len() > MAX_TEXT || text_bytes > MAX_FRAME {
                 return Err("AG-UI history exceeds the conversation text bound".into());
             }
         }
@@ -138,54 +192,102 @@ impl RunStream {
             return Err("AG-UI run stream is already finished".into());
         }
         let mut current = Vec::new();
+        let tools = tools::groups(run, RunOrigin::Live);
+        let details = RunDetailsReference::new(run, RunOrigin::Live);
+        current.push(EntryState::RunDetails {
+            id: details.message_id(),
+            reference: details,
+        });
         let mut has_entries = false;
         for entry in run.output.entries() {
             has_entries = true;
-            if let EntryRef::Message {
-                key,
-                text,
-                completion,
-            } = entry
-            {
-                current.push(MessageState {
+            match entry {
+                EntryRef::Message {
+                    key,
+                    text,
+                    completion,
+                } => current.push(EntryState::Text(MessageState {
                     id: format!("{}:{}", run.id, key.dom_key()),
                     content: text.to_owned(),
                     completion: completion.clone(),
-                });
+                })),
+                EntryRef::Artifact { id } => {
+                    let AgUiMessage::Activity {
+                        id,
+                        activity: Activity::Table(content),
+                    } = AgUiMessage::table(&run.id, id)
+                    else {
+                        unreachable!()
+                    };
+                    current.push(EntryState::Artifact {
+                        id,
+                        reference: content,
+                    });
+                }
+                EntryRef::Tool { id } => {
+                    if let Some(reference) = tools.iter().find(|group| &group.group_id == id) {
+                        current.push(EntryState::Tools {
+                            id: reference.message_id(),
+                            reference: reference.clone(),
+                        });
+                    }
+                }
             }
         }
         if !has_entries {
-            current.push(MessageState {
+            current.push(EntryState::Text(MessageState {
                 id: format!("{}:flat", run.id),
                 content: run.output.text().to_owned(),
                 completion: Completion::Streaming,
-            });
-        }
-        let mut ids = self
-            .prior_messages
-            .iter()
-            .map(|message| message.id.as_str())
-            .collect::<HashSet<_>>();
-        if current.iter().any(|message| !ids.insert(&message.id)) {
-            return Err("AG-UI run message id duplicates conversation history".into());
+            }));
         }
         self.push_messages(current, run.status, run.error.as_deref())
     }
 
     fn push_messages(
         &mut self,
-        current: Vec<MessageState>,
+        current: Vec<EntryState>,
         status: RunStatus,
         error: Option<&str>,
     ) -> Result<Vec<Event>, String> {
-        if current.len() > MAX_MESSAGES
-            || current
+        if self.finished {
+            return Err("AG-UI run stream is already finished".into());
+        }
+        let mut ids = self
+            .prior_messages
+            .iter()
+            .map(AgUiMessage::id)
+            .collect::<HashSet<_>>();
+        if current
+            .iter()
+            .any(|entry| !valid_id(entry.id()) || !ids.insert(entry.id()))
+        {
+            return Err("AG-UI run message id duplicates conversation history".into());
+        }
+        let texts = current
+            .iter()
+            .filter_map(EntryState::text)
+            .collect::<Vec<_>>();
+        if texts.len() > MAX_MESSAGES
+            || current.len() - texts.len()
+                > metldr_conversation::MAX_ARTIFACTS + metldr_conversation::MAX_TOOLS + 1
+            || texts
                 .iter()
                 .map(|message| message.content.len())
                 .sum::<usize>()
                 > MAX_TEXT
         {
             return Err("AG-UI run exceeds conversation message or text bounds".into());
+        }
+        if let Some(last) = self
+            .messages
+            .iter()
+            .rposition(|entry| matches!(entry, EntryState::Artifact { .. }))
+        {
+            if current.len() <= last || self.messages[..=last].iter().zip(&current).any(|(old, next)| old.id() != next.id()
+                || matches!((old, next), (EntryState::Artifact { .. }, _) if old != next)) {
+                return Err("saved table position or identity changed".into());
+            }
         }
         let was_started = self.started;
         let terminal = status.is_terminal();
@@ -201,53 +303,94 @@ impl RunStream {
                 });
             }
         }
-
         let rewrite = current.len() < self.messages.len()
-            || current.iter().zip(&self.messages).any(|(next, old)| {
-                next.id != old.id
-                    || !next.content.starts_with(&old.content)
-                    || (old.completion != Completion::Streaming
-                        && (next.completion == Completion::Streaming
-                            || next.content != old.content))
-            });
+            || current
+                .iter()
+                .zip(&self.messages)
+                .any(|(next, old)| match (next, old) {
+                    (EntryState::Text(next), EntryState::Text(old)) => {
+                        next.id != old.id
+                            || !next.content.starts_with(&old.content)
+                            || (old.completion != Completion::Streaming
+                                && (next.completion == Completion::Streaming
+                                    || next.content != old.content))
+                    }
+                    (EntryState::Tools { id: next, .. }, EntryState::Tools { id: old, .. }) => {
+                        next != old
+                    }
+                    (
+                        EntryState::RunDetails { id: next, .. },
+                        EntryState::RunDetails { id: old, .. },
+                    ) => next != old,
+                    _ => next != old,
+                });
         if rewrite {
             events.extend(self.end_open_messages());
             events.push(Event::MessagesSnapshot {
                 messages: self.snapshot_messages(&current),
             });
             if !terminal {
-                events.extend(current.iter().filter_map(|message| {
-                    (message.completion == Completion::Streaming).then(|| Event::TextMessageStart {
-                        message_id: message.id.clone(),
-                        role: MessageRole::Assistant,
-                    })
-                }));
+                events.extend(Self::open_messages(&current));
             }
         } else {
-            for (index, message) in current.iter().enumerate() {
-                let previous = self.messages.get(index);
-                if previous.is_none() {
-                    events.push(Event::TextMessageStart {
-                        message_id: message.id.clone(),
-                        role: MessageRole::Assistant,
-                    });
-                }
-                let previous_len = previous.map_or(0, |old| old.content.len());
-                if message.content.len() > previous_len {
-                    events.push(Event::TextMessageContent {
-                        message_id: message.id.clone(),
-                        delta: message.content[previous_len..].to_owned(),
-                    });
-                }
-                let was_ended = previous.is_some_and(|old| old.completion != Completion::Streaming);
-                if !was_ended && (message.completion != Completion::Streaming || terminal) {
-                    events.push(Event::TextMessageEnd {
-                        message_id: message.id.clone(),
-                    });
+            for (index, entry) in current.iter().enumerate() {
+                match entry {
+                    EntryState::Artifact { id, reference }
+                        if self.messages.get(index).is_none() =>
+                    {
+                        events.push(Event::ActivitySnapshot {
+                            message_id: id.clone(),
+                            activity: Activity::Table(reference.clone()),
+                            replace: false,
+                        })
+                    }
+                    EntryState::Artifact { .. } => (),
+                    EntryState::Tools { id, reference } => {
+                        let previous = self.messages.get(index);
+                        if previous != Some(entry) {
+                            events.push(Event::ActivitySnapshot {
+                                message_id: id.clone(),
+                                activity: Activity::NativeTools(reference.clone()),
+                                replace: previous.is_some(),
+                            });
+                        }
+                    }
+                    EntryState::RunDetails { id, reference } => {
+                        let previous = self.messages.get(index);
+                        if previous != Some(entry) {
+                            events.push(Event::ActivitySnapshot {
+                                message_id: id.clone(),
+                                activity: Activity::RunDetails(reference.clone()),
+                                replace: previous.is_some(),
+                            });
+                        }
+                    }
+                    EntryState::Text(message) => {
+                        let previous = self.messages.get(index).and_then(EntryState::text);
+                        if previous.is_none() {
+                            events.push(Event::TextMessageStart {
+                                message_id: message.id.clone(),
+                                role: MessageRole::Assistant,
+                            });
+                        }
+                        let previous_len = previous.map_or(0, |old| old.content.len());
+                        if message.content.len() > previous_len {
+                            events.push(Event::TextMessageContent {
+                                message_id: message.id.clone(),
+                                delta: message.content[previous_len..].to_owned(),
+                            });
+                        }
+                        let was_ended =
+                            previous.is_some_and(|old| old.completion != Completion::Streaming);
+                        if !was_ended && (message.completion != Completion::Streaming || terminal) {
+                            events.push(Event::TextMessageEnd {
+                                message_id: message.id.clone(),
+                            });
+                        }
+                    }
                 }
             }
         }
-
         if terminal {
             events.push(self.terminal_event(status, error));
         }
@@ -256,8 +399,7 @@ impl RunStream {
             .len()
             > MAX_FRAME
         {
-            events = Vec::new();
-            events.extend(self.end_open_messages());
+            events = self.end_open_messages();
             if !was_started {
                 events.push(Event::RunStarted {
                     thread_id: self.thread_id.clone(),
@@ -268,18 +410,12 @@ impl RunStream {
                 messages: self.snapshot_messages(&current),
             });
             if !terminal {
-                events.extend(current.iter().filter_map(|message| {
-                    (message.completion == Completion::Streaming).then(|| Event::TextMessageStart {
-                        message_id: message.id.clone(),
-                        role: MessageRole::Assistant,
-                    })
-                }));
+                events.extend(Self::open_messages(&current));
             }
             if terminal {
                 events.push(self.terminal_event(status, error));
             }
         }
-
         if serde_json::to_vec(&events)
             .map_err(|error| error.to_string())?
             .len()
@@ -287,24 +423,36 @@ impl RunStream {
         {
             return Err("AG-UI event batch exceeds the panel frame bound".into());
         }
-        let snapshot = self.snapshot_messages(&current);
-        if serde_json::to_vec(&Event::MessagesSnapshot { messages: snapshot })
-            .map_err(|error| error.to_string())?
-            .len()
+        if serde_json::to_vec(&Event::MessagesSnapshot {
+            messages: self.snapshot_messages(&current),
+        })
+        .map_err(|error| error.to_string())?
+        .len()
             > MAX_FRAME
         {
             return Err("AG-UI snapshot exceeds the panel frame bound".into());
         }
-
         self.messages = current;
         self.started = true;
         self.finished = terminal;
         Ok(events)
     }
 
+    fn open_messages(entries: &[EntryState]) -> impl Iterator<Item = Event> + '_ {
+        entries
+            .iter()
+            .filter_map(EntryState::text)
+            .filter(|message| message.completion == Completion::Streaming)
+            .map(|message| Event::TextMessageStart {
+                message_id: message.id.clone(),
+                role: MessageRole::Assistant,
+            })
+    }
+
     fn end_open_messages(&self) -> Vec<Event> {
         self.messages
             .iter()
+            .filter_map(EntryState::text)
             .filter(|message| message.completion == Completion::Streaming)
             .map(|message| Event::TextMessageEnd {
                 message_id: message.id.clone(),
@@ -312,15 +460,11 @@ impl RunStream {
             .collect()
     }
 
-    fn snapshot_messages(&self, current: &[MessageState]) -> Vec<AgUiMessage> {
+    fn snapshot_messages(&self, current: &[EntryState]) -> Vec<AgUiMessage> {
         self.prior_messages
             .iter()
             .cloned()
-            .chain(current.iter().map(|message| AgUiMessage {
-                id: message.id.clone(),
-                role: MessageRole::Assistant,
-                content: message.content.clone(),
-            }))
+            .chain(current.iter().map(EntryState::snapshot))
             .collect()
     }
 
@@ -335,7 +479,12 @@ impl RunStream {
                     thread_id: self.thread_id.clone(),
                     run_id: self.run_id.clone(),
                     result: RunResult {
-                        status: status.to_string(),
+                        status: match status {
+                            RunStatus::Complete => "complete",
+                            RunStatus::Cancelled => "cancelled",
+                            _ => "interrupted",
+                        }
+                        .into(),
                     },
                 }
             }
@@ -346,11 +495,13 @@ impl RunStream {
     }
 
     fn check_frame_bound(&self) -> Result<(), String> {
-        let messages = self.snapshot_messages(&self.messages);
-        let bytes = serde_json::to_vec(&Event::MessagesSnapshot { messages })
-            .map_err(|error| error.to_string())?
-            .len();
-        if bytes > MAX_FRAME {
+        if serde_json::to_vec(&Event::MessagesSnapshot {
+            messages: self.snapshot_messages(&self.messages),
+        })
+        .map_err(|error| error.to_string())?
+        .len()
+            > MAX_FRAME
+        {
             return Err("AG-UI snapshot exceeds the panel frame bound".into());
         }
         Ok(())
@@ -362,6 +513,9 @@ pub(crate) fn valid_id(value: &str) -> bool {
 }
 
 #[cfg(test)]
+mod artifact_checks;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -369,12 +523,33 @@ mod tests {
         RunStream::new("thread".into(), "run".into(), vec![]).unwrap()
     }
 
-    fn message(id: &str, content: &str, completion: Completion) -> MessageState {
-        MessageState {
+    #[test]
+    fn run_details_revisions_replace_one_stable_activity_message() {
+        let mut run = tools::checks::run();
+        let mut stream = stream();
+        let initial = serde_json::to_value(stream.push(&run).unwrap()).unwrap();
+        let detail = initial
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|event| event["activityType"] == "metldr.run-details")
+            .unwrap();
+        let id = detail["messageId"].clone();
+        run.route = crate::model::RunRoute::Fixture;
+        let changed = serde_json::to_value(stream.push(&run).unwrap()).unwrap();
+        assert_eq!(changed.as_array().unwrap().len(), 1);
+        assert_eq!(changed[0]["type"], "ACTIVITY_SNAPSHOT");
+        assert_eq!(changed[0]["activityType"], "metldr.run-details");
+        assert_eq!(changed[0]["messageId"], id);
+        assert_eq!(changed[0]["replace"], true);
+    }
+
+    fn message(id: &str, content: &str, completion: Completion) -> EntryState {
+        EntryState::Text(MessageState {
             id: id.into(),
             content: content.into(),
             completion,
-        }
+        })
     }
 
     #[test]
@@ -386,30 +561,41 @@ mod tests {
             "thread".into(),
             "ui-run".into(),
             vec![
-                AgUiMessage {
+                AgUiMessage::Assistant {
                     id: "earlier".into(),
-                    role: MessageRole::Assistant,
                     content: "Saved answer".into(),
                 },
-                AgUiMessage {
+                AgUiMessage::User {
                     id: "submitted".into(),
-                    role: MessageRole::User,
                     content: "Next question".into(),
                 },
             ],
         )
         .unwrap();
-        stream.accept_question(&native).unwrap();
-        let events = stream
-            .push_messages(vec![], RunStatus::Running, None)
-            .unwrap();
+        let events = stream.accept_question(&native).unwrap();
+        assert!(matches!(&events[0], Event::RunStarted { thread_id, run_id }
+            if thread_id == "thread" && run_id == "ui-run"));
+        assert_eq!(events.len(), 2);
         let Event::MessagesSnapshot { messages } = &events[1] else {
             panic!("the first update must include saved history");
         };
-        assert_eq!(messages[0].id, "earlier");
-        assert_eq!(messages[1].id, format!("{native}:question"));
-        assert_eq!(messages[1].content, "Next question");
+        assert_eq!(messages[0].id(), "earlier");
+        assert_eq!(messages[1].id(), format!("{native}:question"));
+        assert_eq!(messages[1].text(), Some("Next question"));
         assert!(stream.accept_question(&native).is_err());
+        assert!(
+            stream
+                .push_messages(vec![], RunStatus::Running, None)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(matches!(
+            stream
+                .push_messages(vec![], RunStatus::Cancelled, None)
+                .unwrap()
+                .as_slice(),
+            [Event::RunFinished { .. }]
+        ));
     }
 
     #[test]
@@ -419,15 +605,13 @@ mod tests {
                 "thread".into(),
                 "run".into(),
                 vec![
-                    AgUiMessage {
+                    AgUiMessage::User {
                         id: "user".into(),
-                        role: MessageRole::User,
-                        content: "a".repeat(5000)
+                        content: "a".repeat(5000),
                     },
-                    AgUiMessage {
+                    AgUiMessage::Assistant {
                         id: "assistant".into(),
-                        role: MessageRole::Assistant,
-                        content: "b".repeat(5000)
+                        content: "b".repeat(5000),
                     },
                 ]
             )
@@ -449,6 +633,14 @@ mod tests {
                 {"type":"TEXT_MESSAGE_CONTENT","messageId":"run:native:answer","delta":"hé"}
             ])
         );
+        let repeated = stream
+            .push_messages(
+                vec![message("run:native:answer", "hé", Completion::Streaming)],
+                RunStatus::Running,
+                None,
+            )
+            .unwrap();
+        assert!(repeated.is_empty());
         let next = stream
             .push_messages(
                 vec![message(
@@ -473,9 +665,8 @@ mod tests {
             "thread".into(),
             "run".into(),
             (0..15)
-                .map(|index| AgUiMessage {
+                .map(|index| AgUiMessage::User {
                     id: format!("history:{index}"),
-                    role: MessageRole::User,
                     content: "h".repeat(4_000),
                 })
                 .collect(),

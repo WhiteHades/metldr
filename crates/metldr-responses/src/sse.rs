@@ -1,15 +1,35 @@
 use crate::Result;
 
-#[derive(Default)]
 pub(super) struct Sse {
     line: Vec<u8>,
     data: String,
     event: String,
     started: bool,
     after_cr: bool,
+    bound: usize,
+}
+
+impl Default for Sse {
+    fn default() -> Self {
+        Self {
+            line: Vec::new(),
+            data: String::new(),
+            event: String::new(),
+            started: false,
+            after_cr: false,
+            bound: 131_072,
+        }
+    }
 }
 
 impl Sse {
+    pub fn with_bound(bound: usize) -> Self {
+        Self {
+            bound,
+            ..Self::default()
+        }
+    }
+
     pub fn byte(&mut self, byte: u8) -> Result<Option<(String, String)>> {
         if self.after_cr && byte == b'\n' {
             self.after_cr = false;
@@ -17,7 +37,7 @@ impl Sse {
         }
         self.after_cr = byte == b'\r';
         if !matches!(byte, b'\r' | b'\n') {
-            if self.line.len() >= 131_072 {
+            if self.line.len() >= self.bound {
                 return Err("Responses SSE line exceeds bound".into());
             }
             self.line.push(byte);
@@ -43,7 +63,7 @@ impl Sse {
             let value = value.strip_prefix(' ').unwrap_or(value);
             match field {
                 "data" => {
-                    if self.data.len().saturating_add(value.len() + 1) > 131_072 {
+                    if self.data.len().saturating_add(value.len() + 1) > self.bound {
                         return Err("Responses SSE event exceeds bound".into());
                     }
                     self.data.push_str(value);

@@ -11,11 +11,13 @@ use web_sys::{Document, Element, Event};
 mod ag_ui;
 mod agent_settings;
 mod appearance;
+mod browser_action_display;
 mod browser_background;
 mod codex_input;
 mod composer;
 mod composer_ui;
 mod conversations;
+mod execution_preference;
 mod flow;
 mod history;
 mod history_ui;
@@ -26,6 +28,7 @@ mod profile;
 mod provider_settings;
 mod readiness;
 mod results;
+mod run_display;
 mod site;
 mod summary;
 mod ui_bridge;
@@ -102,7 +105,7 @@ pub fn accept_panel(port: JsValue) {
         let sender = get(&port, "sender")?;
         if string_property(&sender, "id")? != extension_id
             || string_property(&sender, "origin")? != origin
-            || string_property(&sender, "url")? != format!("{origin}/panel.html")
+            || !panel_url_allowed(&origin, &string_property(&sender, "url")?)
         {
             let _ = call(&port, "disconnect", &[]);
             return Ok(());
@@ -1216,4 +1219,32 @@ fn err(message: &str) -> JsValue {
 }
 fn js_message(error: &JsValue) -> String {
     error.as_string().unwrap_or_else(|| format!("{error:?}"))
+}
+
+fn panel_url_allowed(origin: &str, url: &str) -> bool {
+    url.strip_prefix(origin)
+        .is_some_and(|path| matches!(path, "/panel.html" | "/chat.html"))
+}
+
+#[cfg(test)]
+mod panel_url_checks {
+    #[test]
+    fn only_exact_owned_application_pages_are_allowed() {
+        let origin = "chrome-extension://owned";
+        for page in ["panel.html", "chat.html"] {
+            assert!(super::panel_url_allowed(
+                origin,
+                &format!("{origin}/{page}")
+            ));
+        }
+        for url in [
+            "chrome-extension://other/chat.html",
+            "chrome-extension://owned/sandbox.html",
+            "chrome-extension://owned/chat.html?route=panel",
+            "chrome-extension://owned/chat.html#answer",
+            "https://owned/chat.html",
+        ] {
+            assert!(!super::panel_url_allowed(origin, url));
+        }
+    }
 }

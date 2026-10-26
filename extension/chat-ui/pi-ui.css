@@ -1,0 +1,122 @@
+:is(#pi-ui, #pi-ui-widgets-below) {
+  --pi-card-padding: clamp(0.75rem, 0.5rem + 1vi, 1rem);
+  display: grid;
+  gap: 0.75rem;
+  inline-size: 100%;
+  min-inline-size: 0;
+  max-inline-size: 46rem;
+  margin-inline: auto;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+:is(#pi-ui, #pi-ui-widgets-below)[hidden] { display: none; }
+:is(#pi-ui, #pi-ui-widgets-below) > div:empty { display: none; }
+#pi-ui-cards { display: grid; gap: 0.75rem; }
+:is(#pi-ui, #pi-ui-widgets-below) :is(h2, h3, p, pre) { margin-block: 0; }
+:is(#pi-ui, #pi-ui-widgets-below) h2 { font-size: 1rem; font-weight: 600; }
+:is(#pi-ui, #pi-ui-widgets-below) > [id^="pi-ui-widgets"] { display: grid; gap: 0.5rem; }
+:is(#pi-ui, #pi-ui-widgets-below) [data-pi-card],
+#pi-ui-suggestion {
+  display: grid;
+  gap: 0.75rem;
+  min-inline-size: 0;
+  padding: var(--pi-card-padding);
+  border: 1px solid var(--line);
+  border-radius: calc(0.5rem + var(--pi-card-padding));
+  background: var(--surface);
+}
+
+:is(#pi-ui, #pi-ui-widgets-below) [data-pi-card] h3 { font-size: 1rem; font-weight: 600; }
+:is(#pi-ui, #pi-ui-widgets-below) [data-part="body"],
+:is(#pi-ui, #pi-ui-widgets-below) [data-status-key],
+:is(#pi-ui, #pi-ui-widgets-below) [data-pi-notice] { color: var(--ink-2); }
+:is(#pi-ui, #pi-ui-widgets-below) [data-part="answer-form"],
+:is(#pi-ui, #pi-ui-widgets-below) [data-part="choices"],
+:is(#pi-ui, #pi-ui-widgets-below) [data-part="actions"] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: start;
+  gap: 0.5rem;
+}
+
+:is(#pi-ui, #pi-ui-widgets-below) [data-part="answer-form"] { display: grid; }
+:is(#pi-ui, #pi-ui-widgets-below) button {
+  min-block-size: 44px;
+  padding-block: 0.5rem;
+  padding-inline: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  color: var(--ink);
+  background: var(--field);
+  font: inherit;
+}
+
+:is(#pi-ui, #pi-ui-widgets-below) button:disabled { opacity: 0.6; }
+:is(#pi-ui, #pi-ui-widgets-below) button[aria-pressed="true"] { border-color: var(--ink-2); background: var(--hover-2); }
+:is(#pi-ui, #pi-ui-widgets-below) button:active:not(:disabled) { background: var(--hover-2); }
+:is(#pi-ui, #pi-ui-widgets-below) :is(button, textarea, summary):focus-visible { outline: 2px solid var(--ink-2); outline-offset: 3px; }
+:is(#pi-ui, #pi-ui-widgets-below) textarea {
+  inline-size: 100%;
+  field-sizing: content;
+  min-block-size: 4lh;
+  max-block-size: 16lh;
+  padding-block: 0.75rem;
+  padding-inline: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  color: var(--ink);
+  background: var(--field);
+  font: inherit;
+  text-wrap: stable;
+  resize: none;
+  overflow: auto;
+}
+
+:is(#pi-ui, #pi-ui-widgets-below) [data-part="widget"],
+:is(#pi-ui, #pi-ui-widgets-below) [data-part="editor-preview"] pre {
+  min-inline-size: 0;
+  max-block-size: 16rem;
+  padding-block: 0.75rem;
+  padding-inline: 0.75rem;
+  border-radius: 0.5rem;
+  color: var(--ink);
+  background: var(--field);
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: auto;
+}
+
+:is(#pi-ui, #pi-ui-widgets-below) [data-part="editor-preview"] summary {
+  min-block-size: 44px;
+  padding-block: 0.5rem;
+  padding-inline: 0.75rem;
+  border-radius: 0.5rem;
+  cursor: pointer;
+}
+:is(#pi-ui, #pi-ui-widgets-below) [data-part="editor-preview"] summary:active { background: var(--hover-2); }
+:is(#pi-ui, #pi-ui-widgets-below) [data-part="editor-preview"] pre { margin-block-start: 0.5rem; }
+:is(#pi-ui, #pi-ui-widgets-below) [data-part="notice"] { color: var(--ink-2); }
+:is(#pi-ui, #pi-ui-widgets-below) [data-level="error"],
+:is(#pi-ui, #pi-ui-widgets-below) [role="alert"] { color: var(--ink); font-weight: 600; }
+
+@media (hover: hover) and (pointer: fine) {
+  :is(#pi-ui, #pi-ui-widgets-below) button:hover:not(:disabled) { background: color-mix(in oklch, var(--ink) 6%, var(--field)); }
+  :is(#pi-ui, #pi-ui-widgets-below) [data-part="editor-preview"] summary:hover { background: var(--hover); }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  :is(#pi-ui, #pi-ui-widgets-below) button { transition: background-color 150ms var(--ease-out, ease-out), scale 150ms var(--ease-out, ease-out); }
+  :is(#pi-ui, #pi-ui-widgets-below) button:active:not(:disabled) { scale: 0.97; }
+  :is(#pi-ui, #pi-ui-widgets-below) [data-part="editor-preview"] summary { transition: background-color 150ms var(--ease-out, ease-out); }
+}
+
+@media (forced-colors: active) {
+  :is(#pi-ui, #pi-ui-widgets-below) button { border-color: ButtonText; }
+  :is(#pi-ui, #pi-ui-widgets-below) :is(button, textarea, summary):focus-visible { outline-color: Highlight; }
+}
+
+[data-pi-composer-slot]:empty { display: none; }
+[data-pi-composer-slot]:not(:empty) { padding-block-end: 0.75rem; }
+#pi-ui-widgets-below { max-block-size: min(35dvb, 20rem); overflow: auto; overscroll-behavior: contain; }

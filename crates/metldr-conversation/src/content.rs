@@ -4,7 +4,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::key::validate_id;
 use crate::projection::{Projection, from_native_entries};
-use crate::{MAX_ENTRIES, MAX_MESSAGES, MAX_TEXT_BYTES, MAX_TOOLS, MessageKey, ToolId};
+use crate::{ArtifactId, MAX_ENTRIES, MAX_MESSAGES, MAX_TEXT_BYTES, MAX_TOOLS, MessageKey, ToolId};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -25,6 +25,9 @@ pub(crate) enum Entry {
     },
     Tool {
         id: ToolId,
+    },
+    Artifact {
+        id: ArtifactId,
     },
 }
 
@@ -66,7 +69,7 @@ impl Content {
                     .iter()
                     .filter_map(|entry| match entry {
                         Entry::Message { text, .. } => Some(text.as_str()),
-                        Entry::Tool { .. } => None,
+                        Entry::Tool { .. } | Entry::Artifact { .. } => None,
                     })
                     .collect(),
             ),
@@ -80,7 +83,7 @@ impl Content {
                 .iter()
                 .map(|entry| match entry {
                     Entry::Message { text, .. } => text.len(),
-                    Entry::Tool { .. } => 0,
+                    Entry::Tool { .. } | Entry::Artifact { .. } => 0,
                 })
                 .sum(),
         }
@@ -130,7 +133,7 @@ impl Content {
                             Ok(!text.is_empty())
                         }
                         Entry::Message { .. } => Err("cannot append to a completed message".into()),
-                        Entry::Tool { .. } => unreachable!(),
+                        Entry::Tool { .. } | Entry::Artifact { .. } => unreachable!(),
                     },
                     None => {
                         entries.push(Entry::Message {
@@ -166,7 +169,7 @@ impl Content {
                             *completion = Completion::FinalSnapshot;
                             Ok(true)
                         }
-                        Entry::Tool { .. } => unreachable!(),
+                        Entry::Tool { .. } | Entry::Artifact { .. } => unreachable!(),
                     },
                     None => {
                         entries.push(Entry::Message {
@@ -177,6 +180,27 @@ impl Content {
                         Ok(true)
                     }
                 }
+            }
+            (ContentKind::Native(entries), Change::Artifact(id)) => {
+                if entries
+                    .iter()
+                    .any(|entry| matches!(entry, Entry::Artifact { id: current } if *current == id))
+                {
+                    return Ok(false);
+                }
+                if entries.iter().any(|entry| {
+                    matches!(
+                        entry,
+                        Entry::Message {
+                            completion: Completion::Streaming,
+                            ..
+                        }
+                    )
+                }) {
+                    return Err("artifact requires completed preceding text".into());
+                }
+                entries.push(Entry::Artifact { id });
+                Ok(true)
             }
             (ContentKind::Flat(_), _) => Err("native changes require native content".into()),
             (ContentKind::Native(_), Change::FlatAppend(_)) => {
@@ -241,12 +265,18 @@ impl Content {
                 let mut messages: Vec<&MessageKey> = Vec::new();
                 let mut tools: Vec<&ToolId> = Vec::new();
                 let mut bytes = 0;
+                let mut artifacts: Vec<&ArtifactId> = Vec::new();
+                let mut open_text = false;
                 if entries.len() > MAX_ENTRIES {
                     return Err("too many conversation entries".into());
                 }
                 for entry in entries {
                     match entry {
-                        Entry::Message { key, text, .. } => {
+                        Entry::Message {
+                            key,
+                            text,
+                            completion,
+                        } => {
                             key.validate()?;
                             if messages.contains(&key) {
                                 return Err("duplicate message key".into());
@@ -254,6 +284,7 @@ impl Content {
                             messages.push(key);
                             bytes += text.len();
                             check_text(text)?;
+                            open_text |= *completion == Completion::Streaming;
                         }
                         Entry::Tool { id } => {
                             validate_id(id.as_str(), "tool id")?;
@@ -261,6 +292,15 @@ impl Content {
                                 return Err("duplicate tool id".into());
                             }
                             tools.push(id);
+                        }
+                        Entry::Artifact { id } => {
+                            if open_text {
+                                return Err("artifact requires completed preceding text".into());
+                            }
+                            if artifacts.contains(&id) || artifacts.len() >= crate::MAX_ARTIFACTS {
+                                return Err("duplicate or too many artifact references".into());
+                            }
+                            artifacts.push(id);
                         }
                     }
                 }
@@ -338,6 +378,7 @@ pub enum Change {
     Begin(MessageKey),
     Append { key: MessageKey, text: String },
     Final { key: MessageKey, text: String },
+    Artifact(ArtifactId),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -3,10 +3,12 @@
 mod content;
 mod key;
 mod projection;
+mod table;
 
 pub use content::{Change, Completion, Content, Ending};
-pub use key::{MessageKey, ToolId};
+pub use key::{ArtifactId, MessageKey, ToolId};
 pub use projection::{Display, EntryRef, ProjectedEntry, Projection};
+pub use table::{MAX_TABLE_BYTES, Table};
 
 /// Ordered assistant text. A final snapshot closes the current message.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -15,15 +17,83 @@ pub enum TextEvent {
     Final(String),
 }
 
-const MAX_MESSAGES: usize = 64;
-const MAX_TOOLS: usize = 64;
-const MAX_ENTRIES: usize = 128;
+pub const MAX_MESSAGES: usize = 64;
+pub const MAX_TOOLS: usize = 64;
+const MAX_ENTRIES: usize = 132;
+pub const MAX_ARTIFACTS: usize = 4;
 const MAX_ID_BYTES: usize = 128;
 const MAX_TEXT_BYTES: usize = 8192;
 
 #[cfg(test)]
 mod checks {
     use super::*;
+
+    #[test]
+    fn ordered_artifact_references_roundtrip_without_owning_payloads() {
+        let first = MessageKey::observed(1).unwrap();
+        let second = MessageKey::observed(2).unwrap();
+        let artifact = ArtifactId::new("owned:1".into()).unwrap();
+        let mut content = Content::native();
+        content
+            .change(Change::Append {
+                key: first.clone(),
+                text: "Before".into(),
+            })
+            .unwrap();
+        assert!(content.change(Change::Artifact(artifact.clone())).is_err());
+        content
+            .change(Change::Final {
+                key: first,
+                text: "Before".into(),
+            })
+            .unwrap();
+        assert!(content.change(Change::Artifact(artifact.clone())).unwrap());
+        assert!(!content.change(Change::Artifact(artifact.clone())).unwrap());
+        content
+            .change(Change::Final {
+                key: second,
+                text: "After".into(),
+            })
+            .unwrap();
+        let encoded = serde_json::to_string(&content).unwrap();
+        let restored: Content = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(restored, content);
+        let display = Display::new(restored.projection()).unwrap();
+        assert!(
+            matches!(&display.entries().collect::<Vec<_>>()[..], [EntryRef::Message {text:"Before",..}, EntryRef::Artifact { id }, EntryRef::Message {text:"After",..}] if *id == &artifact)
+        );
+        assert_eq!(display.text(), "BeforeAfter");
+        assert!(
+            Content::flat("old history".into())
+                .unwrap()
+                .change(Change::Artifact(artifact))
+                .is_err()
+        );
+        for invalid in ["", "bad\nkey", &"x".repeat(129)] {
+            assert!(serde_json::from_value::<ArtifactId>(serde_json::json!(invalid)).is_err());
+        }
+        for number in 2..=MAX_ARTIFACTS {
+            content
+                .change(Change::Artifact(
+                    ArtifactId::new(format!("owned:{number}")).unwrap(),
+                ))
+                .unwrap();
+        }
+        let unchanged = content.clone();
+        assert!(
+            content
+                .change(Change::Artifact(
+                    ArtifactId::new("owned:extra".into()).unwrap()
+                ))
+                .is_err()
+        );
+        assert_eq!(content, unchanged);
+        let mut projection = restored.projection();
+        if let ProjectedEntry::Message { completion, .. } = &mut projection.conversation[0] {
+            *completion = Completion::Streaming;
+        }
+        assert!(Display::new(projection).is_err());
+    }
 
     #[test]
     fn transitions_projection_bounds_and_serde_are_validated() {

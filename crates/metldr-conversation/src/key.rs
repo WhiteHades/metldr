@@ -3,6 +3,27 @@ use serde::{Deserialize, Deserializer, Serialize};
 use crate::{MAX_ID_BYTES, MAX_MESSAGES};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct ArtifactId(String);
+
+impl ArtifactId {
+    pub fn new(id: String) -> Result<Self, String> {
+        validate_id(&id, "artifact id")?;
+        Ok(Self(id))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for ArtifactId {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::new(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MessageKey {
     Native { id: String },
@@ -57,7 +78,7 @@ impl MessageKey {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize)]
 #[serde(transparent)]
 pub struct ToolId(String);
 

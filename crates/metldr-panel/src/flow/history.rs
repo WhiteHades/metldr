@@ -4,9 +4,11 @@ use crate::{
         Change, Changed, Context, ConversationPage, Cursor, Expected, Response, RunPage,
         RunReference, Scope, validate_reference,
     },
-    model::{FlowError, RunView},
+    model::{FlowError, RunId, RunView},
 };
-use metldr_history_pages::{Assembler, DocumentKind, Identity};
+use metldr_conversation::{ArtifactId, Table};
+use metldr_history_pages::{Assembler, Counter, DocumentKind, Identity};
+use serde::Deserialize;
 use serde_json::json;
 
 #[derive(Clone)]
@@ -105,8 +107,58 @@ impl FlowClient {
         summary: &RunReference,
     ) -> Result<RunView> {
         validate_reference(context, summary)?;
-        let document = summary.id.as_str();
-        let pin = self.history_request(json!({"op":"history_pin","scope":context.scope,"generation":context.generation,"kind":"run","document":document,"revision":summary.revision}), Expected::Pin {context:context.clone(),kind:DocumentKind::Run,document:document.to_owned(),revision:summary.revision}).await?;
+        self.history_document(
+            context,
+            DocumentKind::Run,
+            summary.id.as_str(),
+            summary.revision,
+            |bytes| {
+                let run = RunView::decode_record(bytes, &summary.id)?;
+                if run.source != summary.source
+                    || run.kind != summary.kind
+                    || run.status != summary.status
+                {
+                    return Err(FlowError::Protocol(
+                        "Saved result does not match its observation.".into(),
+                    ));
+                }
+                Ok(run)
+            },
+        )
+        .await
+    }
+
+    pub(crate) async fn history_artifact(
+        &self,
+        context: &Context,
+        run: &RunId,
+        id: &ArtifactId,
+    ) -> Result<Table> {
+        context
+            .scope
+            .validate()
+            .map_err(|_| FlowError::Protocol("Invalid history scope.".into()))?;
+        validate_artifact_id(id.as_str(), &context.scope.store)?;
+        validate_artifact_id(run.as_str(), &context.scope.store)?;
+        self.history_document(
+            context,
+            DocumentKind::Artifact,
+            id.as_str(),
+            Counter(1),
+            |bytes| decode_artifact(bytes, run, id),
+        )
+        .await
+    }
+
+    async fn history_document<T>(
+        &self,
+        context: &Context,
+        kind: DocumentKind,
+        document: &str,
+        revision: Counter,
+        decode: impl FnOnce(&[u8]) -> Result<T>,
+    ) -> Result<T> {
+        let pin = self.history_request(json!({"op":"history_pin","scope":context.scope,"generation":context.generation,"kind":kind,"document":document,"revision":revision}), Expected::Pin {context:context.clone(),kind,document:document.to_owned(),revision}).await?;
         let Response::Pinned(identity) = pin else {
             return Err(FlowError::Protocol(
                 "Expected a saved result ticket.".into(),
@@ -138,16 +190,7 @@ impl FlowClient {
                     _ => return Err(FlowError::Protocol("Expected a saved result page.".into())),
                 }
             }
-            let run = RunView::decode_record(&reader.finish().map_err(codec_error)?, &summary.id)?;
-            if run.source != summary.source
-                || run.kind != summary.kind
-                || run.status != summary.status
-            {
-                return Err(FlowError::Protocol(
-                    "Saved result does not match its observation.".into(),
-                ));
-            }
-            Ok(run)
+            decode(&reader.finish().map_err(codec_error)?)
         }
         .await;
         if let Some(identity) = guard.identity.clone() {
@@ -165,6 +208,78 @@ impl FlowClient {
             }
         }
         result
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ArtifactRecord {
+    id: ArtifactId,
+    run: String,
+    call: String,
+    surface_id: String,
+    table: Table,
+}
+
+fn decode_artifact(bytes: &[u8], run: &RunId, id: &ArtifactId) -> Result<Table> {
+    let artifact: ArtifactRecord =
+        serde_json::from_slice(bytes).map_err(|error| FlowError::Protocol(error.to_string()))?;
+    if artifact.id != *id
+        || artifact.run != run.as_str()
+        || artifact.call.is_empty()
+        || artifact.call.len() > 256
+        || artifact.call.chars().any(char::is_control)
+        || artifact.surface_id.is_empty()
+        || artifact.surface_id.encode_utf16().count() > 256
+        || artifact.surface_id.chars().any(char::is_control)
+    {
+        return Err(FlowError::Protocol("Invalid saved artifact.".into()));
+    }
+    Ok(artifact.table)
+}
+
+fn validate_artifact_id(value: &str, store: &str) -> Result<()> {
+    let local = value
+        .strip_prefix(&format!("{store}:"))
+        .ok_or_else(|| FlowError::Protocol("Invalid saved artifact identity.".into()))?;
+    let number = local
+        .parse::<u64>()
+        .ok()
+        .filter(|number| *number > 0)
+        .ok_or_else(|| FlowError::Protocol("Invalid saved artifact identity.".into()))?;
+    if local != number.to_string() {
+        return Err(FlowError::Protocol(
+            "Invalid saved artifact identity.".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod checks {
+    use super::*;
+
+    #[test]
+    fn artifact_decode_checks_owner_and_strict_record_shape() {
+        let id = ArtifactId::new("0123456789abcdef0123456789abcdef:2".into()).unwrap();
+        let run: RunId =
+            serde_json::from_value(json!("0123456789abcdef0123456789abcdef:1")).unwrap();
+        let value = json!({
+            "id": id.as_str(),
+            "run": run.as_str(),
+            "call": "call-1",
+            "surface_id": "surface-1",
+            "table": {"title":"t","columns":["c"],"rows":[],"source":"s"}
+        });
+        assert!(decode_artifact(&serde_json::to_vec(&value).unwrap(), &run, &id).is_ok());
+
+        let mut wrong_owner = value.clone();
+        wrong_owner["run"] = json!("0123456789abcdef0123456789abcdef:3");
+        assert!(decode_artifact(&serde_json::to_vec(&wrong_owner).unwrap(), &run, &id).is_err());
+
+        let mut extra = value;
+        extra["extra"] = json!(true);
+        assert!(decode_artifact(&serde_json::to_vec(&extra).unwrap(), &run, &id).is_err());
     }
 }
 

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::io::{self, Write};
 
-pub(super) const FORMAT: u8 = 15;
+pub(super) const FORMAT: u8 = 16;
 const RECORD_MAX: usize = 2 * 1024 * 1024;
 pub(super) const META: TableDefinition<&str, &[u8]> = TableDefinition::new("metadata");
 pub(super) const CONVERSATIONS: TableDefinition<&str, &[u8]> =
@@ -15,6 +15,7 @@ pub(super) const SELECTIONS: TableDefinition<&str, &[u8]> =
     TableDefinition::new("selection_receipts");
 pub(super) const SOURCES: TableDefinition<&str, &[u8]> = TableDefinition::new("sources");
 pub(super) const RUNS: TableDefinition<&str, &[u8]> = TableDefinition::new("runs");
+pub(super) const ARTIFACTS: TableDefinition<&str, &[u8]> = TableDefinition::new("artifacts");
 pub(super) const LAUNCHES: TableDefinition<&str, &[u8]> = TableDefinition::new("launches");
 pub(super) const STARTS: TableDefinition<&str, &[u8]> = TableDefinition::new("starts");
 pub(super) const ACTIVE_RUNS: TableDefinition<&str, ()> = TableDefinition::new("active_runs");

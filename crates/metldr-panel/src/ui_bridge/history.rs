@@ -2,18 +2,26 @@ use metldr_conversation::EntryRef;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ag_ui::{AgUiMessage, MAX_HISTORY_MESSAGES, MessageRole},
+    ag_ui::{
+        AgUiMessage, MAX_HISTORY_MESSAGES, RunOrigin,
+        run_details::RunDetailsReference,
+        tools::{self, ToolGroupReference},
+    },
     flow::FlowClient,
     history::{
         Context, Cursor, RunReference, Scope, before_run, validate_read_position,
         validate_reference,
     },
-    model::{FlowError, RunView},
+    model::{FlowError, RunId, RunView},
 };
 
 const MESSAGE_BUDGET: usize = crate::MAX_FRAME - 4_096;
 const MAX_CURSOR: usize = 2_048;
-const MAX_RUN_MESSAGES: usize = 65;
+const MAX_RUN_MESSAGES: usize = 1
+    + metldr_conversation::MAX_MESSAGES
+    + metldr_conversation::MAX_ARTIFACTS
+    + metldr_conversation::MAX_TOOLS
+    + 1;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -85,7 +93,7 @@ async fn pack(
     for summary in summaries {
         let reference = summary.reference();
         let run = flow.history_run(&state.context, &reference).await?;
-        let messages = run_messages(&run);
+        let messages = run_messages(&run, reference.clone());
         let already = reverse.len();
         if !append_reverse(&mut reverse, &mut encoded_bytes, &messages, MESSAGE_BUDGET)? {
             state.pending = Some(Pending {
@@ -110,7 +118,7 @@ async fn pack_pending(
     anchor: metldr_history_pages::Counter,
 ) -> Result<Page, FlowError> {
     let run = flow.history_run(&state.context, &pending.run).await?;
-    let messages = run_messages(&run);
+    let messages = run_messages(&run, pending.run.clone());
     if pending.remaining_messages > messages.len() {
         return Err(protocol("invalid pending history run"));
     }
@@ -202,31 +210,60 @@ fn decode_cursor(cursor: &str) -> Result<Continuation, FlowError> {
     Ok(state)
 }
 
-fn run_messages(run: &RunView) -> Vec<AgUiMessage> {
+fn run_messages(run: &RunView, reference: RunReference) -> Vec<AgUiMessage> {
+    let details = RunDetailsReference::new(
+        run,
+        RunOrigin::Saved {
+            reference: reference.clone(),
+        },
+    );
+    let tools = tools::groups(run, RunOrigin::Saved { reference });
+    run_messages_for(
+        &run.id,
+        run.question.as_deref(),
+        &run.output,
+        &tools,
+        Some(details),
+    )
+}
+
+fn run_messages_for(
+    run_id: &RunId,
+    question: Option<&str>,
+    output: &metldr_conversation::Display,
+    tools: &[ToolGroupReference],
+    details: Option<RunDetailsReference>,
+) -> Vec<AgUiMessage> {
     let mut messages = Vec::new();
-    if let Some(question) = &run.question {
-        messages.push(AgUiMessage {
-            id: format!("{}:question", run.id),
-            role: MessageRole::User,
-            content: question.clone(),
+    if let Some(question) = question {
+        messages.push(AgUiMessage::User {
+            id: format!("{run_id}:question"),
+            content: question.to_owned(),
         });
     }
+    if let Some(details) = details {
+        messages.push(AgUiMessage::run_details(details));
+    }
     let mut has_entries = false;
-    for entry in run.output.entries() {
+    for entry in output.entries() {
         has_entries = true;
         if let EntryRef::Message { key, text, .. } = entry {
-            messages.push(AgUiMessage {
-                id: format!("{}:{}", run.id, key.dom_key()),
-                role: MessageRole::Assistant,
+            messages.push(AgUiMessage::Assistant {
+                id: format!("{run_id}:{}", key.dom_key()),
                 content: text.to_owned(),
             });
+        } else if let EntryRef::Artifact { id } = entry {
+            messages.push(AgUiMessage::table(run_id, id));
+        } else if let EntryRef::Tool { id } = entry
+            && let Some(reference) = tools.iter().find(|group| &group.group_id == id)
+        {
+            messages.push(AgUiMessage::native_tools(reference.clone()));
         }
     }
-    if !has_entries && !run.output.text().is_empty() {
-        messages.push(AgUiMessage {
-            id: format!("{}:flat", run.id),
-            role: MessageRole::Assistant,
-            content: run.output.text().to_owned(),
+    if !has_entries && !output.text().is_empty() {
+        messages.push(AgUiMessage::Assistant {
+            id: format!("{run_id}:flat"),
+            content: output.text().to_owned(),
         });
     }
     messages
@@ -239,11 +276,47 @@ fn protocol(message: &str) -> FlowError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use metldr_conversation::{ArtifactId, Display, Projection};
+
+    #[test]
+    fn archives_the_same_ordered_native_tools_with_an_exact_saved_reference() {
+        let run = crate::ag_ui::tools::checks::run();
+        let reference = RunReference {
+            id: run.id.clone(),
+            source: run.source.clone(),
+            revision: metldr_history_pages::Counter(9),
+            kind: run.kind,
+            status: run.status,
+        };
+        let messages = run_messages(&run, reference.clone());
+        let encoded = serde_json::to_value(&messages).unwrap();
+        assert_eq!(
+            messages.iter().map(AgUiMessage::id).collect::<Vec<_>>(),
+            [
+                "0123456789abcdef0123456789abcdef:1:question",
+                "0123456789abcdef0123456789abcdef:1:details",
+                "0123456789abcdef0123456789abcdef:1:observed:1",
+                "0123456789abcdef0123456789abcdef:1:tools:call-1",
+                "0123456789abcdef0123456789abcdef:1:observed:2",
+                "0123456789abcdef0123456789abcdef:1:tools:call-3",
+            ]
+        );
+        assert_eq!(encoded[1]["activityType"], "metldr.run-details");
+        assert_eq!(encoded[3]["activityType"], "metldr.native-tools");
+        assert_eq!(
+            encoded[3]["content"]["toolIds"],
+            serde_json::json!(["call-1", "call-2"])
+        );
+        assert_eq!(
+            encoded[3]["content"]["origin"],
+            serde_json::json!({"kind":"saved","reference":reference})
+        );
+        assert_eq!(encoded[5]["content"]["reportCount"], 0);
+    }
 
     fn message(id: &str, content: &str) -> AgUiMessage {
-        AgUiMessage {
+        AgUiMessage::Assistant {
             id: id.into(),
-            role: MessageRole::Assistant,
             content: content.into(),
         }
     }
@@ -261,12 +334,11 @@ mod tests {
         let mut encoded_bytes = 2;
         assert!(!append_reverse(&mut packed, &mut encoded_bytes, &messages, budget).unwrap());
         assert_eq!(packed, vec![messages[1].clone()]);
-        assert_eq!(packed[0].content, messages[1].content);
+        assert_eq!(packed[0].text(), messages[1].text());
         assert_eq!(encoded_bytes, serde_json::to_vec(&packed).unwrap().len());
 
-        let mut messages = vec![AgUiMessage {
+        let mut messages = vec![AgUiMessage::User {
             id: "0123456789abcdef0123456789abcdef:9:question".into(),
-            role: MessageRole::User,
             content: "\0".repeat(1_024),
         }];
         for ordinal in 0..64 {
@@ -304,6 +376,71 @@ mod tests {
                 .collect::<Vec<_>>(),
             messages
         );
+    }
+
+    #[test]
+    fn archives_text_and_table_entries_in_order_across_a_byte_boundary() {
+        let run: RunId = serde_json::from_str("\"0123456789abcdef0123456789abcdef:2\"").unwrap();
+        let artifact = ArtifactId::new("0123456789abcdef0123456789abcdef:2".into()).unwrap();
+        let output = Display::new(Projection {
+            output: "beforeafter".into(),
+            conversation: vec![
+                metldr_conversation::ProjectedEntry::Message {
+                    key: metldr_conversation::MessageKey::observed(1).unwrap(),
+                    start: 0,
+                    end: 6,
+                    completion: metldr_conversation::Completion::FinalSnapshot,
+                },
+                metldr_conversation::ProjectedEntry::Artifact {
+                    id: artifact.clone(),
+                },
+                metldr_conversation::ProjectedEntry::Message {
+                    key: metldr_conversation::MessageKey::observed(2).unwrap(),
+                    start: 6,
+                    end: 11,
+                    completion: metldr_conversation::Completion::FinalSnapshot,
+                },
+            ],
+        })
+        .unwrap();
+        let messages = run_messages_for(&run, Some("question"), &output, &[], None);
+        assert_eq!(messages.len(), 4);
+        assert_eq!(messages[0].text(), Some("question"));
+        assert_eq!(messages[1].text(), Some("before"));
+        assert_eq!(messages[2], AgUiMessage::table(&run, &artifact));
+        assert_eq!(messages[3].text(), Some("after"));
+        assert_eq!(
+            serde_json::to_value(&messages[2]).unwrap(),
+            serde_json::json!({
+                "role": "activity",
+                "id": format!("{run}:artifact:{}", artifact.as_str()),
+                "activityType": "metldr.table",
+                "content": {"runId": run, "artifactId": artifact}
+            })
+        );
+
+        let suffix_bytes = serde_json::to_vec(&messages[2]).unwrap().len()
+            + serde_json::to_vec(&messages[3]).unwrap().len()
+            + 2;
+        let mut newest = Vec::new();
+        let mut bytes = 2;
+        assert!(!append_reverse(&mut newest, &mut bytes, &messages, suffix_bytes).unwrap());
+        let remaining = messages.len() - newest.len();
+        let mut older = Vec::new();
+        let mut bytes = 2;
+        assert!(
+            append_reverse(
+                &mut older,
+                &mut bytes,
+                &messages[..remaining],
+                MESSAGE_BUDGET
+            )
+            .unwrap()
+        );
+        older.reverse();
+        newest.reverse();
+        older.extend(newest);
+        assert_eq!(older, messages);
     }
 
     #[test]
