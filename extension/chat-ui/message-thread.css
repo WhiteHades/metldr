@@ -18,7 +18,7 @@
   padding: 8px 14px;
   color: var(--ink);
   box-shadow: var(--shadow-hairline);
-  font-size: 13px;
+  font-size: calc(13px * var(--chat-text-scale, 1));
   line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -29,7 +29,7 @@
   min-inline-size: 0;
   max-inline-size: 620px;
   color: var(--ink);
-  font-size: 13.5px;
+  font-size: calc(13.5px * var(--chat-text-scale, 1));
   line-height: 1.65;
   white-space: pre-wrap;
   overflow-wrap: break-word;
@@ -50,7 +50,7 @@
   align-items: center;
   gap: 10px;
   color: var(--ink-3, var(--ink));
-  font-size: 13px;
+  font-size: calc(13px * var(--chat-text-scale, 1));
   font-weight: 500;
 }
 

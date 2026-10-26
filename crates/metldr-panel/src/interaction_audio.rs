@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::{cell::RefCell, rc::Rc};
 
 use js_sys::{Math, RegExp};
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
@@ -7,6 +7,8 @@ use web_sys::{
     BiquadFilterNode, BiquadFilterType, Document, Element, Event, GainNode, OscillatorNode,
     OscillatorType, PageTransitionEvent, Window,
 };
+
+use crate::preferences::UiPreferences;
 
 const SELECTOR: &str = "button,a[href],input:not([type='hidden']),select,textarea,summary,[role='button'],[role='checkbox'],[role='menuitem'],[role='menuitemcheckbox'],[role='menuitemradio'],[role='option'],[role='radio'],[role='switch'],[role='tab']";
 const SILENCE: f64 = 0.0001;
@@ -127,23 +129,19 @@ const PULSE: [Layer; 1] = [Layer {
     gain: 0.5,
 }];
 
-pub(super) fn install(document: &Document) -> Result<(), JsValue> {
+pub(super) fn install(document: &Document, preferences: Rc<UiPreferences>) -> Result<(), JsValue> {
     if LISTENER.with(|slot| slot.borrow().is_some()) {
         return Ok(());
     }
     let window = document
         .default_view()
         .ok_or_else(|| JsValue::from_str("document has no default window"))?;
-    let enabled = window
-        .local_storage()
-        .ok()
-        .flatten()
-        .and_then(|storage| storage.get_item("bui-sounds").ok().flatten())
-        .as_deref()
-        != Some("off");
     let mut initialized = false;
     let click = Closure::wrap(Box::new(move |event: Event| {
-        if enabled {
+        if preferences
+            .snapshot()
+            .is_ok_and(|snapshot| snapshot.sounds_enabled())
+        {
             let _ = on_click(event, &mut initialized);
         }
     }) as Box<dyn FnMut(Event)>);

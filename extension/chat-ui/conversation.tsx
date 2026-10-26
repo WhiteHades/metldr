@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { CopilotKitProvider, CopilotChatConfigurationProvider, useCopilotKit, useAgent, useRenderActivityMessage } from "@copilotkit/react-core/v2";
 import { MessageSchema } from "@ag-ui/core";
 import { z } from "zod";
-import init, { connect_ui_bridge, type UiBridge, type UiProviderSettings, type UiAgentSettings } from "../../crates/metldr-panel/pkg/metldr_panel.js";
+import init, { connect_ui_bridge, UiPreferences, type UiBridge, type UiProviderSettings, type UiAgentSettings } from "../../crates/metldr-panel/pkg/metldr_panel.js";
 import { RustAgent } from "./rust-agent";
 import { SavedTable, TableReference } from "./saved-table";
 import PromptBar from "./prompt-bar";
@@ -25,6 +25,7 @@ import { RunDetails } from "./run-details";
 import { useConnection } from "./connection";
 import { useReviewDraft } from "./review-draft";
 import { SavedSource } from "./saved-source";
+import { PreferenceSettings, usePreferences } from "./preferences";
 import "./run-details.css";
 import "./chat-theme.css";
 
@@ -265,11 +266,11 @@ function Conversation({ initial, failure, bridge, recovery, enqueue, destination
     </div>}} />;
 }
 
-function App({ initial, destination, bridge, recovery, initialChoices, settings, agentSettings, capture, navigation, enqueue, onSessionMounted, onHistoryChange }: { initial: z.infer<typeof Snapshot>; destination: string; bridge: UiBridge; recovery?: ReturnType<UiBridge["active_run"]>; initialChoices: PromptChoice[]; settings: UiProviderSettings; agentSettings: UiAgentSettings; capture: Capture; navigation: Omit<NavigationControls,"openSettings">; enqueue: Enqueue; onSessionMounted(): void; onHistoryChange(): Promise<void> }) {
+function App({ initial, destination, bridge, recovery, initialChoices, settings, agentSettings, preferences, capture, navigation, enqueue, onSessionMounted, onHistoryChange }: { initial: z.infer<typeof Snapshot>; destination: string; bridge: UiBridge; recovery?: ReturnType<UiBridge["active_run"]>; initialChoices: PromptChoice[]; settings: UiProviderSettings; agentSettings: UiAgentSettings; preferences: UiPreferences; capture: Capture; navigation: Omit<NavigationControls,"openSettings">; enqueue: Enqueue; onSessionMounted(): void; onHistoryChange(): Promise<void> }) {
   useEffect(onSessionMounted, [bridge, onSessionMounted]);
   const [failure, setFailure] = useState("");
   const settingsDialog = useRef<HTMLDialogElement>(null);
-  const [sounds, setSounds] = useState(true);
+  const preferencesView = usePreferences(preferences);
   const mounted = useRef(false);
   const [controlRevision, setControlRevision] = useState(0);
   const controlsChanged = useCallback(() => setControlRevision(value => value + 1), []);
@@ -317,7 +318,7 @@ function App({ initial, destination, bridge, recovery, initialChoices, settings,
       return <RunDetails reference={content} read={readRunDetails} />;
     },
   }], [agents, initial.threadId, readTable, readNativeTools, readRunDetails]);
-  return <><InteractionSounds enabled={sounds} /><CopilotKitProvider key={initial.threadId} selfManagedAgents={agents} renderActivityMessages={renderActivityMessages} showDevConsole={false}>
+  return <><InteractionSounds enabled={preferencesView.sounds_enabled} /><CopilotKitProvider key={initial.threadId} selfManagedAgents={agents} renderActivityMessages={renderActivityMessages} showDevConsole={false}>
     <CopilotChatConfigurationProvider threadId={initial.threadId}>
       <Conversation initial={initial} failure={failure} bridge={bridge} recovery={recovery} enqueue={enqueue} destination={destination} initialChoices={initialChoices} controlRevision={controlRevision} onHistoryChange={onHistoryChange} navigation={{...navigation, openSettings: () => settingsDialog.current?.showModal()}} />
 
@@ -325,7 +326,7 @@ function App({ initial, destination, bridge, recovery, initialChoices, settings,
   </CopilotKitProvider>
     <dialog className="chat-settings" ref={settingsDialog}>
       <header><h2>Settings</h2><button type="button" onClick={() => settingsDialog.current?.close()}>Close</button></header>
-      <label><input type="checkbox" checked={sounds} onChange={event => setSounds(event.target.checked)} />Sounds</label>
+      <PreferenceSettings preferences={preferences} view={preferencesView} />
       <ProviderSettings settings={settings} onConnectionsChange={controlsChanged} />
       <AgentSettings settings={agentSettings} onConfigurationsChange={controlsChanged} />
     </dialog></>;
@@ -357,6 +358,16 @@ async function readSession(bridge: UiBridge): Promise<Session> {
   return { bridge, initial, choices, preferred: bridge.preferred_execution_choice(), recovery: initial.running ? bridge.active_run() : undefined };
 }
 
+function Startup({ preferences, error }: { preferences: UiPreferences; error?: string }) {
+  const view = usePreferences(preferences);
+  return <section className="chat-startup">
+    <InteractionSounds enabled={view.sounds_enabled} />
+    <p role={error ? "alert" : "status"}>{error ? `metldr could not connect. ${error}` : "Opening metldr"}</p>
+    {error && <button type="button" onClick={() => location.reload()}>Reload</button>}
+    <PreferenceSettings preferences={preferences} view={view} />
+  </section>;
+}
+
 function release(session: Session) {
   session.recovery?.detach();
   session.recovery?.free();
@@ -365,14 +376,32 @@ function release(session: Session) {
 
 export async function mountChat(container: HTMLElement, { capture, destination = "model" }: { capture: Capture; destination?: string }) {
   await init();
-  const bridge = await connect_ui_bridge(capture);
-  let current: Session;
-  try { current = await readSession(bridge); }
-  catch (error) { bridge.free(); throw error; }
-  const settings = bridge.provider_settings();
-  const agentSettings = bridge.agent_settings();
+  const preferences = new UiPreferences();
   container.dataset.metldrChat = "";
   const root = createRoot(container);
+  root.render(<Startup preferences={preferences} />);
+  let bridge: UiBridge | undefined;
+  let current: Session;
+  try {
+    bridge = await connect_ui_bridge(capture);
+    current = await readSession(bridge);
+  } catch (error) {
+    bridge?.free();
+    root.render(<Startup preferences={preferences} error={String(error)} />);
+    let closed = false;
+    return {
+      thread: "", sourceAvailable: false,
+      unmount() {
+        if (closed) return;
+        closed = true;
+        root.unmount();
+        preferences.close();
+        preferences.free();
+      },
+    };
+  }
+  const settings = bridge.provider_settings();
+  const agentSettings = bridge.agent_settings();
   let closed = false;
   let navigation: Navigation = { kind: "idle" };
   let readTail = Promise.resolve();
@@ -433,7 +462,7 @@ export async function mountChat(container: HTMLElement, { capture, destination =
   function render() {
     if (closed) return;
     root.render(<App initial={current.initial} destination={current.preferred ?? destination} bridge={current.bridge}
-      recovery={current.recovery} initialChoices={current.choices} settings={settings} agentSettings={agentSettings}
+      recovery={current.recovery} initialChoices={current.choices} settings={settings} agentSettings={agentSettings} preferences={preferences}
       capture={capture} enqueue={enqueue} onSessionMounted={retire} onHistoryChange={refreshTitles} navigation={{ tabs, activeId: current.initial.threadId,
         navigationDisabled: !canNavigate(navigation),
         error: navigation.kind === "pending" ? "Opening conversation" : navigation.kind === "idle" ? "" : navigation.error,
@@ -502,6 +531,8 @@ export async function mountChat(container: HTMLElement, { capture, destination =
       release(current);
       settings.free();
       agentSettings.free();
+      preferences.close();
+      preferences.free();
     },
   };
 }

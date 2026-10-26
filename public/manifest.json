@@ -77,7 +77,7 @@
       ]
     }
   ],
-  "minimum_chrome_version": "125",
+  "minimum_chrome_version": "148",
   "commands": {
     "open-browser-agent": {
       "suggested_key": {

@@ -1,30 +1,34 @@
 [data-chat-page] body { margin: 0; }
+[data-chat-page] { --chat-palette: catppuccin; --chat-text-scale: 1; color-scheme: dark; }
+[data-chat-page][data-theme="light"] { color-scheme: light; }
+[data-chat-page][data-theme="gruvbox"] { --chat-palette: gruvbox; }
+[data-chat-page][data-theme="cyberpunk"] { --chat-palette: cyberpunk; }
+[data-chat-page][data-font-size="small"] { --chat-text-scale: 0.9375; }
+[data-chat-page][data-font-size="large"] { --chat-text-scale: 1.125; }
 [data-metldr-chat] {
-  --page: light-dark(oklch(0.985 0.001 286.376), oklch(0.209 0.004 264.477));
-  --canvas: light-dark(oklch(0.961 0.002 247.84), oklch(0.231 0.004 264.487));
-  --surface: light-dark(oklch(1 0 none), oklch(0.26 0.006 271.191));
-  --field: light-dark(oklch(0.961 0.001 286.375), oklch(0.293 0.006 271.223));
-  --hover: light-dark(oklch(0.97 0.002 247.839), oklch(0.289 0.006 271.22));
-  --hover-2: light-dark(oklch(0.933 0.003 247.86), oklch(0.318 0.007 274.747));
-  --ink: light-dark(oklch(0.247 0.006 258.361), oklch(0.964 0.002 247.839));
-  --ink-2: light-dark(oklch(0.506 0.01 264.477), oklch(0.731 0.008 260.731));
-  --ink-3: light-dark(oklch(0.695 0.009 264.505), oklch(0.541 0.01 264.484));
-  --line: light-dark(oklch(0.946 0.003 264.542), oklch(0.308 0.006 258.354));
+  --page: light-dark(oklch(0.985 0.001 286.376), if(style(--chat-palette: gruvbox): oklch(0.24 0.025 75); style(--chat-palette: cyberpunk): oklch(0.17 0.045 290); else: oklch(0.209 0.004 264.477)));
+  --canvas: light-dark(oklch(0.961 0.002 247.84), if(style(--chat-palette: gruvbox): oklch(0.26 0.025 75); style(--chat-palette: cyberpunk): oklch(0.19 0.045 290); else: oklch(0.231 0.004 264.487)));
+  --surface: light-dark(oklch(1 0 none), if(style(--chat-palette: gruvbox): oklch(0.3 0.03 75); style(--chat-palette: cyberpunk): oklch(0.23 0.06 290); else: oklch(0.26 0.006 271.191)));
+  --field: light-dark(oklch(0.961 0.001 286.375), if(style(--chat-palette: gruvbox): oklch(0.33 0.03 75); style(--chat-palette: cyberpunk): oklch(0.26 0.06 290); else: oklch(0.293 0.006 271.223)));
+  --hover: light-dark(oklch(0.97 0.002 247.839), if(style(--chat-palette: gruvbox): oklch(0.33 0.03 75); style(--chat-palette: cyberpunk): oklch(0.26 0.06 290); else: oklch(0.289 0.006 271.22)));
+  --hover-2: light-dark(oklch(0.933 0.003 247.86), if(style(--chat-palette: gruvbox): oklch(0.36 0.03 75); style(--chat-palette: cyberpunk): oklch(0.29 0.06 290); else: oklch(0.318 0.007 274.747)));
+  --ink: light-dark(oklch(0.247 0.006 258.361), if(style(--chat-palette: gruvbox): oklch(0.91 0.04 85); style(--chat-palette: cyberpunk): oklch(0.94 0.04 195); else: oklch(0.964 0.002 247.839)));
+  --ink-2: light-dark(oklch(0.506 0.01 264.477), if(style(--chat-palette: gruvbox): oklch(0.74 0.045 80); style(--chat-palette: cyberpunk): oklch(0.75 0.08 205); else: oklch(0.731 0.008 260.731)));
+  --ink-3: light-dark(oklch(0.695 0.009 264.505), if(style(--chat-palette: gruvbox): oklch(0.65 0.045 80); style(--chat-palette: cyberpunk): oklch(0.65 0.08 205); else: oklch(0.541 0.01 264.484)));
+  --line: light-dark(oklch(0.946 0.003 264.542), if(style(--chat-palette: gruvbox): oklch(0.38 0.03 75); style(--chat-palette: cyberpunk): oklch(0.31 0.06 290); else: oklch(0.308 0.006 258.354)));
   --shadow-hairline: 0 0 0 1px var(--line);
   color: var(--ink);
   background: var(--page);
-  font: 14px/1.5 Inter, "Inter Fallback", ui-sans-serif, system-ui, sans-serif;
+  font: calc(14px * var(--chat-text-scale))/1.5 Inter, "Inter Fallback", ui-sans-serif, system-ui, sans-serif;
 }
-[data-theme="light"] [data-metldr-chat] { color-scheme: light; }
-:is([data-theme="catppuccin"], [data-theme="dracula"], [data-theme="midnight"]) [data-metldr-chat] { color-scheme: dark; }
-[data-metldr-chat] :is(button, input, select, textarea) { font: inherit; }
+:where([data-metldr-chat]) :where(button, input, select, textarea) { font: inherit; }
 [data-metldr-chat] ::selection { color: var(--ink); background: color-mix(in oklch, var(--ink) 15%, var(--page)); }
-.chat-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-2); }
+.chat-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: calc(12px * var(--chat-text-scale)); color: var(--ink-2); }
 .chat-toolbar button { min-block-size: 32px; padding-inline: 8px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink-2); background: var(--field); }
 .chat-toolbar button:disabled { opacity: 0.5; }
 .chat-toolbar button:active:not(:disabled) { background: var(--hover-2); }
 .chat-empty { display: flex; flex-direction: column; gap: 28px; margin-block-end: 28px; }
-.chat-empty h1 { margin: 0; color: var(--ink); font-size: 26px; line-height: 1.35; font-weight: 400; letter-spacing: -0.02em; }
+.chat-empty h1 { margin: 0; color: var(--ink); font-size: calc(26px * var(--chat-text-scale)); line-height: 1.35; font-weight: 400; letter-spacing: -0.02em; }
 .chat-empty h1 span { display: block; }
 .chat-empty h1 span:first-child { color: var(--ink-3); }
 .chat-settings,
@@ -32,12 +36,20 @@
 .chat-settings { inline-size: min(46rem, calc(100vi - 2rem)); max-block-size: calc(100dvh - 2rem); padding: 16px; border: 1px solid var(--line); border-radius: 14px; color: var(--ink); background: var(--page); overflow-y: auto; }
 .chat-settings::backdrop { background: oklch(0 0 none / 0.35); }
 .chat-settings header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.chat-settings h2 { margin: 0; font-size: 16px; }
+.chat-settings h2 { margin: 0; font-size: calc(16px * var(--chat-text-scale)); }
 .chat-settings header button { min-block-size: 44px; padding-inline: 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: var(--field); }
 .chat-settings header button:active { background: var(--hover-2); }
 .chat-settings > label { display: flex; align-items: center; gap: 8px; min-block-size: 44px; }
 .chat-settings input[type="checkbox"] { accent-color: var(--ink); }
-.chat-settings :is(button,input):focus-visible, .chat-toolbar button:focus-visible { outline: 2px solid var(--ink-2); outline-offset: 3px; }
+.chat-settings :is(button,input,select):focus-visible, .chat-toolbar button:focus-visible { outline: 2px solid var(--ink-2); outline-offset: 3px; }
+[data-preferences-settings] fieldset { display: grid; gap: 0.75rem; margin: 0; padding: 0; border: 0; min-inline-size: 0; }
+[data-preferences-settings] label { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; min-block-size: 44px; }
+[data-preferences-settings] select { flex: 1; min-inline-size: 0; min-block-size: 44px; padding-block: 0.5rem; padding-inline: 0.75rem; font: inherit; font-size: max(16px, calc(16px * var(--chat-text-scale))); color: var(--provider-ink); background: var(--provider-field); border: 1px solid var(--provider-muted); border-radius: 0.5rem; }
+[data-preferences-settings] :is(select,label):active { background: color-mix(in oklch, var(--provider-ink) 6%, var(--provider-field)); }
+.chat-startup { max-inline-size: 46rem; margin-inline: auto; padding-block: 1rem; padding-inline: 1rem; }
+.chat-startup > button { min-block-size: 44px; font: inherit; color: var(--ink); background: var(--field); border: 1px solid var(--line); border-radius: 0.5rem; }
+.chat-startup > button:active { background: var(--hover-2); }
+.chat-startup > button:focus-visible { outline: 2px solid var(--ink-2); outline-offset: 3px; }
 @media (hover: hover) and (pointer: fine) {
   .chat-toolbar button:hover:not(:disabled), .chat-settings header button:hover { background: var(--hover); }
 }

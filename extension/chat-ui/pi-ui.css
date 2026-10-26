@@ -14,7 +14,7 @@
 :is(#pi-ui, #pi-ui-widgets-below) > div:empty { display: none; }
 #pi-ui-cards { display: grid; gap: 0.75rem; }
 :is(#pi-ui, #pi-ui-widgets-below) :is(h2, h3, p, pre) { margin-block: 0; }
-:is(#pi-ui, #pi-ui-widgets-below) h2 { font-size: 1rem; font-weight: 600; }
+:is(#pi-ui, #pi-ui-widgets-below) h2 { font-size: calc(1rem * var(--chat-text-scale, 1)); font-weight: 600; }
 :is(#pi-ui, #pi-ui-widgets-below) > [id^="pi-ui-widgets"] { display: grid; gap: 0.5rem; }
 :is(#pi-ui, #pi-ui-widgets-below) [data-pi-card],
 #pi-ui-suggestion {
@@ -27,7 +27,7 @@
   background: var(--surface);
 }
 
-:is(#pi-ui, #pi-ui-widgets-below) [data-pi-card] h3 { font-size: 1rem; font-weight: 600; }
+:is(#pi-ui, #pi-ui-widgets-below) [data-pi-card] h3 { font-size: calc(1rem * var(--chat-text-scale, 1)); font-weight: 600; }
 :is(#pi-ui, #pi-ui-widgets-below) [data-part="body"],
 :is(#pi-ui, #pi-ui-widgets-below) [data-status-key],
 :is(#pi-ui, #pi-ui-widgets-below) [data-pi-notice] { color: var(--ink-2); }
@@ -69,6 +69,7 @@
   background: var(--field);
   font: inherit;
   text-wrap: stable;
+  font-size: max(16px, calc(16px * var(--chat-text-scale, 1)));
   resize: none;
   overflow: auto;
 }

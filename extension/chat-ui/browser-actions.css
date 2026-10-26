@@ -23,7 +23,7 @@
 }
 
 #browser-actions :is(h3, p) { margin: 0; }
-#browser-actions h3 { font-size: 1rem; font-weight: 600; }
+#browser-actions h3 { font-size: calc(1rem * var(--chat-text-scale, 1)); font-weight: 600; }
 #browser-actions [data-part="status"],
 #browser-actions [data-part="url"] { color: var(--ink-2); }
 #browser-actions [data-part="url"] { overflow-wrap: anywhere; }

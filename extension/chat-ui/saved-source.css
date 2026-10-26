@@ -3,7 +3,7 @@
   --source-duration: 180ms;
   min-inline-size: 0;
   color: var(--ink);
-  font-size: 13px;
+  font-size: calc(13px * var(--chat-text-scale, 1));
   interpolate-size: allow-keywords;
 }
 .saved-source > summary {
@@ -29,7 +29,7 @@
 .saved-source[open] > summary > svg { rotate: 180deg; }
 .saved-source__body { display: flex; flex-direction: column; gap: 0.75rem; padding-block: 0.75rem; }
 .saved-source__body > :is(h2, p) { margin: 0; overflow-wrap: break-word; }
-.saved-source__body > h2 { font-size: 1rem; font-weight: 600; }
+.saved-source__body > h2 { font-size: calc(1rem * var(--chat-text-scale, 1)); font-weight: 600; }
 .saved-source__body > [data-source-url] { color: var(--ink-2); }
 .saved-source__text {
   max-block-size: 16lh;

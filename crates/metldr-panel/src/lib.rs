@@ -24,6 +24,7 @@ mod history_ui;
 mod interaction_audio;
 mod model;
 mod pi_ui;
+mod preferences;
 mod profile;
 mod provider_settings;
 mod readiness;
@@ -161,10 +162,11 @@ async fn panel_start() -> Result<(), JsValue> {
         .document()
         .ok_or_else(|| err("document unavailable"))?;
     view::mount(&document)?;
-    if let Err(error) = interaction_audio::install(&document) {
+    let preferences = Rc::new(preferences::UiPreferences::new()?);
+    if let Err(error) = interaction_audio::install(&document, Rc::clone(&preferences)) {
         web_sys::console::error_1(&error);
     }
-    if let Err(error) = appearance::install(&document) {
+    if let Err(error) = appearance::install(&document, preferences) {
         web_sys::console::error_1(&error);
         if let Some(status) = document.get_element_by_id("appearance-status") {
             status.set_text_content(Some(

@@ -1,9 +1,9 @@
 [data-settings-editor] {
-  --provider-surface: light-dark(oklch(1 0 none), oklch(0.26 0.006 271.191));
-  --provider-field: light-dark(oklch(0.97 0.002 247.839), oklch(0.289 0.006 271.22));
-  --provider-ink: light-dark(oklch(0.247 0.006 258.361), oklch(0.964 0.002 247.839));
-  --provider-muted: light-dark(oklch(0.506 0.01 264.477), oklch(0.731 0.008 260.731));
-  --provider-line: light-dark(oklch(0.912 0.005 258.326), oklch(0.356 0.007 264.474));
+  --provider-surface: var(--surface, light-dark(oklch(1 0 none), oklch(0.26 0.006 271.191)));
+  --provider-field: var(--field, light-dark(oklch(0.97 0.002 247.839), oklch(0.289 0.006 271.22)));
+  --provider-ink: var(--ink, light-dark(oklch(0.247 0.006 258.361), oklch(0.964 0.002 247.839)));
+  --provider-muted: var(--ink-2, light-dark(oklch(0.506 0.01 264.477), oklch(0.731 0.008 260.731)));
+  --provider-line: var(--line, light-dark(oklch(0.912 0.005 258.326), oklch(0.356 0.007 264.474)));
   --provider-focus: light-dark(oklch(0.626 0.205 254.947), oklch(0.68 0.173 253.301));
   --provider-space: clamp(0.75rem, 0.5rem + 1vi, 1rem);
   inline-size: 100%;
@@ -15,7 +15,7 @@
   background: var(--provider-surface);
   border: 1px solid var(--provider-line);
   border-radius: 0.875rem;
-  font: 0.875rem/1.5 Inter, "Inter Fallback", ui-sans-serif, system-ui, sans-serif;
+  font: calc(0.875rem * var(--chat-text-scale, 1))/1.5 Inter, "Inter Fallback", ui-sans-serif, system-ui, sans-serif;
   interpolate-size: allow-keywords;
 }
 [data-settings-editor] :is(form, fieldset, input) { min-inline-size: 0; }
@@ -45,7 +45,7 @@
   color: var(--provider-ink);
   background: var(--provider-field);
   font: inherit;
-  font-size: max(16px, 1rem);
+  font-size: max(16px, calc(1rem * var(--chat-text-scale, 1)));
   caret-color: var(--provider-focus);
 }
 [data-settings-actions] { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 7.5rem), 1fr)); gap: 0.5rem; }

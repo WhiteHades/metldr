@@ -23,7 +23,7 @@
 }
 
 #codex-input :is(h3, p, pre) { margin-block: 0; }
-#codex-input h3 { font-size: 1rem; font-weight: 600; }
+#codex-input h3 { font-size: calc(1rem * var(--chat-text-scale, 1)); font-weight: 600; }
 #codex-input [data-part="message"],
 #codex-input [data-part="field"] small,
 #codex-input [data-part="option"] small { color: var(--ink-2); }
@@ -51,6 +51,7 @@
   color: var(--ink);
   background: var(--field);
   font: inherit;
+  font-size: max(16px, calc(16px * var(--chat-text-scale, 1)));
 }
 #codex-input [data-part="field"] select { margin-block-start: 0.25rem; }
 #codex-input [data-part="review"] { display: grid; gap: 0.5rem; min-inline-size: 0; }

@@ -4,19 +4,19 @@
   --composer-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   anchor-scope: --prompt-composer, --prompt-model;
   font-synthesis: none;
-  --composer-surface: light-dark(oklch(1 0 none), oklch(0.26 0.006 271.191));
-  --composer-hover: light-dark(oklch(0.97 0.002 247.839), oklch(0.289 0.006 271.22));
-  --composer-ink: light-dark(oklch(0.247 0.006 258.361), oklch(0.964 0.002 247.839));
-  --composer-ink-2: light-dark(oklch(0.506 0.01 264.477), oklch(0.731 0.008 260.731));
-  --composer-ink-3: light-dark(oklch(0.695 0.009 264.505), oklch(0.541 0.01 264.484));
-  --composer-line: light-dark(oklch(0.946 0.003 264.542), oklch(0.308 0.006 258.354));
+  --composer-surface: var(--surface, light-dark(oklch(1 0 none), oklch(0.26 0.006 271.191)));
+  --composer-hover: var(--hover, light-dark(oklch(0.97 0.002 247.839), oklch(0.289 0.006 271.22)));
+  --composer-ink: var(--ink, light-dark(oklch(0.247 0.006 258.361), oklch(0.964 0.002 247.839)));
+  --composer-ink-2: var(--ink-2, light-dark(oklch(0.506 0.01 264.477), oklch(0.731 0.008 260.731)));
+  --composer-ink-3: var(--ink-3, light-dark(oklch(0.695 0.009 264.505), oklch(0.541 0.01 264.484)));
+  --composer-line: var(--line, light-dark(oklch(0.946 0.003 264.542), oklch(0.308 0.006 258.354)));
   --composer-line-strong: light-dark(oklch(0.912 0.005 258.326), oklch(0.356 0.007 264.474));
   --composer-accent: light-dark(oklch(0.626 0.205 254.947), oklch(0.68 0.173 253.301));
   --composer-shadow-card: 0 0 0 1px oklch(1 0 none / 0.11), 0 1px 2px oklch(0 0 none / 0.2), 0 2px 6px oklch(0 0 none / 0.2);
   --composer-shadow-raised: 0 0 0 1px oklch(1 0 none / 0.13), 0 2px 10px oklch(0 0 none / 0.22);
   color: var(--composer-ink);
   font-family: Inter, "Inter Fallback", ui-sans-serif, system-ui, sans-serif;
-  font-size: 14px;
+  font-size: calc(14px * var(--chat-text-scale, 1));
   line-height: 1.5;
 }
 
@@ -69,7 +69,7 @@ html[data-theme="light"] [data-metldr-prompt] {
   background: transparent;
   color: var(--composer-ink-3);
   font: inherit;
-  font-size: 12px;
+  font-size: calc(12px * var(--chat-text-scale, 1));
   font-weight: 500;
   line-height: 1;
   cursor: pointer;
@@ -107,8 +107,8 @@ html[data-theme="light"] [data-metldr-prompt] {
   background: transparent;
   color: var(--composer-ink);
   font: inherit;
-  font-size: 14px;
-  line-height: 20px;
+  font-size: max(16px, calc(16px * var(--chat-text-scale, 1)));
+  line-height: calc(20px * var(--chat-text-scale, 1));
   field-sizing: content;
   overflow-wrap: anywhere;
   resize: none;
@@ -205,7 +205,7 @@ html[data-theme="light"] [data-metldr-prompt] {
   background: transparent;
   color: var(--composer-ink);
   font: inherit;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--chat-text-scale, 1));
   text-align: start;
   cursor: pointer;
 }
@@ -217,7 +217,7 @@ html[data-theme="light"] [data-metldr-prompt] {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--composer-ink);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--chat-text-scale, 1));
   font-weight: 500;
 }
 [data-metldr-prompt] .composer-row-description {
@@ -225,7 +225,7 @@ html[data-theme="light"] [data-metldr-prompt] {
   min-inline-size: 0;
   overflow: clip;
   color: var(--composer-ink-3);
-  font-size: 12px;
+  font-size: calc(12px * var(--chat-text-scale, 1));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -234,12 +234,12 @@ html[data-theme="light"] [data-metldr-prompt] {
   min-inline-size: 0;
   overflow: clip;
   color: var(--composer-ink);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--chat-text-scale, 1));
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-[data-metldr-prompt] .composer-model-tag { flex: none; color: var(--composer-ink-3); font-size: 11px; }
+[data-metldr-prompt] .composer-model-tag { flex: none; color: var(--composer-ink-3); font-size: calc(11px * var(--chat-text-scale, 1)); }
 [data-metldr-prompt] .composer-model-check { display: flex; flex: none; align-items: center; justify-content: center; color: var(--composer-ink); }
 [data-metldr-prompt] .composer-model-check svg { inline-size: 13px; block-size: 13px; stroke: currentColor; stroke-width: 2.5; }
 [data-metldr-prompt] [data-prompt-menu-footer] {
@@ -248,7 +248,7 @@ html[data-theme="light"] [data-metldr-prompt] {
   padding-inline: 8px;
   border-block-start: 1px solid var(--composer-line);
   color: var(--composer-ink-3);
-  font-size: 11px;
+  font-size: calc(11px * var(--chat-text-scale, 1));
 }
 [data-metldr-prompt] .composer-visually-hidden {
   position: absolute;
@@ -295,7 +295,7 @@ html[data-theme="light"] [data-metldr-prompt] {
 [data-metldr-prompt] .composer-glimm { position: absolute; inset-block: 0; inset-inline: 0; z-index: -1; block-size: 100%; inline-size: 100%; pointer-events: none; border-radius: inherit; }
 [data-metldr-prompt] [data-prompt-field] { overflow-y: auto; caret-color: var(--composer-ink); }
 [data-metldr-prompt] ::selection { background: color-mix(in oklch, var(--composer-accent) 28%, transparent); color: var(--composer-ink); }
-[data-metldr-prompt] .composer-empty { margin-block: 0; margin-inline: 0; padding-block: 8px; padding-inline: 8px; font-size: 12px; color: var(--composer-ink-3); }
+[data-metldr-prompt] .composer-empty { margin-block: 0; margin-inline: 0; padding-block: 8px; padding-inline: 8px; font-size: calc(12px * var(--chat-text-scale, 1)); color: var(--composer-ink-3); }
 [data-metldr-prompt] :is(.composer-menu, .composer-model-menu) { position: fixed; inset-block: 0; inset-inline: 0; margin-block: auto; margin-inline: auto; block-size: max-content; border: 0; max-inline-size: min(26rem, calc(100% - 24px)); color: var(--composer-ink); font: inherit; scrollbar-color: var(--composer-line-strong) transparent; }
 [data-metldr-prompt] .composer-menu { anchor-scope: --prompt-row; }
 [data-metldr-prompt] .composer-model-menu { anchor-scope: --prompt-model-row; }

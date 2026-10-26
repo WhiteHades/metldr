@@ -20,7 +20,7 @@
 }
 
 #native-permissions :is(h3, p, pre) { margin: 0; }
-#native-permissions h3 { font-size: 1rem; font-weight: 600; }
+#native-permissions h3 { font-size: calc(1rem * var(--chat-text-scale, 1)); font-weight: 600; }
 #native-permissions [data-part="agent"],
 #native-permissions [data-part="tool"] { color: var(--ink-2); }
 #native-permissions [data-part="input"] {

@@ -72,7 +72,7 @@
   padding-inline-end: 2px;
   border-radius: 7px;
   color: var(--ink-2);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--chat-text-scale, 1));
   font-weight: 500;
 }
 
@@ -242,7 +242,7 @@
   block-size: 44px;
   padding-inline: 16px 8px;
   border-block-end: 1px solid var(--line);
-  font-size: 13px;
+  font-size: calc(13px * var(--chat-text-scale, 1));
   font-weight: 600;
 }
 
@@ -263,7 +263,7 @@
   justify-content: center;
   min-block-size: 20px;
   color: var(--ink-2);
-  font-size: 12px;
+  font-size: calc(12px * var(--chat-text-scale, 1));
   pointer-events: none;
 }
 
