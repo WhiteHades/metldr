@@ -29,7 +29,7 @@ make companion
 
 The default output is `crates/metldr-companion/target/release/metldr-companion`. Cargo uses `CARGO_TARGET_DIR` instead when it is set. The checks write their local artifacts under this crate's `.tmp` directory.
 
-Process checks that require companion executables are ignored by default. To run the five current startup checks on Linux, build the executable and provide its full path:
+Process checks that require companion executables are ignored by default. To run the current startup checks on Linux, build the executable and provide its full path:
 
 ```sh
 cargo build --locked --manifest-path crates/metldr-companion/Cargo.toml
@@ -38,13 +38,13 @@ METLDR_STARTUP_BINARY="$PWD/crates/metldr-companion/target/debug/metldr-companio
   history::startup_checks -- --ignored --skip actual_old_private_host_upgrades_and_cannot_reopen_new_history
 ```
 
-Use the actual output path if `CARGO_TARGET_DIR` is set. The two older executable compatibility checks also require fixture binaries. `METLDR_CUTOVER_OLD_BINARY` must name the earlier wire 9 companion that writes saved schema 8. `METLDR_HISTORY_OLD_BINARY` must name a companion that writes history format 10 through 14. Run those checks explicitly with `--ignored` only when the matching fixtures are available. A skipped compatibility check does not establish upgrade support.
+Use the actual output path if `CARGO_TARGET_DIR` is set. The two older executable compatibility checks also require fixture binaries. `METLDR_CUTOVER_OLD_BINARY` must name the earlier wire 9 companion that writes saved schema 8. `METLDR_HISTORY_OLD_BINARY` must name a companion that writes history format 10 through 16. Set `METLDR_HISTORY_EXPECT_FORMAT` to require a specific old format. The format 16 check also reads an independently prepared saved table through both executables. Run those checks explicitly with `--ignored` only when the matching fixtures are available. A skipped compatibility check does not establish upgrade support.
 
 Pair the executable with an extension that implements metldr's native wire version 16. The remaining Vue page tools and complete extension packaging are still being migrated. Linux is the verified native platform. The history loader refuses to start on Windows and macOS until their directory durability and installation checks are complete.
 
 Conversations and complete saved results are stored in a local record database. Startup preserves the original snapshot backup before installing the new format. New chat creates an empty conversation, while selecting a saved conversation restores its page and results. Switching is unavailable during active work. A lost confirmation requires an explicit Retry using the same request rather than another creation. Viewing saved work does not change or replay an active task. History search covers the loaded conversation pages, and More loads the next page.
 
-Saved native sessions remain selectable after a model task and browser restart. The chooser shows up to 16 recent sessions for each agent, saved page and current profile in the selected conversation. Earlier results stay in saved history. History format 16 adds saved tables and upgrades formats 10 through 15 in one transaction. Older companions refuse the upgraded history. Keep a copy of the history database before downgrading.
+Saved native sessions remain selectable after a model task and browser restart. The chooser shows up to 16 recent sessions for each agent, saved page and current profile in the selected conversation. Earlier results stay in saved history. History format 17 adds generated answers and upgrades formats 10 through 16 in one transaction, preserving saved tables. Older companions refuse the upgraded history. Keep a copy of the history database before downgrading.
 
 To register the companion with Chrome:
 

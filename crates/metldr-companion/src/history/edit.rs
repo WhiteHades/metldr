@@ -481,6 +481,9 @@ impl Edit<'_> {
         if !current.starts_with(&previous) {
             return Err("saved artifact references cannot be removed or reordered".into());
         }
+        if run.status != Status::Running {
+            self.interrupt_generated_artifacts(expected, &mut run)?;
+        }
         if run.status.terminal() {
             run.output.end(if run.status == Status::Complete {
                 metldr_conversation::Ending::Complete
@@ -531,6 +534,44 @@ impl Edit<'_> {
             Ok(())
         })?;
         self.changed = true;
+        Ok(())
+    }
+
+    fn interrupt_generated_artifacts(&mut self, expected: &Selection, run: &mut Run) -> Result<()> {
+        for id in super::artifacts::artifact_refs(run) {
+            let mut artifact: Record<super::Artifact> = record(self.write, ARTIFACTS, id.as_str())?
+                .ok_or("run artifact reference is absent")?;
+            let super::artifacts::ArtifactContent::Generated {
+                source,
+                completion: metldr_conversation::ArtifactCompletion::Streaming,
+            } = &artifact.value.content
+            else {
+                continue;
+            };
+            let next_revision = artifact
+                .revision
+                .checked_add(1)
+                .ok_or("artifact revision capacity reached")?;
+            artifact.value.content = super::artifacts::ArtifactContent::Generated {
+                source: source.clone(),
+                completion: metldr_conversation::ArtifactCompletion::Interrupted,
+            };
+            run.output.change(metldr_conversation::Change::Generated {
+                id: id.clone(),
+                revision: next_revision,
+                completion: metldr_conversation::ArtifactCompletion::Interrupted,
+            })?;
+            artifact.revision = next_revision;
+            if artifact.conversation != expected.conversation || artifact.value.run != run.id {
+                return Err("run artifact ownership differs".into());
+            }
+            storage(|| {
+                self.write
+                    .open_table(ARTIFACTS)?
+                    .insert(id.as_str(), encode(&artifact)?.as_slice())?;
+                Ok(())
+            })?;
+        }
         Ok(())
     }
 

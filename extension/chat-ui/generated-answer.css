@@ -1,0 +1,23 @@
+.generated-answer { display: flex; flex-direction: column; gap: 0.5rem; min-inline-size: 0; }
+.generated-answer-stage { display: grid; border-radius: 12px; background: var(--field); }
+.generated-answer-stage[hidden] { display: none; }
+.generated-answer-stage[data-visible="true"] { background: transparent; }
+.generated-answer-stage > * { grid-area: 1 / 1; }
+.generated-answer-loading { place-self: center; padding-block: 0.5rem; padding-inline: 0.75rem; color: var(--ink-2); }
+.generated-answer-frame { inline-size: 100%; overflow: clip; border-radius: 12px; }
+.generated-answer-frame iframe { display: block; inline-size: 100%; block-size: 100%; border: 0; }
+.generated-answer p { margin-block: 0; overflow-wrap: break-word; }
+.generated-answer-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; color: var(--ink-2); }
+.generated-answer :is(button, .generated-answer-followup) { border: 1px solid var(--line); border-radius: 8px; background: var(--field); color: var(--ink); }
+.generated-answer button { min-block-size: 44px; padding-block: 0.5rem; padding-inline: 0.75rem; font: inherit; cursor: pointer; }
+.generated-answer button:active { scale: 0.97; }
+.generated-answer button:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+.generated-answer-followup { display: flex; flex-wrap: wrap; gap: 0.5rem; padding-block: 0.75rem; padding-inline: 0.75rem; }
+.generated-answer-followup p { flex-basis: 100%; }
+@media (hover: hover) and (pointer: fine) {
+  .generated-answer button:hover { background: var(--hover); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .generated-answer-frame { transition: block-size 200ms var(--ease-out, ease-out); }
+  .generated-answer button { transition: scale 120ms var(--ease-out, ease-out); }
+}

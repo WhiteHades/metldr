@@ -34,8 +34,165 @@ fn table(reference: &TableReference) -> EntryState {
             reference.run_id,
             reference.artifact_id.as_str()
         ),
-        reference: reference.clone(),
+        activity: Activity::Table(reference.clone()),
     }
+}
+
+fn chart(reference: &TableReference) -> EntryState {
+    let AgUiMessage::Activity { id, activity } =
+        AgUiMessage::chart(&reference.run_id, &reference.artifact_id)
+    else {
+        unreachable!()
+    };
+    EntryState::Artifact { id, activity }
+}
+
+#[test]
+fn charts_keep_the_artifact_position_and_identity() {
+    let reference = table_reference();
+    let mut stream = RunStream::new("thread".into(), "ui-run".into(), vec![]).unwrap();
+    let events = stream
+        .push_messages(
+            vec![text("before", "A"), chart(&reference), text("after", "B")],
+            RunStatus::Running,
+            None,
+        )
+        .unwrap();
+    assert!(events.iter().any(|event| matches!(
+        event,
+        Event::ActivitySnapshot {
+            message_id,
+            activity: Activity::Chart(chart),
+            replace: false,
+        } if message_id == &format!("{}:artifact:{}", reference.run_id, reference.artifact_id.as_str())
+            && chart.run_id == reference.run_id
+            && chart.artifact_id == reference.artifact_id
+    )));
+}
+
+fn generated(
+    reference: &TableReference,
+    revision: u64,
+    completion: metldr_conversation::ArtifactCompletion,
+) -> EntryState {
+    let AgUiMessage::Activity { id, activity } = AgUiMessage::generated(
+        &reference.run_id,
+        &reference.artifact_id,
+        revision,
+        completion,
+    ) else {
+        unreachable!()
+    };
+    EntryState::Artifact { id, activity }
+}
+
+#[test]
+fn generated_revision_replaces_activity_in_place_without_message_snapshot() {
+    let reference = table_reference();
+    let mut stream = RunStream::new("thread".into(), "ui-run".into(), vec![]).unwrap();
+    stream
+        .push_messages(
+            vec![
+                text("before", "A"),
+                generated(
+                    &reference,
+                    1,
+                    metldr_conversation::ArtifactCompletion::Streaming,
+                ),
+                text("after", "B"),
+            ],
+            RunStatus::Running,
+            None,
+        )
+        .unwrap();
+    let update = stream
+        .push_messages(
+            vec![
+                text("before", "A"),
+                generated(
+                    &reference,
+                    2,
+                    metldr_conversation::ArtifactCompletion::Streaming,
+                ),
+                text("after", "B"),
+            ],
+            RunStatus::Running,
+            None,
+        )
+        .unwrap();
+    assert_eq!(update.len(), 1);
+    assert!(
+        matches!(&update[0], Event::ActivitySnapshot { replace: true, activity: Activity::Generated(reference), .. } if reference.revision.0 == 2)
+    );
+    assert!(
+        stream
+            .push_messages(
+                vec![
+                    text("before", "A"),
+                    generated(
+                        &reference,
+                        2,
+                        metldr_conversation::ArtifactCompletion::Streaming
+                    ),
+                    text("after", "B"),
+                ],
+                RunStatus::Running,
+                None,
+            )
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        stream
+            .push_messages(
+                vec![
+                    text("before", "A"),
+                    generated(
+                        &reference,
+                        3,
+                        metldr_conversation::ArtifactCompletion::Completed
+                    ),
+                    text("after", "B")
+                ],
+                RunStatus::Running,
+                None
+            )
+            .is_ok()
+    );
+    assert!(
+        stream
+            .push_messages(
+                vec![
+                    text("before", "A"),
+                    generated(
+                        &reference,
+                        4,
+                        metldr_conversation::ArtifactCompletion::Completed
+                    ),
+                    text("after", "B")
+                ],
+                RunStatus::Running,
+                None
+            )
+            .is_err()
+    );
+    assert!(
+        stream
+            .push_messages(
+                vec![
+                    text("before", "A"),
+                    generated(
+                        &reference,
+                        3,
+                        metldr_conversation::ArtifactCompletion::Streaming
+                    ),
+                    text("after", "B")
+                ],
+                RunStatus::Running,
+                None
+            )
+            .is_err()
+    );
 }
 
 #[test]

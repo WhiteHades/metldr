@@ -17,6 +17,7 @@ codegen-units = 1
 crate-type = ["cdylib"]
 
 [dependencies]
+metldr-answer-codec = { path = "../metldr-answer-codec" }
 metldr-conversation = { path = "../metldr-conversation" }
 metldr-history-pages = { path = "../metldr-history-pages" }
 serde = { version = "=1.0.229", features = ["derive"] }
@@ -39,6 +40,7 @@ web-sys = { version = "=0.3.105", features = [
   "Document",
   "DomRect",
   "CssStyleDeclaration",
+  "Crypto",
   "Element",
   "Event",
   "EventTarget",
@@ -56,6 +58,13 @@ web-sys = { version = "=0.3.105", features = [
   "OscillatorNode",
   "OscillatorType",
   "PageTransitionEvent",
+  "ReadableStream",
+  "ReadableStreamDefaultReader",
+  "Headers",
+  "Request",
+  "RequestInit",
+  "RequestRedirect",
+  "Response",
   "Storage",
   "Node",
   "NodeList",

@@ -23,6 +23,7 @@ use crate::{
 mod activation;
 mod active;
 mod agents;
+mod answer_frame;
 mod browser_actions;
 mod codex_input;
 mod connection;
@@ -42,6 +43,7 @@ mod settings_updates;
 mod source_updates;
 pub use active::UiActiveRun;
 pub use agents::{UiAgentConfiguration, UiAgentProfile, UiAgentSettings};
+pub use answer_frame::UiAnswerFrame;
 pub use browser_actions::{
     UiBrowserAction, UiBrowserActionDetail, UiBrowserActionSnapshot, UiBrowserActionSubscription,
     UiBrowserActions,
@@ -266,6 +268,11 @@ impl UiBridge {
         self.core.scope.conversation.clone()
     }
 
+    pub fn answer_frame(&self, run: String, answer: String) -> Result<UiAnswerFrame, JsValue> {
+        self.core.ensure_current().map_err(js_error)?;
+        UiAnswerFrame::new(Rc::clone(&self.core), self.thread_id(), run, answer)
+    }
+
     #[wasm_bindgen(getter)]
     pub fn navigation_pending(&self) -> bool {
         matches!(*self.core.owner.borrow(), Owner::Navigating(_))
@@ -363,6 +370,51 @@ impl UiBridge {
             .map_err(js_error)?;
         self.core.owner.borrow().readable().map_err(js_error)?;
         serde_json::to_string(&table).map_err(|error| crate::err(&error.to_string()))
+    }
+
+    pub async fn chart(&self, run: String, artifact: String) -> Result<String, JsValue> {
+        let _read = self.core.begin_read().map_err(js_error)?;
+        let run: RunId = serde_json::from_value(serde_json::Value::String(run))
+            .map_err(|_| crate::err("Invalid chart run."))?;
+        let artifact = metldr_conversation::ArtifactId::new(artifact)
+            .map_err(|_| crate::err("Invalid chart identity."))?;
+        let flow = self.core.flow();
+        let context = flow.history_current().await.map_err(js_error)?;
+        if context.scope != self.core.scope {
+            return Err(js_error(FlowError::HistoryStale));
+        }
+        let chart = flow
+            .history_chart(&context, &run, &artifact)
+            .await
+            .map_err(js_error)?;
+        self.core.owner.borrow().readable().map_err(js_error)?;
+        let source = chart.source();
+        serde_json::to_string(&ChartResponse { chart, source })
+            .map_err(|error| crate::err(&error.to_string()))
+    }
+
+    pub async fn chart_export(&self, run: String, artifact: String) -> Result<String, JsValue> {
+        let _read = self.core.begin_read().map_err(js_error)?;
+        let run: RunId = serde_json::from_value(serde_json::Value::String(run))
+            .map_err(|_| crate::err("Invalid chart run."))?;
+        let artifact = metldr_conversation::ArtifactId::new(artifact)
+            .map_err(|_| crate::err("Invalid chart identity."))?;
+        let flow = self.core.flow();
+        let context = flow.history_current().await.map_err(js_error)?;
+        if context.scope != self.core.scope {
+            return Err(js_error(FlowError::HistoryStale));
+        }
+        let chart = flow
+            .history_chart(&context, &run, &artifact)
+            .await
+            .map_err(js_error)?;
+        self.core.owner.borrow().readable().map_err(js_error)?;
+        let html = chart.html().map_err(|error| crate::err(&error))?;
+        serde_json::to_string(&ChartExport {
+            filename: chart.filename(),
+            html,
+        })
+        .map_err(|error| crate::err(&error.to_string()))
     }
 
     pub async fn native_tools(&self, reference: String) -> Result<UiNativeTools, JsValue> {
@@ -562,6 +614,18 @@ impl UiBridge {
             }
         }
     }
+}
+
+#[derive(Serialize)]
+struct ChartResponse {
+    chart: metldr_conversation::Chart,
+    source: &'static str,
+}
+
+#[derive(Serialize)]
+struct ChartExport {
+    filename: String,
+    html: String,
 }
 
 impl Core {
