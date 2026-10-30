@@ -4,6 +4,8 @@ Describe the result for users and the scope of this layer.
 
 Stack parent: main or the parent PR URL.
 
+Publish and update through `gh stack`. Include the native stack link when GitHub has created it.
+
 ## Evidence
 
 Record the checks actually run and their results. Include relevant UI or recovery evidence. State what remains unverified.
