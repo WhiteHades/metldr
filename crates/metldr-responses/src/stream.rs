@@ -14,6 +14,7 @@ pub(crate) struct FunctionCall {
     pub id: String,
     pub name: String,
     pub arguments: Value,
+    pub generated: Option<metldr_conversation::CompleteSource>,
 }
 
 #[derive(Default)]
@@ -29,6 +30,7 @@ struct Item {
     arguments: String,
     arguments_done: bool,
     text: BTreeMap<u64, Text>,
+    generated: Option<crate::generated::GeneratedArguments>,
 }
 
 #[derive(Default)]
@@ -169,6 +171,10 @@ impl State {
                 if arguments.len() > self.limits.arguments {
                     return Err("Responses arguments exceed bound".into());
                 }
+                let generated = (self.limits.pause_at_call
+                    && initial["type"] == "function_call"
+                    && initial["name"] == "generateSandboxedUi")
+                    .then(|| crate::generated::GeneratedArguments::new(self.limits.arguments));
                 self.items.insert(
                     at,
                     Item {
@@ -177,6 +183,7 @@ impl State {
                         arguments,
                         arguments_done: false,
                         text: BTreeMap::new(),
+                        generated,
                     },
                 );
             }
@@ -358,6 +365,23 @@ impl State {
         output
     }
 
+    pub fn presentation_progress(&mut self) -> Result<Option<crate::PresentationProgress>> {
+        let Some(item) = self.items.get_mut(&self.emit_item) else {
+            return Ok(None);
+        };
+        let Some(decoder) = &mut item.generated else {
+            return Ok(None);
+        };
+        let Some(progress) = decoder.push(&item.arguments)? else {
+            return Ok(None);
+        };
+        Ok(Some(crate::PresentationProgress {
+            call_id: identity(&item.initial, "call_id")?,
+            surface_id: progress.surface_id,
+            content: progress.content,
+        }))
+    }
+
     pub fn finish(mut self) -> Result<Turn> {
         let output = self
             .terminal
@@ -378,12 +402,23 @@ impl State {
                     return Err("multiple Responses tool calls".into());
                 }
                 let id = identity(item, "call_id")?;
-                let arguments = serde_json::from_str(string(item, "arguments")?)
+                let raw_arguments = string(item, "arguments")?;
+                let arguments = serde_json::from_str(raw_arguments)
                     .map_err(|_| "invalid Responses function arguments JSON")?;
+                let generated = self
+                    .items
+                    .values_mut()
+                    .find(|source| source.initial["call_id"] == id)
+                    .and_then(|source| source.generated.take())
+                    .map(|decoder| decoder.finish(raw_arguments))
+                    .transpose()
+                    .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?
+                    .map(|(_, content)| content);
                 call = Some(FunctionCall {
                     id,
                     name: string(item, "name")?.into(),
                     arguments,
+                    generated,
                 });
             }
         }

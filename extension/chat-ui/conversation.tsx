@@ -6,6 +6,8 @@ import { z } from "zod";
 import init, { connect_ui_bridge, UiPreferences, type UiBridge, type UiProviderSettings, type UiAgentSettings } from "../../crates/metldr-panel/pkg/metldr_panel.js";
 import { RustAgent } from "./rust-agent";
 import { SavedTable, TableReference } from "./saved-table";
+import { ChartReference, SavedChart, chartExporter, chartReader } from "./chart";
+import { AnswerDraft, GeneratedAnswer, GeneratedReference } from "./generated-answer";
 import PromptBar from "./prompt-bar";
 import type { PromptChoice } from "./prompt-bar";
 import { ProviderSettings } from "./provider-settings";
@@ -250,7 +252,7 @@ function Conversation({ initial, failure, bridge, recovery, enqueue, destination
     status={null} composer={prompt} content={visible.length ? {kind:"thread", body:<>
       {toolbar}
       <SavedSource bridge={bridge} />
-      <div data-bridge-messages=""><MessageThread messages={visible} liveMessageIds={liveIds} running={agent.isRunning || submitting || nativeRunning} renderActivity={renderActivityMessage} /></div>
+      <div data-bridge-messages=""><AnswerDraft.Provider value={proposal => setText(current => current ? `${current}\n\n${proposal}` : proposal)}><MessageThread messages={visible} liveMessageIds={liveIds} running={agent.isRunning || submitting || nativeRunning} renderActivity={renderActivityMessage} /></AnswerDraft.Provider></div>
       <NativePermissions bridge={bridge} onPendingChange={setApprovalPending} />
       <BrowserActions bridge={bridge} onPendingChange={setBrowserApprovalPending} />
       <CodexInput bridge={bridge} />
@@ -276,6 +278,10 @@ function App({ initial, destination, bridge, recovery, initialChoices, settings,
   const controlsChanged = useCallback(() => setControlRevision(value => value + 1), []);
   const readTable = useCallback((reference: z.infer<typeof TableReference>) =>
     enqueue(() => bridge.table(reference.runId, reference.artifactId)), [bridge, enqueue]);
+  const readChart = useCallback(chartReader(bridge, enqueue), [bridge, enqueue]);
+  const exportChart = useCallback(chartExporter(bridge, enqueue), [bridge, enqueue]);
+  const openAnswer = useCallback((reference: z.infer<typeof GeneratedReference>) =>
+    bridge.answer_frame(reference.runId, reference.artifactId), [bridge]);
   const readNativeTools = useCallback((reference: string) =>
     enqueue(() => bridge.native_tools(reference)), [bridge, enqueue]);
   const readRunDetails = useCallback((reference: string) =>
@@ -300,6 +306,24 @@ function App({ initial, destination, bridge, recovery, initialChoices, settings,
       return <SavedTable reference={content} read={readTable} />;
     },
   }, {
+    activityType: "metldr.chart",
+    content: ChartReference,
+    render: ({ content, agent }: { content: z.infer<typeof ChartReference>; agent: unknown }) => {
+      if (!(agent instanceof RustAgent) || agent === agents.default || agent.threadId !== initial.threadId) {
+        throw new Error("The chart belongs to another conversation.");
+      }
+      return <SavedChart reference={content} read={readChart} exportHtml={exportChart} />;
+    },
+  }, {
+    activityType: "metldr.generated",
+    content: GeneratedReference,
+    render: ({ content, agent }: { content: z.infer<typeof GeneratedReference>; agent: unknown }) => {
+      if (!(agent instanceof RustAgent) || agent === agents.default || agent.threadId !== initial.threadId) {
+        throw new Error("The answer belongs to another conversation.");
+      }
+      return <GeneratedAnswer reference={content} open={openAnswer} enqueue={enqueue} />;
+    },
+  }, {
     activityType: "metldr.native-tools",
     content: z.unknown(),
     render: ({ content, agent }: { content: unknown; agent: unknown }) => {
@@ -317,7 +341,7 @@ function App({ initial, destination, bridge, recovery, initialChoices, settings,
       }
       return <RunDetails reference={content} read={readRunDetails} />;
     },
-  }], [agents, initial.threadId, readTable, readNativeTools, readRunDetails]);
+  }], [agents, initial.threadId, readTable, readChart, exportChart, openAnswer, enqueue, readNativeTools, readRunDetails]);
   return <><InteractionSounds enabled={preferencesView.sounds_enabled} /><CopilotKitProvider key={initial.threadId} selfManagedAgents={agents} renderActivityMessages={renderActivityMessages} showDevConsole={false}>
     <CopilotChatConfigurationProvider threadId={initial.threadId}>
       <Conversation initial={initial} failure={failure} bridge={bridge} recovery={recovery} enqueue={enqueue} destination={destination} initialChoices={initialChoices} controlRevision={controlRevision} onHistoryChange={onHistoryChange} navigation={{...navigation, openSettings: () => settingsDialog.current?.showModal()}} />

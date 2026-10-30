@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::io::{self, Write};
 
-pub(super) const FORMAT: u8 = 16;
+pub(super) const FORMAT: u8 = 18;
 const RECORD_MAX: usize = 2 * 1024 * 1024;
 pub(super) const META: TableDefinition<&str, &[u8]> = TableDefinition::new("metadata");
 pub(super) const CONVERSATIONS: TableDefinition<&str, &[u8]> =

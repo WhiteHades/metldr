@@ -1,6 +1,18 @@
-use super::{edit, schema::*};
+use super::{artifacts::ArtifactContent, edit, schema::*};
 use crate::Result;
+use metldr_conversation::{ArtifactId, ProjectedEntry, Table};
 use redb::{Database, Durability, ReadableDatabase, ReadableTable, ReadableTableMetadata};
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyArtifact {
+    id: ArtifactId,
+    run: String,
+    call: String,
+    surface_id: String,
+    table: Table,
+}
 
 pub(super) fn run(db: &Database) -> Result<()> {
     let read = db.begin_read()?;
@@ -12,7 +24,7 @@ pub(super) fn run(db: &Database) -> Result<()> {
     )?;
     match profile.format {
         FORMAT => return Ok(()),
-        10..=15 => (),
+        10..=17 => (),
         _ => return Err("unsupported history profile format".into()),
     }
     require_base_tables(&read)?;
@@ -26,6 +38,35 @@ pub(super) fn run(db: &Database) -> Result<()> {
         if profile.format < 14 {
             crate::browser_action::reject_scroll_action(&record.value)?;
         }
+    }
+    if profile.format == 16 {
+        for row in read.open_table(ARTIFACTS)?.iter()? {
+            let (_, bytes) = row?;
+            let artifact: Record<LegacyArtifact> = decode(bytes.value())?;
+            if artifact.revision != 1 {
+                return Err("legacy table artifact revision is invalid".into());
+            }
+        }
+        for row in read.open_table(RUNS)?.iter()? {
+            let (_, bytes) = row?;
+            let run: Record<crate::model::Run> = decode(bytes.value())?;
+            if run
+                .value
+                .output
+                .projection()
+                .conversation
+                .iter()
+                .any(|entry| {
+                    matches!(entry, ProjectedEntry::Artifact { presentation, .. }
+                    if !matches!(presentation, metldr_conversation::ArtifactPresentation::Table))
+                })
+            {
+                return Err("history contains generated artifact references".into());
+            }
+        }
+    }
+    if profile.format == 17 {
+        reject_charts(&read.open_table(ARTIFACTS)?, &read.open_table(RUNS)?)?;
     }
     drop(meta);
     drop(read);
@@ -42,7 +83,7 @@ pub(super) fn run(db: &Database) -> Result<()> {
         )?;
         match profile.format {
             FORMAT => return Ok(()),
-            10..=15 => (),
+            10..=17 => (),
             _ => return Err("unsupported history profile format".into()),
         }
         let format = profile.format;
@@ -86,8 +127,42 @@ pub(super) fn run(db: &Database) -> Result<()> {
         } else {
             edit::native_choices::validate_index(&write, &profile)?;
         }
-        if write.open_table(ARTIFACTS)?.len()? != 0 {
+        if format == 16 {
+            let mut artifacts = write.open_table(ARTIFACTS)?;
+            let old_records = artifacts
+                .iter()?
+                .map(|row| {
+                    let (key, bytes) = row?;
+                    Ok((key.value().to_owned(), bytes.value().to_vec()))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            for (key, bytes) in old_records {
+                let old: Record<LegacyArtifact> = decode(&bytes)?;
+                if old.revision != 1 {
+                    return Err("legacy table artifact revision is invalid".into());
+                }
+                let artifact = super::Artifact {
+                    id: old.value.id,
+                    run: old.value.run,
+                    call: old.value.call,
+                    surface_id: old.value.surface_id,
+                    content: ArtifactContent::Table {
+                        table: old.value.table,
+                    },
+                };
+                let converted = Record {
+                    conversation: old.conversation,
+                    revision: old.revision,
+                    value: artifact,
+                };
+                artifacts.insert(key.as_str(), encode(&converted)?.as_slice())?;
+            }
+            drop(artifacts);
+        } else if format < 16 && write.open_table(ARTIFACTS)?.len()? != 0 {
             return Err("artifact upgrade table is not empty".into());
+        }
+        if format == 17 {
+            reject_charts(&write.open_table(ARTIFACTS)?, &write.open_table(RUNS)?)?;
         }
         for row in write.open_table(RUNS)?.iter()? {
             let (_, bytes) = row?;
@@ -98,15 +173,67 @@ pub(super) fn run(db: &Database) -> Result<()> {
                 .projection()
                 .conversation
                 .iter()
-                .any(|entry| matches!(entry, metldr_conversation::ProjectedEntry::Artifact { .. }))
+                .any(|entry| match format {
+                    10..=15 => matches!(entry, ProjectedEntry::Artifact { .. }),
+                    16 => matches!(entry, ProjectedEntry::Artifact { presentation, .. }
+                        if !matches!(presentation, metldr_conversation::ArtifactPresentation::Table)),
+                    _ => false,
+                })
             {
-                return Err("old history contains artifact references".into());
+                return Err(if format < 16 {
+                    "old history contains artifact references".into()
+                } else {
+                    "history contains generated artifact references".into()
+                });
             }
         }
         profile.format = FORMAT;
         profile.validate()?;
+        super::artifacts::audit_tables(
+            &profile,
+            &write.open_table(ARTIFACTS)?,
+            &write.open_table(RUNS)?,
+            &write.open_table(CONVERSATIONS)?,
+            &write.open_table(LAUNCHES)?,
+        )?;
         meta.insert("profile", encode(&profile)?.as_slice())?;
     }
     write.commit()?;
+    Ok(())
+}
+
+fn reject_charts(
+    artifacts: &impl ReadableTable<&'static str, &'static [u8]>,
+    runs: &impl ReadableTable<&'static str, &'static [u8]>,
+) -> Result<()> {
+    for row in artifacts.iter()? {
+        let (_, bytes) = row?;
+        let record: Record<super::Artifact> = decode(bytes.value())?;
+        if matches!(record.value.content, ArtifactContent::Chart { .. }) {
+            return Err("old history contains chart content".into());
+        }
+    }
+    for row in runs.iter()? {
+        let (_, bytes) = row?;
+        let run: Record<crate::model::Run> = decode(bytes.value())?;
+        if run
+            .value
+            .output
+            .projection()
+            .conversation
+            .iter()
+            .any(|entry| {
+                matches!(
+                    entry,
+                    ProjectedEntry::Artifact {
+                        presentation: metldr_conversation::ArtifactPresentation::Chart,
+                        ..
+                    }
+                )
+            })
+        {
+            return Err("old history contains chart references".into());
+        }
+    }
     Ok(())
 }

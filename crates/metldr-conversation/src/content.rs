@@ -6,6 +6,27 @@ use crate::key::validate_id;
 use crate::projection::{Projection, from_native_entries};
 use crate::{ArtifactId, MAX_ENTRIES, MAX_MESSAGES, MAX_TEXT_BYTES, MAX_TOOLS, MessageKey, ToolId};
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactCompletion {
+    #[default]
+    Streaming,
+    Completed,
+    Interrupted,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ArtifactPresentation {
+    #[default]
+    Table,
+    Chart,
+    Generated {
+        revision: u64,
+        completion: ArtifactCompletion,
+    },
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Completion {
@@ -28,6 +49,8 @@ pub(crate) enum Entry {
     },
     Artifact {
         id: ArtifactId,
+        #[serde(default)]
+        presentation: ArtifactPresentation,
     },
 }
 
@@ -182,11 +205,46 @@ impl Content {
                 }
             }
             (ContentKind::Native(entries), Change::Artifact(id)) => {
-                if entries
-                    .iter()
-                    .any(|entry| matches!(entry, Entry::Artifact { id: current } if *current == id))
-                {
-                    return Ok(false);
+                append_artifact(entries, id, ArtifactPresentation::Table)
+            }
+            (ContentKind::Native(entries), Change::Chart(id)) => {
+                append_artifact(entries, id, ArtifactPresentation::Chart)
+            }
+            (
+                ContentKind::Native(entries),
+                Change::Generated {
+                    id,
+                    revision,
+                    completion,
+                },
+            ) => {
+                if revision == 0 {
+                    return Err("generated artifact revision must be positive".into());
+                }
+                if let Some(index) = entries.iter().position(
+                    |entry| matches!(entry, Entry::Artifact { id: current, .. } if *current == id),
+                ) {
+                    let Entry::Artifact { presentation, .. } = &mut entries[index] else {
+                        unreachable!()
+                    };
+                    let ArtifactPresentation::Generated {
+                        revision: previous_revision,
+                        completion: previous_completion,
+                    } = presentation
+                    else {
+                        return Err("static artifact cannot become generated content".into());
+                    };
+                    if *previous_revision == revision && *previous_completion == completion {
+                        return Ok(false);
+                    }
+                    if *previous_completion != ArtifactCompletion::Streaming
+                        || previous_revision.checked_add(1) != Some(revision)
+                    {
+                        return Err("generated artifact revision or completion differs".into());
+                    }
+                    *previous_revision = revision;
+                    *previous_completion = completion;
+                    return Ok(true);
                 }
                 if entries.iter().any(|entry| {
                     matches!(
@@ -199,7 +257,16 @@ impl Content {
                 }) {
                     return Err("artifact requires completed preceding text".into());
                 }
-                entries.push(Entry::Artifact { id });
+                if revision != 1 || completion != ArtifactCompletion::Streaming {
+                    return Err("generated artifact must begin at streaming revision one".into());
+                }
+                entries.push(Entry::Artifact {
+                    id,
+                    presentation: ArtifactPresentation::Generated {
+                        revision,
+                        completion,
+                    },
+                });
                 Ok(true)
             }
             (ContentKind::Flat(_), _) => Err("native changes require native content".into()),
@@ -293,7 +360,7 @@ impl Content {
                             }
                             tools.push(id);
                         }
-                        Entry::Artifact { id } => {
+                        Entry::Artifact { id, presentation } => {
                             if open_text {
                                 return Err("artifact requires completed preceding text".into());
                             }
@@ -301,6 +368,12 @@ impl Content {
                                 return Err("duplicate or too many artifact references".into());
                             }
                             artifacts.push(id);
+                            if matches!(
+                                presentation,
+                                ArtifactPresentation::Generated { revision: 0, .. }
+                            ) {
+                                return Err("generated artifact revision must be positive".into());
+                            }
                         }
                     }
                 }
@@ -364,6 +437,39 @@ fn find_message(entries: &[Entry], key: &MessageKey) -> Option<usize> {
         .position(|entry| matches!(entry, Entry::Message { key: current, .. } if current == key))
 }
 
+fn append_artifact(
+    entries: &mut Vec<Entry>,
+    id: ArtifactId,
+    presentation: ArtifactPresentation,
+) -> Result<bool, String> {
+    if let Some(Entry::Artifact {
+        presentation: previous,
+        ..
+    }) = entries
+        .iter()
+        .find(|entry| matches!(entry, Entry::Artifact { id: current, .. } if *current == id))
+    {
+        return if *previous == presentation {
+            Ok(false)
+        } else {
+            Err("artifact cannot change presentation kind".into())
+        };
+    }
+    if entries.iter().any(|entry| {
+        matches!(
+            entry,
+            Entry::Message {
+                completion: Completion::Streaming,
+                ..
+            }
+        )
+    }) {
+        return Err("artifact requires completed preceding text".into());
+    }
+    entries.push(Entry::Artifact { id, presentation });
+    Ok(true)
+}
+
 fn check_text(text: &str) -> Result<(), String> {
     if text.len() > MAX_TEXT_BYTES {
         Err("content exceeds 8192 UTF-8 bytes".into())
@@ -376,9 +482,21 @@ fn check_text(text: &str) -> Result<(), String> {
 pub enum Change {
     FlatAppend(String),
     Begin(MessageKey),
-    Append { key: MessageKey, text: String },
-    Final { key: MessageKey, text: String },
+    Append {
+        key: MessageKey,
+        text: String,
+    },
+    Final {
+        key: MessageKey,
+        text: String,
+    },
     Artifact(ArtifactId),
+    Chart(ArtifactId),
+    Generated {
+        id: ArtifactId,
+        revision: u64,
+        completion: ArtifactCompletion,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

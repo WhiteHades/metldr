@@ -1,4 +1,5 @@
 use crate::model::{FlowError, RunId, RunKind, RunStatus, SourceId};
+use metldr_conversation::{ArtifactCompletion, GeneratedAnswer};
 pub(crate) use metldr_history_pages::Scope;
 use metldr_history_pages::{Counter, DocumentKind, Identity};
 use serde::{Deserialize, Serialize};
@@ -192,6 +193,14 @@ pub(crate) enum Response {
     Busy,
     Stale(Option<Observation>),
     Unavailable,
+}
+
+pub(crate) enum GeneratedRead {
+    Ready {
+        answer: GeneratedAnswer,
+        completion: ArtifactCompletion,
+    },
+    Superseded(Counter),
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]

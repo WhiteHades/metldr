@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 
-use metldr_conversation::{Completion, EntryRef, MAX_MESSAGES};
+use metldr_conversation::{
+    ArtifactCompletion, ArtifactPresentation, Completion, EntryRef, MAX_MESSAGES,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::model::{RunId, RunStatus, RunView};
@@ -75,7 +77,7 @@ enum EntryState {
     Text(MessageState),
     Artifact {
         id: String,
-        reference: TableReference,
+        activity: Activity,
     },
     Tools {
         id: String,
@@ -108,9 +110,9 @@ impl EntryState {
                 id: message.id.clone(),
                 content: message.content.clone(),
             },
-            Self::Artifact { id, reference } => AgUiMessage::Activity {
+            Self::Artifact { id, activity } => AgUiMessage::Activity {
                 id: id.clone(),
-                activity: Activity::Table(reference.clone()),
+                activity: activity.clone(),
             },
             Self::Tools { reference, .. } => AgUiMessage::native_tools(reference.clone()),
             Self::RunDetails { reference, .. } => AgUiMessage::run_details(reference.clone()),
@@ -125,6 +127,28 @@ pub(crate) struct RunStream {
     messages: Vec<EntryState>,
     started: bool,
     finished: bool,
+}
+
+fn valid_artifact_transition(previous: &EntryState, next: &EntryState) -> bool {
+    match (previous, next) {
+        (
+            EntryState::Artifact { activity: old, .. },
+            EntryState::Artifact { activity: new, .. },
+        ) => match (old, new) {
+            (Activity::Table(old), Activity::Table(new))
+            | (Activity::Chart(old), Activity::Chart(new)) => old == new,
+            (Activity::Generated(old), Activity::Generated(new)) => {
+                old.run_id == new.run_id
+                    && old.artifact_id == new.artifact_id
+                    && (old == new
+                        || (old.completion == ArtifactCompletion::Streaming
+                            && new.revision.0 > old.revision.0))
+            }
+            _ => false,
+        },
+        (EntryState::Artifact { .. }, _) => false,
+        _ => true,
+    }
 }
 
 impl RunStream {
@@ -211,18 +235,19 @@ impl RunStream {
                     content: text.to_owned(),
                     completion: completion.clone(),
                 })),
-                EntryRef::Artifact { id } => {
-                    let AgUiMessage::Activity {
-                        id,
-                        activity: Activity::Table(content),
-                    } = AgUiMessage::table(&run.id, id)
-                    else {
+                EntryRef::Artifact { id, presentation } => {
+                    let message = match presentation {
+                        ArtifactPresentation::Table => AgUiMessage::table(&run.id, id),
+                        ArtifactPresentation::Chart => AgUiMessage::chart(&run.id, id),
+                        ArtifactPresentation::Generated {
+                            revision,
+                            completion,
+                        } => AgUiMessage::generated(&run.id, id, *revision, *completion),
+                    };
+                    let AgUiMessage::Activity { id, activity } = message else {
                         unreachable!()
                     };
-                    current.push(EntryState::Artifact {
-                        id,
-                        reference: content,
-                    });
+                    current.push(EntryState::Artifact { id, activity });
                 }
                 EntryRef::Tool { id } => {
                     if let Some(reference) = tools.iter().find(|group| &group.group_id == id) {
@@ -284,9 +309,15 @@ impl RunStream {
             .iter()
             .rposition(|entry| matches!(entry, EntryState::Artifact { .. }))
         {
-            if current.len() <= last || self.messages[..=last].iter().zip(&current).any(|(old, next)| old.id() != next.id()
-                || matches!((old, next), (EntryState::Artifact { .. }, _) if old != next)) {
-                return Err("saved table position or identity changed".into());
+            if current.len() <= last
+                || self.messages[..=last]
+                    .iter()
+                    .zip(&current)
+                    .any(|(old, next)| {
+                        old.id() != next.id() || !valid_artifact_transition(old, next)
+                    })
+            {
+                return Err("saved artifact position or identity changed".into());
             }
         }
         let was_started = self.started;
@@ -322,6 +353,7 @@ impl RunStream {
                         EntryState::RunDetails { id: next, .. },
                         EntryState::RunDetails { id: old, .. },
                     ) => next != old,
+                    (EntryState::Artifact { .. }, EntryState::Artifact { .. }) => false,
                     _ => next != old,
                 });
         if rewrite {
@@ -335,13 +367,20 @@ impl RunStream {
         } else {
             for (index, entry) in current.iter().enumerate() {
                 match entry {
-                    EntryState::Artifact { id, reference }
-                        if self.messages.get(index).is_none() =>
+                    EntryState::Artifact { id, activity } if self.messages.get(index).is_none() => {
+                        events.push(Event::ActivitySnapshot {
+                            message_id: id.clone(),
+                            activity: activity.clone(),
+                            replace: false,
+                        })
+                    }
+                    EntryState::Artifact { id, activity }
+                        if self.messages.get(index) != Some(entry) =>
                     {
                         events.push(Event::ActivitySnapshot {
                             message_id: id.clone(),
-                            activity: Activity::Table(reference.clone()),
-                            replace: false,
+                            activity: activity.clone(),
+                            replace: true,
                         })
                     }
                     EntryState::Artifact { .. } => (),

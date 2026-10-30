@@ -600,14 +600,15 @@ mod tests {
         let value = json!({"v":crate::WIRE_VERSION,"request":"check:1","command":{"op":"view"}});
         let bytes = serde_json::to_vec(&value).unwrap();
         let mut old = value.clone();
-        old["v"] = json!(4);
+        let previous = crate::WIRE_VERSION - 1;
+        old["v"] = json!(previous);
         assert_eq!(
             crate::wire::decode_request(&serde_json::to_vec(&old).unwrap())
                 .err()
                 .unwrap()
                 .to_string(),
             format!(
-                "unsupported native wire version 4; expected {}",
+                "unsupported native wire version {previous}; expected {}",
                 crate::WIRE_VERSION
             )
         );

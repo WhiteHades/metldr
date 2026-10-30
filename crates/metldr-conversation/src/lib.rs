@@ -1,11 +1,17 @@
 #![doc = include_str!("../README.md")]
 
+mod chart;
 mod content;
+mod generated;
 mod key;
 mod projection;
 mod table;
 
-pub use content::{Change, Completion, Content, Ending};
+pub use chart::{Chart, ChartDatum, ChartKind, MAX_CHART_BYTES, MAX_CHART_EXPORT_BYTES};
+pub use content::{ArtifactCompletion, ArtifactPresentation, Change, Completion, Content, Ending};
+pub use generated::{
+    AnswerHeight, AnswerView, CompleteSource, GeneratedAnswer, GeneratedUpdate, MAX_GENERATED_BYTES,
+};
 pub use key::{ArtifactId, MessageKey, ToolId};
 pub use projection::{Display, EntryRef, ProjectedEntry, Projection};
 pub use table::{MAX_TABLE_BYTES, Table};
@@ -60,7 +66,7 @@ mod checks {
         assert_eq!(restored, content);
         let display = Display::new(restored.projection()).unwrap();
         assert!(
-            matches!(&display.entries().collect::<Vec<_>>()[..], [EntryRef::Message {text:"Before",..}, EntryRef::Artifact { id }, EntryRef::Message {text:"After",..}] if *id == &artifact)
+            matches!(&display.entries().collect::<Vec<_>>()[..], [EntryRef::Message {text:"Before",..}, EntryRef::Artifact { id, presentation: ArtifactPresentation::Table }, EntryRef::Message {text:"After",..}] if *id == &artifact)
         );
         assert_eq!(display.text(), "BeforeAfter");
         assert!(
@@ -93,6 +99,93 @@ mod checks {
             *completion = Completion::Streaming;
         }
         assert!(Display::new(projection).is_err());
+    }
+
+    #[test]
+    fn generated_artifact_revisions_are_ordered_monotone_and_legacy_tables_default() {
+        let id = ArtifactId::new("owned:generated".into()).unwrap();
+        let mut content = Content::native();
+        content
+            .change(Change::Final {
+                key: MessageKey::observed(1).unwrap(),
+                text: "Before".into(),
+            })
+            .unwrap();
+        let first = Change::Generated {
+            id: id.clone(),
+            revision: 1,
+            completion: ArtifactCompletion::Streaming,
+        };
+        assert!(content.change(first.clone()).unwrap());
+        assert!(!content.change(first).unwrap());
+        assert!(
+            content
+                .change(Change::Generated {
+                    id: id.clone(),
+                    revision: 2,
+                    completion: ArtifactCompletion::Streaming,
+                })
+                .unwrap()
+        );
+        assert!(
+            content
+                .change(Change::Generated {
+                    id: id.clone(),
+                    revision: 3,
+                    completion: ArtifactCompletion::Completed,
+                })
+                .unwrap()
+        );
+        assert!(
+            content
+                .change(Change::Generated {
+                    id: id.clone(),
+                    revision: 4,
+                    completion: ArtifactCompletion::Streaming,
+                })
+                .is_err()
+        );
+        assert!(content.change(Change::Artifact(id.clone())).is_err());
+        content
+            .change(Change::Final {
+                key: MessageKey::observed(2).unwrap(),
+                text: "After".into(),
+            })
+            .unwrap();
+        assert!(matches!(
+            content.projection().conversation.as_slice(),
+            [
+                ProjectedEntry::Message { .. },
+                ProjectedEntry::Artifact {
+                    id: projected,
+                    presentation: ArtifactPresentation::Generated {
+                        revision: 3,
+                        completion: ArtifactCompletion::Completed
+                    }
+                },
+                ProjectedEntry::Message { .. }
+            ] if projected == &id
+        ));
+        let legacy: Content = serde_json::from_value(serde_json::json!({
+            "entries": [{"kind":"artifact", "id":"owned:legacy"}]
+        }))
+        .unwrap();
+        assert!(matches!(
+            legacy.projection().conversation.as_slice(),
+            [ProjectedEntry::Artifact {
+                presentation: ArtifactPresentation::Table,
+                ..
+            }]
+        ));
+        assert!(
+            content
+                .change(Change::Generated {
+                    id: ArtifactId::new("owned:zero".into()).unwrap(),
+                    revision: 0,
+                    completion: ArtifactCompletion::Streaming,
+                })
+                .is_err()
+        );
     }
 
     #[test]

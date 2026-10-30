@@ -305,8 +305,11 @@ fn accepts_only_the_source_table_presentation_shape() {
             "source":"User-provided data"}]});
     let presentation = client::decode_presentation("render_a2ui", &args).unwrap();
     assert_eq!(presentation.surface_id, "surface_1");
-    assert_eq!(presentation.table.title(), "Quarterly sales");
-    assert_eq!(presentation.table.rows()[1], ["Q2", "$250"]);
+    let PresentationContent::Table(table) = presentation.content else {
+        panic!("expected a table")
+    };
+    assert_eq!(table.title(), "Quarterly sales");
+    assert_eq!(table.rows()[1], ["Q2", "$250"]);
     assert!(client::decode_presentation("observe_page", &args).is_err());
 
     for (key, value) in [
@@ -325,6 +328,36 @@ fn accepts_only_the_source_table_presentation_shape() {
     let mut bad_rows = args;
     bad_rows["components"][0]["rows"][0] = json!(["short"]);
     assert!(client::decode_presentation("render_a2ui", &bad_rows).is_err());
+}
+
+#[test]
+fn chart_tools_decode_strict_props_and_keep_root_identity() {
+    let args = json!({"title":"Revenue","description":"By quarter",
+        "data":[{"label":"Q1","value":12.5},{"label":"Q2","value":-2}]});
+    for (name, kind) in [
+        ("barChart", metldr_conversation::ChartKind::Bar),
+        ("pieChart", metldr_conversation::ChartKind::Pie),
+    ] {
+        let mut accepted = args.clone();
+        if kind == metldr_conversation::ChartKind::Pie {
+            accepted["data"][1]["value"] = json!(2);
+        }
+        let presentation = client::decode_presentation(name, &accepted).unwrap();
+        assert_eq!(presentation.surface_id, "root");
+        let PresentationContent::Chart(chart) = presentation.content else {
+            panic!("expected chart")
+        };
+        assert_eq!(chart.kind(), kind);
+        assert_eq!(chart.title(), "Revenue");
+        assert_eq!(chart.data().len(), 2);
+    }
+    assert!(client::decode_presentation("pieChart", &args).is_err());
+    let mut extra = args.clone();
+    extra["provenance"] = json!("model claimed");
+    assert!(client::decode_presentation("barChart", &extra).is_err());
+    let mut long_label = args;
+    long_label["data"][0]["label"] = json!("😀".repeat(101));
+    assert!(client::decode_presentation("barChart", &long_label).is_err());
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -349,11 +382,18 @@ async fn presentation_pending_turn_keeps_exact_tool_continuation() {
     let mut conversation = client()
         .start_presentation("Show a table", "Present the sales")
         .unwrap();
-    assert_eq!(conversation.request["tools"].as_array().unwrap().len(), 1);
+    assert_eq!(conversation.request["tools"].as_array().unwrap().len(), 4);
     assert_eq!(conversation.request["tools"][0]["name"], "render_a2ui");
+    assert_eq!(conversation.request["tools"][1]["name"], "barChart");
+    assert_eq!(conversation.request["tools"][2]["name"], "pieChart");
     conversation.phase = Phase::Pending(turn);
     let stop = AtomicBool::new(false);
-    assert!(conversation.next(&stop, |_| Ok(())).await.is_err());
+    assert!(
+        conversation
+            .next(&stop, |_| Ok(()), |_| Ok(()))
+            .await
+            .is_err()
+    );
     conversation
         .submit_tool_result(&json!({"accepted":true}), |_| Ok(()))
         .unwrap();
@@ -391,6 +431,78 @@ fn presentation_fragmentation_has_a_separate_bounded_event_budget() {
             }
         }
         assert_eq!(result.is_ok(), accepted);
+    }
+}
+
+#[test]
+fn generated_progress_preserves_closed_values_and_requires_terminal_agreement() {
+    let partial = r#"{"surfaceId":"surface","initialHeight":null,"css":"p{color:red}","html":["<p>North 🌍</p>"],"jsFunctions":"function ready(){"#;
+    let full = format!(r#"{partial}}}","jsExpressions":["ready()"]}}"#);
+    let mut frames = events(true);
+    frames[3]["item"]["name"] = json!("generateSandboxedUi");
+    frames[4]["delta"] = json!(partial);
+    frames[5]["delta"] = json!(&full[partial.len()..]);
+    frames[6]["arguments"] = json!(full);
+    frames[7]["item"]["name"] = json!("generateSandboxedUi");
+    frames[7]["item"]["arguments"] = json!(full);
+    frames[8]["response"]["output"][1] = frames[7]["item"].clone();
+
+    for size in [1, 7, 4096] {
+        let wire: String = frames
+            .iter()
+            .map(|event| {
+                format!(
+                    "event: {}\ndata: {}\n\n",
+                    event["type"].as_str().unwrap(),
+                    event
+                )
+            })
+            .collect();
+        let mut decoder = sse::Sse::with_bound(1_048_576);
+        let mut state = stream::State::with_limits(393_216, 65_536, true);
+        let mut progress = Vec::new();
+        for chunk in wire.as_bytes().chunks(size) {
+            for &byte in chunk {
+                if let Some((event, data)) = decoder.byte(byte).unwrap() {
+                    assert!(state.frame(&event, &data).unwrap().is_empty());
+                    if let Some(update) = state.presentation_progress().unwrap() {
+                        assert_eq!(update.call_id, "call_owned");
+                        assert_eq!(update.surface_id, "surface");
+                        progress.push(update.content);
+                    }
+                }
+            }
+        }
+        decoder.finish().unwrap();
+        assert_eq!(progress.len(), 2);
+        let first = serde_json::to_value(progress[0].view()).unwrap();
+        assert_eq!(first["html"], json!(["<p>North 🌍</p>"]));
+        assert!(first.get("jsFunctions").is_none());
+        assert!(progress[1].extends(&progress[0]));
+        assert_eq!(
+            serde_json::to_value(progress[1].view()).unwrap()["generating"],
+            true
+        );
+        let turn = state.finish().unwrap();
+        let final_source = turn.call.unwrap().generated.unwrap();
+        assert_eq!(
+            serde_json::to_value(final_source.view()).unwrap()["generating"],
+            false
+        );
+    }
+
+    for mismatch in [false, true] {
+        let mut state = stream::State::with_limits(393_216, 65_536, true);
+        for frame in &frames[..8] {
+            state.frame("", &frame.to_string()).unwrap();
+            state.presentation_progress().unwrap();
+        }
+        if mismatch {
+            let mut terminal = frames[8].clone();
+            terminal["response"]["output"][1]["arguments"] = json!("{}");
+            assert!(state.frame("", &terminal.to_string()).is_err());
+        }
+        assert!(state.finish().is_err());
     }
 }
 

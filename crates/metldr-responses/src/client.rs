@@ -19,7 +19,19 @@ pub struct PresentationInvocation {
 
 pub struct Presentation {
     pub surface_id: String,
-    pub table: metldr_conversation::Table,
+    pub content: PresentationContent,
+}
+
+pub enum PresentationContent {
+    Table(metldr_conversation::Table),
+    Chart(metldr_conversation::Chart),
+    Generated(metldr_conversation::CompleteSource),
+}
+
+pub struct PresentationProgress {
+    pub call_id: String,
+    pub surface_id: String,
+    pub content: metldr_conversation::GeneratedAnswer,
 }
 
 #[derive(Clone, Copy)]
@@ -127,6 +139,7 @@ impl Client {
                 stop,
                 emit,
                 BROWSER_BOUNDS,
+                |_| Err("unexpected Responses presentation progress".into()),
             )
             .await?;
         if turn.call.is_some() {
@@ -160,7 +173,7 @@ impl Client {
             "stream":true,"store":false,"include":["reasoning.encrypted_content"],
             "parallel_tool_calls":false,"truncation":"disabled","max_output_tokens":8192,
             "tools":[{"type":"function","name":"render_a2ui","description":"Render one validated table.","strict":true,
-                "parameters":parameters}]});
+                "parameters":parameters}, chart_tool("barChart"), chart_tool("pieChart"), generated_tool()]});
         if serde_json::to_vec(&request)?.len() > PRESENTATION_BOUNDS.request {
             return Err("Responses request exceeds bound".into());
         }
@@ -193,6 +206,7 @@ impl Client {
         stop: &AtomicBool,
         mut emit: impl FnMut(TextEvent) -> Result<()>,
         bounds: Bounds,
+        mut progress: impl FnMut(PresentationProgress) -> Result<()>,
     ) -> Result<Turn> {
         cancelled(stop)?;
         let body = serde_json::to_vec(request)?;
@@ -249,6 +263,10 @@ impl Client {
                         }
                         emit(text_event)?;
                     }
+                    if let Some(update) = state.presentation_progress()? {
+                        cancelled(stop)?;
+                        progress(update)?;
+                    }
                 }
             }
         }
@@ -272,6 +290,7 @@ impl PresentationConversation {
         &mut self,
         stop: &AtomicBool,
         emit: impl FnMut(TextEvent) -> Result<()>,
+        progress: impl FnMut(PresentationProgress) -> Result<()>,
     ) -> Result<Option<PresentationInvocation>> {
         match self.phase {
             Phase::Ready => {}
@@ -281,12 +300,22 @@ impl PresentationConversation {
         self.phase = Phase::Closed;
         let turn = self
             .client
-            .send(&self.request, stop, emit, PRESENTATION_BOUNDS)
+            .send(&self.request, stop, emit, PRESENTATION_BOUNDS, progress)
             .await?;
         let Some(call) = turn.call.as_ref() else {
             return Ok(None);
         };
-        let presentation = decode_presentation(&call.name, &call.arguments)?;
+        let presentation = match (&call.name[..], &call.generated) {
+            ("generateSandboxedUi", Some(source)) => Presentation {
+                surface_id: call.arguments["surfaceId"]
+                    .as_str()
+                    .ok_or("missing generated surface identity")?
+                    .into(),
+                content: PresentationContent::Generated(source.clone()),
+            },
+            (_, None) => decode_presentation(&call.name, &call.arguments)?,
+            _ => return Err("Responses presentation kind differs".into()),
+        };
         let invocation = PresentationInvocation {
             id: call.id.clone(),
             presentation,
@@ -332,6 +361,9 @@ impl PresentationConversation {
 }
 
 pub(super) fn decode_presentation(name: &str, args: &Value) -> Result<Presentation> {
+    if matches!(name, "barChart" | "pieChart") {
+        return decode_chart(name, args);
+    }
     if name != "render_a2ui"
         || args.as_object().is_none_or(|v| v.len() != 3)
         || args["catalogId"] != "copilotkit://open-generative-ui-tables"
@@ -398,8 +430,57 @@ pub(super) fn decode_presentation(name: &str, args: &Value) -> Result<Presentati
     .map_err(|_| "invalid presentation table")?;
     Ok(Presentation {
         surface_id: surface_id.into(),
-        table,
+        content: PresentationContent::Table(table),
     })
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawChartProps {
+    title: String,
+    description: String,
+    data: Vec<metldr_conversation::ChartDatum>,
+}
+
+fn decode_chart(name: &str, args: &Value) -> Result<Presentation> {
+    let props: RawChartProps =
+        serde_json::from_value(args.clone()).map_err(|_| "invalid chart arguments")?;
+    let kind = match name {
+        "barChart" => metldr_conversation::ChartKind::Bar,
+        "pieChart" => metldr_conversation::ChartKind::Pie,
+        _ => return Err("unknown chart tool".into()),
+    };
+    let chart = metldr_conversation::Chart::new(kind, props.title, props.description, props.data)
+        .map_err(|_| "invalid chart")?;
+    Ok(Presentation {
+        surface_id: "root".into(),
+        content: PresentationContent::Chart(chart),
+    })
+}
+
+fn chart_tool(name: &str) -> Value {
+    json!({"type":"function","name":name,"description":"Render a chart from labeled numeric data.","strict":true,
+        "parameters":{"type":"object","properties":{
+            "title":{"type":"string","maxLength":300},
+            "description":{"type":"string","maxLength":1000},
+            "data":{"type":"array","maxItems":200,"items":{"type":"object","properties":{
+                "label":{"type":"string","maxLength":200},"value":{"type":"number"}},
+                "required":["label","value"],"additionalProperties":false}}},
+            "required":["title","description","data"],"additionalProperties":false}})
+}
+
+fn generated_tool() -> Value {
+    json!({"type":"function","name":"generateSandboxedUi","strict":true,
+        "description":"Present an interactive answer in an isolated frame. Use self contained HTML, CSS and JavaScript. No network, credentials, extension APIs or browser controls are available. Put complete HTML fragments in order, reusable functions in jsFunctions and complete initialization expressions in jsExpressions. Controls operate locally; followup requests require a separate user action.",
+        "parameters":{"type":"object","properties":{
+            "surfaceId":{"type":"string","minLength":1,"maxLength":256},
+            "initialHeight":{"type":["number","null"]},
+            "css":{"type":"string","maxLength":262144},
+            "html":{"type":"array","minItems":1,"maxItems":1024,"items":{"type":"string","maxLength":262144}},
+            "jsFunctions":{"type":"string","maxLength":262144},
+            "jsExpressions":{"type":"array","maxItems":1024,"items":{"type":"string","maxLength":262144}}},
+            "required":["surfaceId","initialHeight","css","html","jsFunctions","jsExpressions"],
+            "additionalProperties":false}})
 }
 
 fn cancelled(stop: &AtomicBool) -> Result<()> {

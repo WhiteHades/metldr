@@ -252,8 +252,15 @@ fn run_messages_for(
                 id: format!("{run_id}:{}", key.dom_key()),
                 content: text.to_owned(),
             });
-        } else if let EntryRef::Artifact { id } = entry {
-            messages.push(AgUiMessage::table(run_id, id));
+        } else if let EntryRef::Artifact { id, presentation } = entry {
+            messages.push(match presentation {
+                metldr_conversation::ArtifactPresentation::Table => AgUiMessage::table(run_id, id),
+                metldr_conversation::ArtifactPresentation::Chart => AgUiMessage::chart(run_id, id),
+                metldr_conversation::ArtifactPresentation::Generated {
+                    revision,
+                    completion,
+                } => AgUiMessage::generated(run_id, id, *revision, *completion),
+            });
         } else if let EntryRef::Tool { id } = entry
             && let Some(reference) = tools.iter().find(|group| &group.group_id == id)
         {
@@ -393,6 +400,7 @@ mod tests {
                 },
                 metldr_conversation::ProjectedEntry::Artifact {
                     id: artifact.clone(),
+                    presentation: metldr_conversation::ArtifactPresentation::Table,
                 },
                 metldr_conversation::ProjectedEntry::Message {
                     key: metldr_conversation::MessageKey::observed(2).unwrap(),

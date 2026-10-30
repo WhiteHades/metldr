@@ -40,6 +40,7 @@ WASM_BINDGEN ?= wasm-bindgen
 PANEL_TARGET_DIR ?= crates/metldr-panel/target
 
 check-panel:
+	cargo test --locked --manifest-path crates/metldr-answer-codec/Cargo.toml
 	cargo test --locked --manifest-path crates/metldr-panel/Cargo.toml
 
 panel-wasm:

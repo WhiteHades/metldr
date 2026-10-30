@@ -567,6 +567,7 @@ dependencies = [
  "metldr-browser-tools",
  "metldr-conversation",
  "reqwest",
+ "serde",
  "serde_json",
  "tokio",
 ]

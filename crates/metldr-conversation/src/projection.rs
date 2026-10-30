@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::content::{Completion, Entry};
+use crate::content::{ArtifactPresentation, Completion, Entry};
 use crate::key::validate_id;
 use crate::{ArtifactId, MAX_ENTRIES, MAX_MESSAGES, MAX_TEXT_BYTES, MAX_TOOLS, MessageKey, ToolId};
 
@@ -18,6 +18,8 @@ pub enum ProjectedEntry {
     },
     Artifact {
         id: ArtifactId,
+        #[serde(default)]
+        presentation: ArtifactPresentation,
     },
 }
 
@@ -40,6 +42,7 @@ pub enum EntryRef<'a> {
     },
     Artifact {
         id: &'a ArtifactId,
+        presentation: &'a ArtifactPresentation,
     },
 }
 
@@ -74,7 +77,9 @@ impl Display {
                     completion,
                 },
                 ProjectedEntry::Tool { id } => EntryRef::Tool { id },
-                ProjectedEntry::Artifact { id } => EntryRef::Artifact { id },
+                ProjectedEntry::Artifact { id, presentation } => {
+                    EntryRef::Artifact { id, presentation }
+                }
             })
     }
 }
@@ -85,7 +90,10 @@ pub(crate) fn from_native_entries(entries: &[Entry], length: usize) -> Projectio
         .iter()
         .map(|entry| match entry {
             Entry::Tool { id } => ProjectedEntry::Tool { id: id.clone() },
-            Entry::Artifact { id } => ProjectedEntry::Artifact { id: id.clone() },
+            Entry::Artifact { id, presentation } => ProjectedEntry::Artifact {
+                id: id.clone(),
+                presentation: presentation.clone(),
+            },
             Entry::Message {
                 key,
                 text,
@@ -154,7 +162,7 @@ fn validate_projection(projection: &Projection) -> Result<(), String> {
                 }
                 tools.push(id);
             }
-            ProjectedEntry::Artifact { id } => {
+            ProjectedEntry::Artifact { id, presentation } => {
                 if open_text {
                     return Err("artifact requires completed preceding text".into());
                 }
@@ -162,6 +170,12 @@ fn validate_projection(projection: &Projection) -> Result<(), String> {
                     return Err("duplicate or too many artifact references".into());
                 }
                 artifacts.push(id);
+                if matches!(
+                    presentation,
+                    ArtifactPresentation::Generated { revision: 0, .. }
+                ) {
+                    return Err("generated artifact revision must be positive".into());
+                }
             }
         }
     }

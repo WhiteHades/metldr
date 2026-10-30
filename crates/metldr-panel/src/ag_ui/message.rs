@@ -1,4 +1,5 @@
-use metldr_conversation::ArtifactId;
+use metldr_conversation::{ArtifactCompletion, ArtifactId};
+use metldr_history_pages::Counter;
 use serde::{Deserialize, Serialize};
 
 use super::run_details::RunDetailsReference;
@@ -19,11 +20,24 @@ pub(crate) struct TableReference {
     pub(crate) artifact_id: ArtifactId,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct GeneratedReference {
+    pub(crate) run_id: RunId,
+    pub(crate) artifact_id: ArtifactId,
+    pub(crate) revision: Counter,
+    pub(crate) completion: ArtifactCompletion,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "activityType", content = "content")]
 pub(crate) enum Activity {
     #[serde(rename = "metldr.table")]
     Table(TableReference),
+    #[serde(rename = "metldr.chart")]
+    Chart(TableReference),
+    #[serde(rename = "metldr.generated")]
+    Generated(GeneratedReference),
     #[serde(rename = "metldr.native-tools")]
     NativeTools(ToolGroupReference),
     #[serde(rename = "metldr.run-details")]
@@ -79,6 +93,33 @@ impl AgUiMessage {
             activity: Activity::Table(TableReference {
                 run_id: run.clone(),
                 artifact_id: artifact_id.clone(),
+            }),
+        }
+    }
+
+    pub(crate) fn chart(run: &RunId, artifact_id: &ArtifactId) -> Self {
+        Self::Activity {
+            id: format!("{run}:artifact:{}", artifact_id.as_str()),
+            activity: Activity::Chart(TableReference {
+                run_id: run.clone(),
+                artifact_id: artifact_id.clone(),
+            }),
+        }
+    }
+
+    pub(crate) fn generated(
+        run: &RunId,
+        artifact_id: &ArtifactId,
+        revision: u64,
+        completion: ArtifactCompletion,
+    ) -> Self {
+        Self::Activity {
+            id: format!("{run}:artifact:{}", artifact_id.as_str()),
+            activity: Activity::Generated(GeneratedReference {
+                run_id: run.clone(),
+                artifact_id: artifact_id.clone(),
+                revision: Counter(revision),
+                completion,
             }),
         }
     }
