@@ -88,9 +88,7 @@ impl Recovery {
         let views = flow.observe()?;
         {
             let mut current = self.page.view.borrow_mut();
-            if view.store != current.store || view.is_older_than(&current) {
-                return Err(FlowError::HistoryStale);
-            }
+            validate_recovery_view(&view, &current)?;
             *current = view.clone();
             self.page.flow.replace(flow.clone());
         }
@@ -127,6 +125,16 @@ impl Recovery {
         }
         self.install(flow, view)
     }
+}
+
+fn validate_recovery_view(view: &PageView, current: &PageView) -> Result<(), FlowError> {
+    let mut previous = current.clone();
+    // Source epochs belong to a connection; persistent ordering survives reconnects.
+    previous.source_epoch = view.source_epoch;
+    if view.store != current.store || view.is_older_than(&previous) {
+        return Err(FlowError::HistoryStale);
+    }
+    Ok(())
 }
 
 impl Drop for Recovery {
@@ -246,6 +254,34 @@ impl UiConnection {
 #[cfg(test)]
 mod checks {
     use super::*;
+
+    #[test]
+    fn recovery_accepts_new_connection_epoch_but_rejects_older_native_state() {
+        let store = "0123456789abcdef0123456789abcdef";
+        let mut current = PageView::decode(
+            &serde_json::to_vec(&serde_json::json!({
+                "sequence":2,"store":store,
+                "selection":{"store":store,"conversation":format!("{store}:1"),"epoch":"2"},
+                "source":null,"runs":[],"native_correction":null,"pi_profile":null,
+                "agent_sessions":[],"browser_route":null
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        current.source_epoch = 7;
+        let mut replacement = current.clone();
+        replacement.source_epoch = 0;
+        assert!(replacement.is_older_than(&current));
+        assert!(validate_recovery_view(&replacement, &current).is_ok());
+        replacement.sequence = 1;
+        assert!(validate_recovery_view(&replacement, &current).is_err());
+        replacement.sequence = 99;
+        replacement.selection.epoch = metldr_history_pages::Counter(1);
+        assert!(validate_recovery_view(&replacement, &current).is_err());
+        replacement = current.clone();
+        replacement.store = "fedcba9876543210fedcba9876543210".into();
+        assert!(validate_recovery_view(&replacement, &current).is_err());
+    }
 
     #[test]
     fn recovery_reservation_rejects_overlap_and_stale_release() {
