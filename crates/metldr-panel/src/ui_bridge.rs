@@ -28,6 +28,7 @@ mod browser_actions;
 mod codex_input;
 mod connection;
 mod conversations;
+mod corrections;
 mod destinations;
 mod history;
 mod native_permissions;
@@ -54,6 +55,10 @@ pub use codex_input::{
     UiCodexSubscription,
 };
 pub use connection::{UiConnection, UiConnectionSnapshot, UiConnectionSubscription};
+pub use corrections::{
+    UiCorrectionReceipt, UiCorrectionStatus, UiNativeCorrectionSnapshot,
+    UiNativeCorrectionSubscription, UiNativeCorrections,
+};
 pub use destinations::UiDestination;
 pub use native_permissions::{
     UiNativePermission, UiNativePermissionOption, UiNativePermissionSnapshot,
@@ -130,6 +135,8 @@ struct Core {
     pi_subscriptions: RefCell<Vec<std::rc::Weak<pi_ui::Observer>>>,
     codex_operation: RefCell<codex_input::Operation>,
     codex_subscriptions: RefCell<Vec<std::rc::Weak<codex_input::Observer>>>,
+    correction_operation: RefCell<corrections::Operation>,
+    correction_subscriptions: RefCell<Vec<std::rc::Weak<corrections::Observer>>>,
 }
 
 struct PageSession {
@@ -174,17 +181,21 @@ impl PageSession {
             || view.provider_settings.busy
             || view.provider_settings.pending.is_some()
             || view.agent_settings.busy
+            || self
+                .current
+                .borrow()
+                .upgrade()
+                .is_some_and(|core| core.correction_operation.borrow().blocked())
     }
 
     fn controls_ready(&self) -> bool {
         !self.invalidated.get()
             && !self.recovery.borrow().active()
             && !self.navigating.get()
-            && self
-                .current
-                .borrow()
-                .upgrade()
-                .is_none_or(|core| core.owner.borrow().settings_ready())
+            && self.current.borrow().upgrade().is_none_or(|core| {
+                core.owner.borrow().settings_ready()
+                    && !core.correction_operation.borrow().blocked()
+            })
     }
 }
 
@@ -254,6 +265,8 @@ impl UiBridge {
                 pi_subscriptions: RefCell::new(Vec::new()),
                 codex_operation: RefCell::new(codex_input::Operation::default()),
                 codex_subscriptions: RefCell::new(Vec::new()),
+                correction_operation: RefCell::new(corrections::Operation::default()),
+                correction_subscriptions: RefCell::new(Vec::new()),
             }),
         };
         page.current.replace(Rc::downgrade(&bridge.core));

@@ -24,7 +24,7 @@ pub(crate) struct Cursor {
     pub(crate) before: Counter,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq, Hash)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Preview {
     pub(crate) text: String,

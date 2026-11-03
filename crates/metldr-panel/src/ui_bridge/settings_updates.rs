@@ -239,6 +239,11 @@ impl Observer {
 
 impl PageSession {
     pub(super) fn notify_settings(&self) {
+        if let Some(core) = self.current.borrow().upgrade() {
+            core.correction_operation
+                .borrow_mut()
+                .observe(&self.view.borrow(), &core.scope);
+        }
         self.notify_connection();
         self.notify_source();
         let observers: Vec<_> = {
@@ -261,6 +266,7 @@ impl PageSession {
             core.notify_browser_actions();
             core.notify_pi_ui();
             core.notify_codex_input();
+            core.notify_corrections();
         }
     }
 }

@@ -771,14 +771,14 @@ pub(crate) struct NativeCorrectionView {
     pub(crate) available: bool,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CorrectionHistory {
     pub(crate) total: u8,
     pub(crate) entries: Vec<CorrectionReceipt>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CorrectionReceipt {
     pub(crate) ordinal: u8,
@@ -787,7 +787,7 @@ pub(crate) struct CorrectionReceipt {
     pub(crate) state: CorrectionState,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum CorrectionState {
     Pending,
@@ -798,6 +798,23 @@ pub(crate) enum CorrectionState {
     Rejected { message: String },
     NotSent { message: String },
     Uncertain { message: String },
+}
+
+impl CorrectionState {
+    pub(crate) fn label(&self) -> String {
+        match self {
+            Self::Pending => "Saved and waiting to send".into(),
+            Self::Dispatching => "Sending to native session".into(),
+            Self::CodexAccepted => {
+                "Codex accepted this correction; model use is not confirmed".into()
+            }
+            Self::PiQueued => "Pi queued this correction; model use is not confirmed".into(),
+            Self::PiHandled => "Pi handled this correction; model use is not confirmed".into(),
+            Self::Rejected { message } => format!("Rejected: {message}"),
+            Self::NotSent { message } => format!("Not sent: {message}"),
+            Self::Uncertain { message } => format!("Uncertain: {message}"),
+        }
+    }
 }
 
 pub(crate) fn valid_correction_receipt(

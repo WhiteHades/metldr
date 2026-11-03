@@ -186,9 +186,13 @@ impl UiConnectionSnapshot {
         Self {
             connected,
             reconnecting,
-            can_reconnect: !stale && !reconnecting && available,
+            can_reconnect: !stale
+                && !reconnecting
+                && available
+                && !core.correction_operation.borrow().sending(),
             stale,
-            uncertain: matches!(*core.owner.borrow(), Owner::Uncertain),
+            uncertain: matches!(*core.owner.borrow(), Owner::Uncertain)
+                || core.correction_operation.borrow().uncertain(),
         }
     }
 }

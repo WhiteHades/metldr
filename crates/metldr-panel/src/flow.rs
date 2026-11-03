@@ -758,6 +758,41 @@ impl FlowClient {
         self.inner.request_id()
     }
 
+    pub(crate) async fn correction_history(
+        &self,
+        scope: &metldr_history_pages::Scope,
+        run: &RunId,
+        request: &str,
+    ) -> Option<(PageView, crate::model::RunView)> {
+        let view = self.current_page().await.ok()?;
+        if &view.selection != scope {
+            return None;
+        }
+        let current = view.runs.iter().find(|entry| &entry.id == run)?;
+        if current
+            .corrections
+            .entries
+            .iter()
+            .any(|receipt| receipt.request == request)
+            || current.corrections.entries.len() == usize::from(current.corrections.total)
+        {
+            let saved = current.clone();
+            return Some((view, saved));
+        }
+        let context = self.history_current().await.ok()?;
+        if &context.scope != scope {
+            return None;
+        }
+        let page = self.history_runs(&context, None).await.ok()?;
+        let summary = page.runs.iter().find(|summary| &summary.id == run)?;
+        let saved = self
+            .history_run(&context, &summary.reference())
+            .await
+            .ok()?;
+        (saved.corrections.entries.len() == usize::from(saved.corrections.total))
+            .then_some((view, saved))
+    }
+
     pub(crate) async fn correct(
         &self,
         request: String,

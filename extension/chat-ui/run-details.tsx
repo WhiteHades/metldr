@@ -1,10 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { UiBridge, UiRunReport } from "../../crates/metldr-panel/pkg/metldr_panel.js";
+import { NativeCorrectionReceipts, readCorrectionReceipts, type CorrectionReceipt } from "./native-corrections";
 
 type Read = (reference: string) => ReturnType<UiBridge["run_details"]>;
 type Snapshot = Awaited<ReturnType<Read>>;
 type Report = Pick<UiRunReport, "tool" | "phase" | "outcome" | "call_id">;
-type Display = { owner: Read; run: string; route: string; status: string; reportCount: number; reports: Report[] };
+type Display = { owner: Read; run: string; route: string; status: string; reportCount: number; reports: Report[]; corrections: CorrectionReceipt[] };
 
 function read(snapshot: Snapshot, owner: Read): Display {
   const run = snapshot.run_id;
@@ -32,7 +33,7 @@ function read(snapshot: Snapshot, owner: Read): Display {
       offset = page.next_offset;
     } finally { page.free(); }
   }
-  return { owner, run, route, status, reportCount, reports };
+  return { owner, run, route, status, reportCount, reports, corrections: readCorrectionReceipts(snapshot) };
 }
 
 export function RunDetails({ reference, read: load }: { reference: unknown; read: Read }) {
@@ -82,6 +83,7 @@ export function RunDetails({ reference, read: load }: { reference: unknown; read
     {visible && <>
       <p data-part="route">{visible.route}</p>
       <p data-part="state">{visible.status}</p>
+      {visible.status !== "running" && <NativeCorrectionReceipts receipts={visible.corrections} />}
     </>}
     <details data-run-reports>
       <summary>{visible ? `${visible.reportCount} retained ${visible.reportCount === 1 ? "report" : "reports"}` : busy ? "Loading retained reports" : "Reports unavailable"}</summary>

@@ -462,7 +462,7 @@ fn submit(panel: &Rc<RefCell<Panel>>) -> Result<(), FlowError> {
                     }
                 }
                 Err(error) => {
-                    let history = correction_history(&flow, &scope, &run, &request).await;
+                    let history = flow.correction_history(&scope, &run, &request).await;
                     let mut state = panel.borrow_mut();
                     if state.connection_generation == generation
                         && state
@@ -576,41 +576,6 @@ fn submit(panel: &Rc<RefCell<Panel>>) -> Result<(), FlowError> {
         follow_start(panel, flow, scope, generation, start, "Request failed").await;
     });
     Ok(())
-}
-
-async fn correction_history(
-    flow: &crate::flow::FlowClient,
-    scope: &metldr_history_pages::Scope,
-    run: &RunId,
-    request: &str,
-) -> Option<(PageView, RunView)> {
-    let view = flow.current_page().await.ok()?;
-    if &view.selection != scope {
-        return None;
-    }
-    let current = view.runs.iter().find(|entry| &entry.id == run)?;
-    if current
-        .corrections
-        .entries
-        .iter()
-        .any(|receipt| receipt.request == request)
-        || current.corrections.entries.len() == usize::from(current.corrections.total)
-    {
-        let saved = current.clone();
-        return Some((view, saved));
-    }
-    let context = flow.history_current().await.ok()?;
-    if &context.scope != scope {
-        return None;
-    }
-    let page = flow.history_runs(&context, None).await.ok()?;
-    let summary = page.runs.iter().find(|summary| &summary.id == run)?;
-    let saved = flow
-        .history_run(&context, &summary.reference())
-        .await
-        .ok()?;
-    (saved.corrections.entries.len() == usize::from(saved.corrections.total))
-        .then_some((view, saved))
 }
 
 pub(super) fn render(panel: &Panel) -> Result<(), JsValue> {

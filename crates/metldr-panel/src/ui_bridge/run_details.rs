@@ -19,6 +19,7 @@ pub struct UiRunDetails {
     route: String,
     status: RunStatus,
     run_id: String,
+    corrections: Vec<corrections::UiCorrectionReceipt>,
 }
 
 pub(super) async fn open(core: Rc<Core>, encoded: String) -> Result<UiRunDetails, FlowError> {
@@ -43,11 +44,17 @@ pub(super) async fn open(core: Rc<Core>, encoded: String) -> Result<UiRunDetails
         route: run_display::route(&run.route),
         status: run.status,
         run_id: run.id.as_str().into(),
+        corrections: corrections::receipts(&run.id, &run.corrections),
     })
 }
 
 #[wasm_bindgen]
 impl UiRunDetails {
+    pub fn corrections(&self) -> Result<Vec<corrections::UiCorrectionReceipt>, JsValue> {
+        self.core.ensure_current().map_err(js_error)?;
+        Ok(self.corrections.clone())
+    }
+
     #[wasm_bindgen(getter)]
     pub fn run_id(&self) -> String {
         self.run_id.clone()

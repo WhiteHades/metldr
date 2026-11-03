@@ -37,7 +37,9 @@ type Props = {
   onSelect: (choice: PromptChoice) => void;
   codexMode: CodexMode;
   onCodexMode: (mode: CodexMode) => void;
-  onSend: () => void;
+  onSend: (event: Event) => void;
+  correctionMode: boolean;
+  correctionAvailable: boolean;
   onStop: () => void;
   onCapture: () => void;
   disabled: boolean;
@@ -74,7 +76,7 @@ function focusMenu(event: KeyboardEvent<HTMLButtonElement>, menu: HTMLDivElement
   (event.key === "ArrowDown" ? rows.at(0) : rows.at(-1))?.focus();
 }
 
-export default function PromptBar({ draft, onDraftChange, choices, selection, onSelect, codexMode, onCodexMode, onSend, onStop, onCapture, disabled, running, captureDisabled }: Props) {
+export default function PromptBar({ draft, onDraftChange, choices, selection, onSelect, codexMode, onCodexMode, onSend, correctionMode, correctionAvailable, onStop, onCapture, disabled, running, captureDisabled }: Props) {
   const sourceId = useId();
   const modelId = useId();
   const input = useRef<HTMLTextAreaElement>(null);
@@ -97,6 +99,7 @@ export default function PromptBar({ draft, onDraftChange, choices, selection, on
   const model = choices.find(choice => choice.value === selection.value) ?? { ...selection, enabled: false };
   const modelLabel = model.supports_plan && codexMode === "plan" ? "Plan mode, " + model.label : model.label;
   const canSend = !disabled && !!draft.trim() && model.enabled;
+  const canCorrect = !!draft.trim() && correctionAvailable;
 
   useLayoutEffect(() => {
     if (!token || !sourceMenu.current || !sourceButton.current) return;
@@ -153,10 +156,10 @@ export default function PromptBar({ draft, onDraftChange, choices, selection, on
     input.current?.focus();
   }
 
-  function send() {
-    if (!canSend) return;
+  function send(event: Event) {
+    if (!(correctionMode ? canCorrect : canSend)) return;
     closeMenus();
-    onSend();
+    onSend(event);
   }
 
   return <div data-promptbar="" data-metldr-prompt="">
@@ -183,7 +186,7 @@ export default function PromptBar({ draft, onDraftChange, choices, selection, on
       <div ref={modelMenu} id={modelId} popover="auto" className="composer-model-menu" onKeyDown={moveFocus}
         onMouseLeave={() => setModelHovered(null)} onToggle={event => { setModelOpen(event.newState === "open"); setModelHovered(null); }}>
         <span className="composer-model-highlight" aria-hidden="true" style={{ opacity: modelHovered !== null ? 1 : 0 }} />
-        <div data-prompt-model-rows="">{choices.map(choice => <button key={choice.value} type="button" disabled={!choice.enabled}
+        <div data-prompt-model-rows="">{choices.map(choice => <button key={choice.value} type="button" disabled={!choice.enabled || running}
           data-sound="press"
           data-value={choice.value} data-active={modelHovered === choice.value} aria-pressed={selection.value === choice.value} title={choice.label}
           onMouseEnter={() => setModelHovered(choice.value)} onFocus={() => setModelHovered(choice.value)} onClick={() => {
@@ -238,7 +241,7 @@ export default function PromptBar({ draft, onDraftChange, choices, selection, on
                 event.preventDefault(); capture(); return;
               }
               if (event.key === "Escape") { closeMenus(); return; }
-              if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); send(); }
+              if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); send(event.nativeEvent); }
             }} />
           <button id="bridge-model" type="button" data-prompt-model="" popoverTarget={modelId} aria-expanded={modelOpen}
             onKeyDown={event => focusMenu(event, modelMenu.current)}
@@ -249,7 +252,7 @@ export default function PromptBar({ draft, onDraftChange, choices, selection, on
           <button type="button" data-prompt-dictate="" aria-label="Dictation unavailable" title="Dictation is unavailable" disabled>
             <Icon size={15} strokeWidth={2}><g><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3" /></g></Icon>
           </button>
-          <button id="bridge-send" type="button" data-prompt-send="" aria-label="Send" disabled={!canSend} hidden={running} onClick={send}>
+          <button id="bridge-send" type="button" data-prompt-send="" aria-label={correctionMode ? "Send correction" : "Send"} disabled={correctionMode ? !canCorrect : !canSend} hidden={running && !correctionMode} onClick={event => send(event.nativeEvent)}>
             <Icon size={16} strokeWidth={2.4}><path d="M12 19V5M5 12l7-7 7 7" /></Icon>
           </button>
           <button id="bridge-stop" type="button" data-prompt-stop="" aria-label="Stop" hidden={!running} onClick={onStop}>

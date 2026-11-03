@@ -24,6 +24,7 @@ import { PiUi } from "./pi-ui";
 import { CodexInput } from "./codex-input";
 import { NativeToolChips } from "./native-tool-chips";
 import { RunDetails } from "./run-details";
+import { NativeCorrectionReceipts, useNativeCorrections } from "./native-corrections";
 import { useConnection } from "./connection";
 import { useReviewDraft } from "./review-draft";
 import { SavedSource } from "./saved-source";
@@ -32,6 +33,12 @@ import "./run-details.css";
 import "./chat-theme.css";
 
 type Capture = () => { url: string; title: string; text: string };
+type CorrectionSubmission = {
+  owner: ReturnType<UiBridge["native_corrections"]>;
+  request: string;
+  text: string;
+  revision: number;
+};
 type NavigationControls = Pick<React.ComponentProps<typeof ChatLayout>, "tabs" | "activeId" | "onSelect" | "onClose" | "onNew" | "navigationDisabled"> & { error: string; retry(): void; openSettings(): void };
 
 const ArchivePage = z.object({
@@ -63,6 +70,7 @@ function executionDisplay({ choices, value, previous }: { choices: PromptChoice[
 
 function Conversation({ initial, failure, bridge, recovery, enqueue, destination, initialChoices, controlRevision, navigation, onHistoryChange }: { initial: z.infer<typeof Snapshot>; failure: string; bridge: UiBridge; recovery?: ReturnType<UiBridge["active_run"]>; enqueue: Enqueue; destination: string; initialChoices: PromptChoice[]; controlRevision: number; navigation: NavigationControls; onHistoryChange(): Promise<void> }) {
   const connection = useConnection(bridge);
+  const corrections = useNativeCorrections(bridge);
   const { agent } = useAgent({ threadId: initial.threadId });
   const { copilotkit } = useCopilotKit();
   const { renderActivityMessage } = useRenderActivityMessage();
@@ -86,6 +94,16 @@ function Conversation({ initial, failure, bridge, recovery, enqueue, destination
     ? execution.choices : [...execution.choices, selection];
   const archiveReads = useRef(0);
   const draftRevision = useRef(0);
+  const correctionDraft = useRef<CorrectionSubmission | undefined>(undefined);
+  const [correctionPending, setCorrectionPending] = useState(false);
+  useEffect(() => {
+    setCorrectionPending(false);
+    return () => { correctionDraft.current = undefined; };
+  }, [bridge]);
+  useEffect(() => {
+    const submission = correctionDraft.current;
+    if (submission && submission.request === corrections.view?.admitted_request_id) finishCorrection(submission);
+  }, [corrections.view?.admitted_request_id]);
   const pending = useRef<{ messageId: string; revision: number } | null>(null);
   const recoveryStopPending = useRef(false);
   const choicesRevision = useRef(0);
@@ -197,6 +215,48 @@ function Conversation({ initial, failure, bridge, recovery, enqueue, destination
         if (mounted.current) setSubmitting(false);
       });
   }
+  function sendCorrection(event: Event) {
+    if (!corrections.view?.available || corrections.view.pending || corrections.view.uncertain || correctionDraft.current || !text.trim()) return;
+    const owner = corrections.owner();
+    if (!owner) return;
+    setError("");
+    try {
+      setCorrectionPending(true);
+      const work = owner.send(text, event);
+      const submission = { owner, request: owner.request_id, text, revision: draftRevision.current };
+      correctionDraft.current = submission;
+      void work.then(() => finishCorrection(submission)).catch(error => {
+        if (mounted.current && corrections.owner() === owner) {
+          if (!corrections.current()?.uncertain && correctionDraft.current === submission) {
+            correctionDraft.current = undefined;
+            setCorrectionPending(false);
+          }
+          setError(String(error));
+        }
+      });
+    } catch (error) { setCorrectionPending(false); setError(String(error)); }
+  }
+  function finishCorrection(submission: CorrectionSubmission) {
+    if (!mounted.current || corrections.owner() !== submission.owner || correctionDraft.current !== submission) return;
+    correctionDraft.current = undefined;
+    setCorrectionPending(false);
+    setText(current => {
+      if (draftRevision.current !== submission.revision || current !== submission.text) return current;
+      draftRevision.current += 1;
+      return "";
+    });
+  }
+  function checkCorrection() {
+    const owner = corrections.owner();
+    if (!owner) return;
+    try {
+      void owner.refresh().then(() => {
+        if (mounted.current && corrections.owner() === owner) setError("");
+      }).catch(error => {
+        if (mounted.current && corrections.owner() === owner) setError(String(error));
+      });
+    } catch (error) { setError(String(error)); }
+  }
   function applyPiSuggestion(value: string) {
     draftRevision.current += 1;
     setText(value);
@@ -210,10 +270,14 @@ function Conversation({ initial, failure, bridge, recovery, enqueue, destination
     } catch (error) { setError(String(error)); }
   }
   const connectionBlocked = !connection.connected || connection.reconnecting || connection.stale || connection.uncertain;
-  const status = connection.stale ? "The conversation changed. Reload the panel." : connection.reconnecting ? "Reconnecting" : !connection.connected ? "Connection lost" : connection.uncertain ? "Check saved work before starting again" : connection.error || failure || error || navigation.error || (ready ? capturing ? "Reading current page" : approvalPending || browserApprovalPending ? "Waiting for approval" : agent.isRunning || submitting || nativeRunning ? "Running" : reading ? "Loading history" : "Ready" : "Connecting");
-  const controlsDisabled = connectionBlocked || navigation.navigationDisabled || !ready || capturing || reading || submitting || nativeRunning || agent.isRunning;
+  const status = connection.stale ? "The conversation changed. Reload the panel." : connection.reconnecting ? "Reconnecting" : !connection.connected ? "Connection lost" : connection.uncertain ? "Check saved work before starting again" : connection.error || corrections.error || failure || error || navigation.error || (ready ? capturing ? "Reading current page" : approvalPending || browserApprovalPending ? "Waiting for approval" : agent.isRunning || submitting || nativeRunning ? "Running" : reading ? "Loading history" : "Ready" : "Connecting");
+  const controlsDisabled = connectionBlocked || navigation.navigationDisabled || !ready || capturing || reading || submitting || nativeRunning || agent.isRunning || correctionPending || !!corrections.view?.pending || !!corrections.view?.uncertain;
+  const correctionMode = (agent.isRunning || nativeRunning) && corrections.view?.run_id !== undefined;
+  const activeCorrections = corrections.view?.receipts.filter(receipt => receipt.run_id === corrections.view?.run_id) ?? [];
   const prompt = (<><div data-pi-composer-slot="" ref={setPiComposerSlot} /><PromptBar draft={text} onDraftChange={value => { draftRevision.current += 1; setText(value); }}
-      choices={choices} selection={selection} onSelect={selectExecution} codexMode={codexMode} onCodexMode={setCodexMode} onSend={submit} onStop={() => {
+      choices={choices} selection={selection} onSelect={selectExecution} codexMode={codexMode} onCodexMode={setCodexMode} onSend={event => {
+        if (correctionMode) sendCorrection(event); else submit();
+      }} correctionMode={correctionMode} correctionAvailable={!!corrections.view?.available && !corrections.view.pending && !corrections.view.uncertain && !correctionPending} onStop={() => {
         if (recovery && nativeRunning && !agent.isRunning) {
           if (recoveryStopPending.current) return;
           recoveryStopPending.current = true;
@@ -228,6 +292,7 @@ function Conversation({ initial, failure, bridge, recovery, enqueue, destination
     <span data-bridge-status="" role="status">{status}</span>
     <ConversationHistory bridge={bridge} enqueue={enqueue} disabled={controlsDisabled} onSelect={navigation.onSelect} />
     <button type="button" onClick={navigation.openSettings}>Settings</button>
+    {corrections.view?.uncertain && <button type="button" onClick={checkCorrection}>Check correction</button>}
     {!connection.connected && <button id="bridge-reconnect" type="button" disabled={!connection.can_reconnect} onClick={connection.reconnect}>Reconnect</button>}
     {(connection.uncertain || connection.stale) && <button id="bridge-review-saved" type="button" disabled={connection.reconnecting} onClick={review}>Review saved work</button>}
     {reviewError && <span id="bridge-review-error" role="alert">{reviewError}</span>}
@@ -251,6 +316,7 @@ function Conversation({ initial, failure, bridge, recovery, enqueue, destination
   return <ChatLayout {...navigation} navigationDisabled={controlsDisabled}
     status={null} composer={prompt} content={visible.length ? {kind:"thread", body:<>
       {toolbar}
+      <NativeCorrectionReceipts receipts={activeCorrections} />
       <SavedSource bridge={bridge} />
       <div data-bridge-messages=""><AnswerDraft.Provider value={proposal => setText(current => current ? `${current}\n\n${proposal}` : proposal)}><MessageThread messages={visible} liveMessageIds={liveIds} running={agent.isRunning || submitting || nativeRunning} renderActivity={renderActivityMessage} /></AnswerDraft.Provider></div>
       <NativePermissions bridge={bridge} onPendingChange={setApprovalPending} />
@@ -261,6 +327,7 @@ function Conversation({ initial, failure, bridge, recovery, enqueue, destination
       <h1><span>Welcome to metldr</span><span>What do you want to do?</span></h1>
       {toolbar}
       <SavedSource bridge={bridge} />
+      <NativeCorrectionReceipts receipts={activeCorrections} />
       <NativePermissions bridge={bridge} onPendingChange={setApprovalPending} />
       <BrowserActions bridge={bridge} onPendingChange={setBrowserApprovalPending} />
       <CodexInput bridge={bridge} />

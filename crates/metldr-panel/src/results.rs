@@ -110,30 +110,7 @@ fn update_card(doc: &Document, card: &Element, run: &RunView) -> Result<(), JsVa
         );
         for receipt in &run.corrections.entries {
             let row = doc.create_element("p")?;
-            let meaning = match &receipt.state {
-                crate::model::CorrectionState::Pending => "Saved and waiting to send".to_owned(),
-                crate::model::CorrectionState::Dispatching => {
-                    "Sending to native session".to_owned()
-                }
-                crate::model::CorrectionState::CodexAccepted => {
-                    "Codex accepted this correction; model use is not confirmed".to_owned()
-                }
-                crate::model::CorrectionState::PiQueued => {
-                    "Pi queued this correction; model use is not confirmed".to_owned()
-                }
-                crate::model::CorrectionState::PiHandled => {
-                    "Pi handled this correction; model use is not confirmed".to_owned()
-                }
-                crate::model::CorrectionState::Rejected { message } => {
-                    format!("Rejected: {message}")
-                }
-                crate::model::CorrectionState::NotSent { message } => {
-                    format!("Not sent: {message}")
-                }
-                crate::model::CorrectionState::Uncertain { message } => {
-                    format!("Uncertain: {message}")
-                }
-            };
+            let meaning = receipt.state.label();
             row.set_text_content(Some(&format!(
                 "Correction {}: {}. {}",
                 receipt.ordinal, receipt.text.text, meaning
