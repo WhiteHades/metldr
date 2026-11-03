@@ -6,6 +6,10 @@ import { logger } from '@/services/LoggerService'
 import { analyticsService } from '@/services/AnalyticsService'
 import { cacheService } from '@/services/CacheService'
 
+const trailingSlashPattern = /\/+$/
+const gmailThreadPattern = /#[^/]+\/(?:[^/]+\/)?([A-Za-z0-9_-]{16,})$/
+
+
 const log = logger.createScoped('Chat')
 
 let saveTimeout: ReturnType<typeof setTimeout> | null = null
@@ -14,7 +18,7 @@ const SAVE_DEBOUNCE_MS = 2000
 function debouncedSaveChat(url: string, messages: AppChatMessage[]): void {
   if (saveTimeout) clearTimeout(saveTimeout)
   saveTimeout = setTimeout(() => {
-    const normalizedUrl = url.split('?')[0].replace(/\/+$/, '')
+    const normalizedUrl = url.split('?')[0].replace(trailingSlashPattern, '')
     cacheService.setTabSession(normalizedUrl, messages, null, false)
       .catch(err => log.warn('auto-save failed', err.message))
   }, SAVE_DEBOUNCE_MS)
@@ -273,7 +277,7 @@ export function useChat() {
       
       let emailId: string | null = null
       if (isEmail && currentUrl.includes('mail.google.com')) {
-        const hashMatch = currentUrl.match(/#[^/]+\/(?:[^/]+\/)?([A-Za-z0-9_-]{16,})$/)
+        const hashMatch = currentUrl.match(gmailThreadPattern)
         emailId = hashMatch?.[1] || null
         if (emailId) log.log(`extracted emailId: ${emailId.slice(0, 20)}...`)
       }
@@ -475,7 +479,7 @@ RULES:
                   })
                   
                   const completedState = getUrlState(targetUrl)
-                  const normalizedUrl = targetUrl.split('?')[0].replace(/\/+$/, '')
+                  const normalizedUrl = targetUrl.split('?')[0].replace(trailingSlashPattern, '')
                   cacheService.setTabSession(normalizedUrl, completedState.messages, null, false)
                     .catch(err => log.warn('post-stream save failed', err.message))
                   
@@ -587,7 +591,7 @@ RULES:
           
           // save to IDB immediately - prevents lost response if user switched tabs
           const ollCompletedState = getUrlState(targetUrl)
-          const ollNormalizedUrl = targetUrl.split('?')[0].replace(/\/+$/, '')
+          const ollNormalizedUrl = targetUrl.split('?')[0].replace(trailingSlashPattern, '')
           cacheService.setTabSession(ollNormalizedUrl, ollCompletedState.messages, null, false)
             .catch(err => log.warn('post-stream save failed', err.message))
           

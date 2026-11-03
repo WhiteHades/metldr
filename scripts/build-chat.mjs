@@ -4,6 +4,14 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkReceipt, watchPaths } from './answer-contract.mjs';
 
+const workerSourceImportPattern = /\?worker-source$/;
+const wasmBinaryImportPattern = /\.wasm\?binary$/;
+const anyImportPattern = /.*/;
+const answerCodecImportPattern = /answer_codec\.js$/;
+const panelImportPattern = /metldr_panel\.js$/;
+const externalModuleImportPattern = /^[^./]/;
+
+
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ui = join(root, 'extension/chat-ui');
 const output = join(root, 'public/chat');
@@ -38,13 +46,13 @@ async function options(frame = false) {
         if (frame) await copyBindings();
         checkReceipt();
       });
-      builder.onResolve({ filter: /\?worker-source$/ }, args => ({
+      builder.onResolve({ filter: workerSourceImportPattern }, args => ({
         path: resolve(args.resolveDir, args.path.slice(0, -'?worker-source'.length)), namespace: 'metldr-worker-source',
       }));
-      builder.onResolve({ filter: /\.wasm\?binary$/ }, args => ({
+      builder.onResolve({ filter: wasmBinaryImportPattern }, args => ({
         path: resolve(args.resolveDir, args.path.slice(0, -'?binary'.length)),
       }));
-      builder.onLoad({ filter: /.*/, namespace: 'metldr-worker-source' }, async args => {
+      builder.onLoad({ filter: anyImportPattern, namespace: 'metldr-worker-source' }, async args => {
         const worker = await build({ entryPoints: [args.path], bundle: true, write: false,
           format: 'iife', platform: 'browser', target: 'chrome148', minify: true, metafile: true,
           define: { 'process.env.NODE_ENV': '"production"' },
@@ -55,15 +63,15 @@ async function options(frame = false) {
         return { contents: `export default ${JSON.stringify(worker.outputFiles[0].text)}`, loader: 'js',
           watchFiles: Object.keys(worker.metafile.inputs).map(file => resolve(root, file)) };
       });
-      builder.onResolve({ filter: /answer_codec\.js$/ }, async args => {
+      builder.onResolve({ filter: answerCodecImportPattern }, async args => {
         if (args.pluginData === 'answer-contract-resolution') return;
         const result = await builder.resolve(args.path, {
           resolveDir: args.resolveDir, kind: args.kind, pluginData: 'answer-contract-resolution',
         });
         return { ...result, ...watchPaths() };
       });
-      builder.onResolve({ filter: /metldr_panel\.js$/ }, () => ({ path: '/chat/wasm/metldr_panel.js', external: true, ...watchPaths() }));
-      builder.onResolve({ filter: /^[^./]/ }, async args => {
+      builder.onResolve({ filter: panelImportPattern }, () => ({ path: '/chat/wasm/metldr_panel.js', external: true, ...watchPaths() }));
+      builder.onResolve({ filter: externalModuleImportPattern }, async args => {
         if (args.pluginData === 'canonical-dependency') return;
         const parts = args.path.split('/');
         const name = args.path.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0];

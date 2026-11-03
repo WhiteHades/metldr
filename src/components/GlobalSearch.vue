@@ -1,11 +1,16 @@
+<script lang="ts">
+const citationPattern = /\[(\d+)\]/g
+</script>
+
 <script setup lang="ts">
 import { ref, computed, nextTick, watch, onMounted } from 'vue'
-defineOptions({ name: 'GlobalSearch' })
 import { Mail, Globe, FileText, Copy, ChevronDown, ChevronUp, RefreshCw, ExternalLink } from 'lucide-vue-next'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui'
 import ChatComposer from '@/components/ChatComposer.vue'
 import { marked } from 'marked'
 import { formatTime } from '@/utils/text'
+
+defineOptions({ name: 'GlobalSearch' })
 
 interface ChatSource {
   index: number
@@ -130,7 +135,7 @@ watch(loading, scrollToBottom)
 function renderContent(content: string, sources?: ChatSource[]): string {
   if (!content) return ''
   console.log('[GlobalSearch.renderContent] sources:', sources?.length, sources?.map(s => ({ index: s.index, title: s.title?.slice(0, 30) })))
-  let processed = content.replace(/\[(\d+)\]/g, (match, num) => {
+  let processed = content.replace(citationPattern, (match, num) => {
     const idx = parseInt(num)
     const source = sources?.find(s => s.index === idx)
     if (source) {
@@ -215,7 +220,7 @@ function dedupeSourcesByUrl(sources: ChatSource[]): ChatSource[] {
 // filter sources to only those cited in the content (keep original indices)
 function filterCitedSources(content: string, sources: ChatSource[]): ChatSource[] {
   const citedIndices = new Set<number>()
-  const matches = content.matchAll(/\[(\d+)\]/g)
+  const matches = content.matchAll(citationPattern)
   for (const m of matches) {
     citedIndices.add(parseInt(m[1]))
   }

@@ -6,6 +6,11 @@ import type { ExtractedData, SummaryTiming, PageSummary, ChatMessage, PageContex
 
 import { ragService } from './rag/RagService'
 
+const WHITESPACE_PATTERN = /\s+/
+const SUMMARY_BULLET_PATTERN = /^[-•*]|^\d+\./
+const BULLET_PREFIX_PATTERN = /^[-•*]\s*/
+const NUMBERED_PREFIX_PATTERN = /^\d+\.\s*/
+
 export class PageService {
 
   static async summarize(extractedData: ExtractedData, force = false): Promise<PageSummary> {
@@ -103,7 +108,7 @@ export class PageService {
       cached: false,
       responseTimeMs: timing.llm || 0,
       wordsIn: wordCount || 0,
-      wordsOut: bullets.join(' ').split(/\s+/).length,
+      wordsOut: bullets.join(' ').split(WHITESPACE_PATTERN).length,
       tokensOut: Math.round(summaryText.length / 4),
       model: timing.model,
       url
@@ -116,8 +121,8 @@ export class PageService {
     const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0)
     
     const bullets = lines
-      .filter(l => /^[-•*]|^\d+\./.test(l))
-      .map(l => l.replace(/^[-•*]\s*/, '').replace(/^\d+\.\s*/, '').trim())
+      .filter(l => SUMMARY_BULLET_PATTERN.test(l))
+      .map(l => l.replace(BULLET_PREFIX_PATTERN, '').replace(NUMBERED_PREFIX_PATTERN, '').trim())
       .filter(l => l.length > 10)
       .slice(0, 5)
 

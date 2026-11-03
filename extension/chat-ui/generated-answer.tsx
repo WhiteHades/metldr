@@ -11,9 +11,10 @@ export const GeneratedReference = z.object({
 type Reference = z.infer<typeof GeneratedReference>;
 type Enqueue = <T>(operation: () => Promise<T>) => Promise<T>;
 export const AnswerDraft = createContext<(text: string) => void>(() => {});
+let resolvedSandboxUrl: string | undefined;
 
 function sandboxUrl() {
-  const url = new URL("/answer-sandbox.html", window.location.href).href;
+  const url = resolvedSandboxUrl ??= new URL("/answer-sandbox.html", window.location.href).href;
   if (!document.querySelector("meta[data-answer-frame-policy]")) {
     const policy = document.createElement("meta");
     policy.httpEquiv = "Content-Security-Policy";

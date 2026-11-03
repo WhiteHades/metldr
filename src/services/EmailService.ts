@@ -19,6 +19,43 @@ import type {
 
 import { ragService } from './rag/RagService'
 
+const WHITESPACE_REGEX = /\s+/
+const JSON_FENCE_REGEX = /```json\s*/g
+const CODE_FENCE_REGEX = /```\s*/g
+const JSON_OBJECT_REGEX = /\{[\s\S]*\}/
+const UNQUOTED_JSON_KEY_REGEX = /([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:/g
+const SINGLE_QUOTED_JSON_VALUE_REGEX = /:\s*'([^']*)'/g
+const TRAILING_JSON_COMMA_REGEX = /,\s*([}\]])/g
+const REPLIES_JSON_OBJECT_REGEX = /\{[\s\S]*"replies"[\s\S]*\}/
+const REPLIES_ARRAY_REGEX = /"replies"\s*:\s*\[([\s\S]*?)\]/
+const AMOUNT_REGEX = /(?:USD|EUR|GBP|INR|BDT|HUF|AUD|CAD|CHF|JPY|CNY|HKD|[A-Z]{3})?\s?[$€£₹]?[\s]*\d{1,3}(?:[\s.,]\d{3})*(?:[.,]\d{2})?\s?(?:USD|EUR|GBP|INR|BDT|HUF|AUD|CAD|CHF|JPY|CNY|HKD|[A-Z]{3})?/g
+const TOTAL_LABEL_REGEX = /total/i
+const AMOUNT_LABEL_REGEX = /amount/i
+const PRICE_LABEL_REGEX = /price/i
+const FARE_LABEL_REGEX = /fare/i
+const PAID_LABEL_REGEX = /paid/i
+const DUE_LABEL_REGEX = /due/i
+const SLASH_REGEX = /\//g
+const CURRENCY_CODE_REGEX = /USD|EUR|GBP|INR|BDT|HUF|AUD|CAD|CHF|JPY|CNY|HKD|[A-Z]{3}/
+const NON_AMOUNT_CHARACTER_REGEX = /[^0-9.,]/g
+const BOOKING_ID_REGEX = /(booking|order|invoice|ticket|reference|ref|pnr|record locator)[:#]?\s*([A-Z0-9-]{5,})/gi
+const PARCEL_NUMBER_ID_REGEX = /(package|parcel)\s+number[:#]?\s*([A-Z0-9 \-]{6,})/gi
+const TRACKING_ID_REGEX = /(tracking|trace|parcel id|shipment id)[:#]?\s*([A-Z0-9-]{6,})/gi
+const WHITESPACE_GLOBAL_REGEX = /\s+/g
+const REPEATED_WHITESPACE_REGEX = /\s{2,}/g
+const ISO_DATE_REGEX = /\b\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}(?::\d{2})?)?\b/g
+const HUMAN_DATE_REGEX = /(Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*,?\s+\d{1,2}\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}(?:\s+\d{1,2}:\d{2}(?:\s*[AP]M)?\s*[A-Z]{2,3})?/gi
+const DEPARTURE_CONTEXT_REGEX = /depart|departure|flight|outbound/
+const ARRIVAL_CONTEXT_REGEX = /arriv/
+const CHECK_IN_CONTEXT_REGEX = /check[- ]?in/
+const EMAIL_ADDRESS_REGEX = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g
+const PHONE_NUMBER_REGEX = /\+?\d[\d\s\-()]{6,}\d/g
+const NEWLINES_REGEX = /\n+/
+const ACTION_VERB_REGEX = /\b(pay|confirm|check[- ]?in|download|track|manage|reset|verify|complete|submit|reply)\b/i
+const LOCATION_LINE_REGEX = /^(z[- ]?box|locker|pick[- ]?up point)/i
+const Z_BOX_PREFIX_REGEX = /^z[- ]?box\s*/i
+const VAGUE_ACTION_REGEX = /^(whenever|maybe|consider|possibly|if you|you could)/i
+
 // ... imports
 
 export class EmailService {
@@ -102,8 +139,8 @@ export class EmailService {
             type: 'email',
             cached: false,
             responseTimeMs: elapsed,
-            wordsIn: emailContent.split(/\s+/).length,
-            wordsOut: (chromeResult.summary || '').split(/\s+/).length,
+            wordsIn: emailContent.split(WHITESPACE_REGEX).length,
+            wordsOut: (chromeResult.summary || '').split(WHITESPACE_REGEX).length,
             tokensOut: Math.round((chromeResult.summary || '').length / 4),
             model: 'gemini-nano'
           }).catch(() => {})
@@ -137,8 +174,8 @@ export class EmailService {
               type: 'email',
               cached: false,
               responseTimeMs: elapsed,
-              wordsIn: emailContent.split(/\s+/).length,
-              wordsOut: (chromeResult.summary || '').split(/\s+/).length,
+              wordsIn: emailContent.split(WHITESPACE_REGEX).length,
+              wordsOut: (chromeResult.summary || '').split(WHITESPACE_REGEX).length,
               tokensOut: Math.round((chromeResult.summary || '').length / 4),
               model: 'gemini-nano'
             }).catch(() => {})
@@ -173,8 +210,8 @@ export class EmailService {
         type: 'email',
         cached: false,
         responseTimeMs: elapsed,
-        wordsIn: emailContent.split(/\s+/).length,
-        wordsOut: (summary.summary || '').split(/\s+/).length,
+        wordsIn: emailContent.split(WHITESPACE_REGEX).length,
+        wordsOut: (summary.summary || '').split(WHITESPACE_REGEX).length,
         tokensOut: Math.round((summary.summary || '').length / 4),
         model
       }).catch(() => {})
@@ -209,10 +246,10 @@ export class EmailService {
       let jsonStr = result.content || ''
       
       // remove markdown code blocks
-      jsonStr = jsonStr.replace(/```json\s*/g, '').replace(/```\s*/g, '')
+      jsonStr = jsonStr.replace(JSON_FENCE_REGEX, '').replace(CODE_FENCE_REGEX, '')
       
       // find json object
-      const jsonMatch = jsonStr.match(/\{[\s\S]*\}/)
+      const jsonMatch = jsonStr.match(JSON_OBJECT_REGEX)
       if (!jsonMatch) {
         console.log('[EmailService._tryChromeSummary] no json found in response')
         return null
@@ -224,9 +261,9 @@ export class EmailService {
       } catch (parseErr) {
         // try to fix common json issues
         let fixed = jsonMatch[0]
-          .replace(/([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:/g, '$1"$2":') // quote unquoted keys
-          .replace(/:\s*'([^']*)'/g, ': "$1"') // replace single quotes with double
-          .replace(/,\s*([}\]])/g, '$1') // remove trailing commas
+          .replace(UNQUOTED_JSON_KEY_REGEX, '$1"$2":') // quote unquoted keys
+          .replace(SINGLE_QUOTED_JSON_VALUE_REGEX, ': "$1"') // replace single quotes with double
+          .replace(TRAILING_JSON_COMMA_REGEX, '$1') // remove trailing commas
         
         try {
           parsed = JSON.parse(fixed)
@@ -277,10 +314,10 @@ export class EmailService {
 
         // parse json - remove markdown, fix common issues
         let content = result.content || ''
-        content = content.replace(/```json\s*/g, '').replace(/```\s*/g, '')
+        content = content.replace(JSON_FENCE_REGEX, '').replace(CODE_FENCE_REGEX, '')
         
         let parsed: ParsedReplies | null = null
-        const jsonMatch = content.match(/\{[\s\S]*"replies"[\s\S]*\}/)
+        const jsonMatch = content.match(REPLIES_JSON_OBJECT_REGEX)
         
         if (jsonMatch) {
           try {
@@ -288,14 +325,14 @@ export class EmailService {
           } catch (parseErr) {
             // try to fix common json issues
             let fixed = jsonMatch[0]
-              .replace(/([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:/g, '$1"$2":') // quote keys
-              .replace(/:\s*'([^']*)'/g, ': "$1"') // fix quotes
-              .replace(/,\s*([}\]])/g, '$1') // remove trailing commas
+              .replace(UNQUOTED_JSON_KEY_REGEX, '$1"$2":') // quote keys
+              .replace(SINGLE_QUOTED_JSON_VALUE_REGEX, ': "$1"') // fix quotes
+              .replace(TRAILING_JSON_COMMA_REGEX, '$1') // remove trailing commas
             
             try {
               parsed = JSON.parse(fixed) as ParsedReplies
             } catch {
-            const repliesMatch = content.match(/"replies"\s*:\s*\[([\s\S]*?)\]/)
+            const repliesMatch = content.match(REPLIES_ARRAY_REGEX)
             if (repliesMatch) {
               try {
                 parsed = { replies: JSON.parse(`[${repliesMatch[1]}]`) }
@@ -584,38 +621,36 @@ export class EmailService {
     }
 
     try {
-      const amountRx = /(?:USD|EUR|GBP|INR|BDT|HUF|AUD|CAD|CHF|JPY|CNY|HKD|[A-Z]{3})?\s?[$€£₹]?[\s]*\d{1,3}(?:[\s.,]\d{3})*(?:[.,]\d{2})?\s?(?:USD|EUR|GBP|INR|BDT|HUF|AUD|CAD|CHF|JPY|CNY|HKD|[A-Z]{3})?/g
-      const amountLabels = [/total/i, /amount/i, /price/i, /fare/i, /paid/i, /due/i]
+      const amountRx = AMOUNT_REGEX
+      const amountLabels = [TOTAL_LABEL_REGEX, AMOUNT_LABEL_REGEX, PRICE_LABEL_REGEX, FARE_LABEL_REGEX, PAID_LABEL_REGEX, DUE_LABEL_REGEX]
       const seenAmounts = new Set<string>()
-      let m: RegExpExecArray | null
-
-      while ((m = amountRx.exec(text)) !== null) {
+      for (const m of text.matchAll(amountRx)) {
         const val = m[0].trim()
         if (val.length < 3) continue
 
         const ctx = text.substring(Math.max(0, m.index - 40), m.index + val.length + 10)
-        const label = amountLabels.find(r => r.test(ctx))?.source.replace(/\//g, '') || 'amount'
-        const currMatch = val.match(/USD|EUR|GBP|INR|BDT|HUF|AUD|CAD|CHF|JPY|CNY|HKD|[A-Z]{3}/)
+        const label = amountLabels.find(r => r.test(ctx))?.source.replace(SLASH_REGEX, '') || 'amount'
+        const currMatch = val.match(CURRENCY_CODE_REGEX)
         const curr = (currMatch ? currMatch[0] : null) || (val.includes('$') ? 'USD' : null)
         const key = `${label}:${val}:${curr || ''}`
 
         if (!seenAmounts.has(key)) {
-          facts.amounts.push({ label, value: val.replace(/[^0-9.,]/g, ''), currency: curr })
+          facts.amounts.push({ label, value: val.replace(NON_AMOUNT_CHARACTER_REGEX, ''), currency: curr })
           seenAmounts.add(key)
         }
       }
 
       const idPatterns = [
-        /(booking|order|invoice|ticket|reference|ref|pnr|record locator)[:#]?\s*([A-Z0-9-]{5,})/gi,
-        /(package|parcel)\s+number[:#]?\s*([A-Z0-9 \-]{6,})/gi,
-        /(tracking|trace|parcel id|shipment id)[:#]?\s*([A-Z0-9-]{6,})/gi
+        BOOKING_ID_REGEX,
+        PARCEL_NUMBER_ID_REGEX,
+        TRACKING_ID_REGEX
       ]
       const seenIds = new Set<string>()
 
       for (const pattern of idPatterns) {
-        while ((m = pattern.exec(text)) !== null) {
-          const label = m[1].toLowerCase().replace(/\s+/g, '_')
-          const value = m[2].replace(/\s{2,}/g, ' ').trim()
+        for (const m of text.matchAll(pattern)) {
+          const label = m[1].toLowerCase().replace(WHITESPACE_GLOBAL_REGEX, '_')
+          const value = m[2].replace(REPEATED_WHITESPACE_REGEX, ' ').trim()
           const key = `${label}:${value}`
 
           if (!seenIds.has(key)) {
@@ -625,11 +660,11 @@ export class EmailService {
         }
       }
 
-      const isoDateRx = /\b\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}(?::\d{2})?)?\b/g
-      const humanDateRx = /(Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*,?\s+\d{1,2}\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}(?:\s+\d{1,2}:\d{2}(?:\s*[AP]M)?\s*[A-Z]{2,3})?/gi
+      const isoDateRx = ISO_DATE_REGEX
+      const humanDateRx = HUMAN_DATE_REGEX
       const seenDates = new Set<string>()
 
-      while ((m = isoDateRx.exec(text)) !== null) {
+      for (const m of text.matchAll(isoDateRx)) {
         const when = m[0]
         if (!seenDates.has(when)) {
           facts.dates.push({ label: 'date', when })
@@ -637,13 +672,13 @@ export class EmailService {
         }
       }
 
-      while ((m = humanDateRx.exec(text)) !== null) {
+      for (const m of text.matchAll(humanDateRx)) {
         const when = m[0]
         if (!seenDates.has(when)) {
           const ctx = text.substring(Math.max(0, m.index - 40), m.index + when.length + 10).toLowerCase()
-          const label = /depart|departure|flight|outbound/.test(ctx) ? 'departure'
-            : /arriv/.test(ctx) ? 'arrival'
-            : /check[- ]?in/.test(ctx) ? 'check-in'
+          const label = DEPARTURE_CONTEXT_REGEX.test(ctx) ? 'departure'
+            : ARRIVAL_CONTEXT_REGEX.test(ctx) ? 'arrival'
+            : CHECK_IN_CONTEXT_REGEX.test(ctx) ? 'check-in'
             : 'date'
 
           facts.dates.push({ label, when })
@@ -651,11 +686,11 @@ export class EmailService {
         }
       }
 
-      const emailRx = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g
-      const phoneRx = /\+?\d[\d\s\-()]{6,}\d/g
+      const emailRx = EMAIL_ADDRESS_REGEX
+      const phoneRx = PHONE_NUMBER_REGEX
       const seenContact = new Set<string>()
 
-      while ((m = emailRx.exec(text)) !== null) {
+      for (const m of text.matchAll(emailRx)) {
         const v = m[0]
         if (!seenContact.has(v)) {
           facts.contacts.push({ type: 'email', value: v })
@@ -663,7 +698,7 @@ export class EmailService {
         }
       }
 
-      while ((m = phoneRx.exec(text)) !== null) {
+      for (const m of text.matchAll(phoneRx)) {
         const v = m[0].trim()
         if (!seenContact.has(v)) {
           facts.contacts.push({ type: 'phone', value: v })
@@ -671,15 +706,15 @@ export class EmailService {
         }
       }
 
-      const actionLines = text.split(/\n+/).filter(l => /\b(pay|confirm|check[- ]?in|download|track|manage|reset|verify|complete|submit|reply)\b/i.test(l))
+      const actionLines = text.split(NEWLINES_REGEX).filter(l => ACTION_VERB_REGEX.test(l))
       facts.action_items = Array.from(new Set(actionLines.map(l => l.trim()).filter(l => l.length > 0 && l.length < 160))).slice(0, 6)
 
-      const lines = text.split(/\n+/)
+      const lines = text.split(NEWLINES_REGEX)
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i].trim()
-        if (/^(z[- ]?box|locker|pick[- ]?up point)/i.test(line)) {
+        if (LOCATION_LINE_REGEX.test(line)) {
           const next = (lines[i + 1] || '').trim()
-          const loc = [line.replace(/^z[- ]?box\s*/i, 'z-box'), next].filter(Boolean).join(', ')
+          const loc = [line.replace(Z_BOX_PREFIX_REGEX, 'z-box'), next].filter(Boolean).join(', ')
           if (loc.length > 8 && !facts.locations.includes(loc)) {
             facts.locations.push(loc)
           }
@@ -880,7 +915,7 @@ Respond with JSON matching the schema. Be precise with intent classification.`
       const bookingRef = parsed.key_details?.booking_reference || (facts.ids?.[0]?.value)
       const amount = parsed.key_details?.amount || (facts.amounts?.[0] ? `${facts.amounts[0].value} ${facts.amounts[0].currency || ''}` : null)
 
-      const badPatterns = /^(whenever|maybe|consider|possibly|if you|you could)/i
+      const badPatterns = VAGUE_ACTION_REGEX
       const actionItems = (parsed.action_items || [])
         .filter(item => item && item.length > 3 && !badPatterns.test(item.trim()))
         .slice(0, 4)

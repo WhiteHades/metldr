@@ -1,5 +1,15 @@
 import { Readability } from '@mozilla/readability';
 
+const WHITESPACE_REGEX = /\s+/;
+const DASHBOARD_PATH_REGEX = /(dashboard|admin|console|panel)/i;
+const SEARCH_PATH_REGEX = /search/i;
+const SEARCH_QUERY_REGEX = /[?&](q|query|search)=/i;
+const CART_PATH_REGEX = /(cart|checkout)/i;
+const FEED_PATH_REGEX = /(\/feed|\/rss)/i;
+const SOCIAL_HOSTNAME_REGEX = /(twitter\.com|facebook\.com|instagram\.com|tiktok\.com|linkedin\.com)/i;
+const EMAIL_HOSTNAME_REGEX = /mail\.google\.com/;
+const SYSTEM_URL_REGEX = /^chrome:|^edge:|^about:|^chrome-extension:/;
+
 export class ArticleExtractor {
   static extract() {
     const startTime = performance.now();
@@ -8,7 +18,7 @@ export class ArticleExtractor {
     const contentType = document.contentType || 'text/html';
     const body = document.body;
     const bodyText = body?.innerText || '';
-    const bodyWordCount = bodyText.split(/\s+/).filter(Boolean).length;
+    const bodyWordCount = bodyText.split(WHITESPACE_REGEX).filter(Boolean).length;
     const paragraphCount = document.querySelectorAll('p').length;
     const buttonCount = document.querySelectorAll('button').length;
     const inputCount = document.querySelectorAll('input, select, textarea').length;
@@ -25,20 +35,20 @@ export class ArticleExtractor {
     const h1Count = document.querySelectorAll('h1').length;
     const hashRouting = window.location.hash?.includes('#/');
     const path = window.location.pathname || '';
-    const isDashboard = /(dashboard|admin|console|panel)/i.test(path);
-    const isSearch = /search/i.test(path) || /[?&](q|query|search)=/i.test(window.location.search);
-    const isCart = /(cart|checkout)/i.test(path);
-    const isFeed = /(\/feed|\/rss)/i.test(path);
-    const isSocialFeed = /(twitter\.com|facebook\.com|instagram\.com|tiktok\.com|linkedin\.com)/i.test(hostname);
+    const isDashboard = DASHBOARD_PATH_REGEX.test(path);
+    const isSearch = SEARCH_PATH_REGEX.test(path) || SEARCH_QUERY_REGEX.test(window.location.search);
+    const isCart = CART_PATH_REGEX.test(path);
+    const isFeed = FEED_PATH_REGEX.test(path);
+    const isSocialFeed = SOCIAL_HOSTNAME_REGEX.test(hostname);
     const textDensity = textLength > 0 ? Math.min(1, textLength / Math.max(body?.innerHTML?.length || textLength, textLength)) : 0;
     const canvasHeavy = (canvasCount + svgCount) >= 3;
     const isSPA = hashRouting || buttonToParagraphRatio > 1.4 || formCount > paragraphCount * 0.6;
     
-    if (/mail\.google\.com/.test(hostname)) {
+    if (EMAIL_HOSTNAME_REGEX.test(hostname)) {
       return { skip: true, reason: 'email client' };
     }
     
-    if (/^chrome:|^edge:|^about:|^chrome-extension:/.test(url)) {
+    if (SYSTEM_URL_REGEX.test(url)) {
       return { skip: true, reason: 'system page' };
     }
     
@@ -73,7 +83,7 @@ export class ArticleExtractor {
       };
     }
     
-    const wordCount = article.textContent.split(/\s+/).filter(w => w).length;
+    const wordCount = article.textContent.split(WHITESPACE_REGEX).filter(w => w).length;
     const extractionTime = Math.round(performance.now() - startTime);
     
     return {

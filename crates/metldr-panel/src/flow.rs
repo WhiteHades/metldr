@@ -928,9 +928,17 @@ impl FlowClient {
             .source_status(&view)
             .await
             .unwrap_or(SourceStatus::Saved);
+        let checked_source = view
+            .source
+            .as_ref()
+            .filter(|_| matches!(status, SourceStatus::Current | SourceStatus::Changed));
         for action in &mut view.browser_actions {
             action.target_current = action.phase == crate::model::BrowserActionPhase::Pending
-                && self.inner.action_is_current(action).await.unwrap_or(false);
+                && (checked_source.is_some_and(|source| {
+                    source.tab == action.tab
+                        && source.document == action.document
+                        && source.url == action.url
+                }) || self.inner.action_is_current(action).await.unwrap_or(false));
         }
         view.source_epoch = epoch;
         let stable = epoch == self.inner.epoch.get();

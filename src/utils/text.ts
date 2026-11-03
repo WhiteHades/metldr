@@ -1,10 +1,15 @@
+const thinkPattern = /<think>[\s\S]*?<\/think>/gi
+const thinkingPattern = /<thinking>[\s\S]*?<\/thinking>/gi
+const reasonPattern = /<reason>[\s\S]*?<\/reason>/gi
+const reasoningPattern = /<reasoning>[\s\S]*?<\/reasoning>/gi
+
 export function stripThinking(text: string | null | undefined): string {
   if (!text) return ''
   return text
-    .replace(/<think>[\s\S]*?<\/think>/gi, '')
-    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
-    .replace(/<reason>[\s\S]*?<\/reason>/gi, '')
-    .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, '')
+    .replace(thinkPattern, '')
+    .replace(thinkingPattern, '')
+    .replace(reasonPattern, '')
+    .replace(reasoningPattern, '')
     .trim()
 }
 

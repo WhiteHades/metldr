@@ -12,6 +12,9 @@ import type {
   Theme 
 } from '../types'
 
+const THREAD_ID_HASH_REGEX = /#[^/]+\/(?:[^/]+\/)?([A-Za-z0-9_-]{16,})$/
+const NEWLINES_REGEX = /\n+/g
+
 export class ReplyPanel {
   private sdk: InboxSDK | null = null
   private panel: HTMLElement | null = null
@@ -516,7 +519,7 @@ export class ReplyPanel {
 
   getThreadIdFromUrl(): string | null {
     const hash = window.location.hash
-    const match = hash.match(/#[^/]+\/(?:[^/]+\/)?([A-Za-z0-9_-]{16,})$/)
+    const match = hash.match(THREAD_ID_HASH_REGEX)
     return match ? match[1] : null
   }
 
@@ -995,7 +998,7 @@ export class ReplyPanel {
 
   truncatePreview(text: string, maxLen = 60): string {
     if (!text) return ''
-    const cleaned = text.replace(/\n+/g, ' ').trim()
+    const cleaned = text.replace(NEWLINES_REGEX, ' ').trim()
     return cleaned.length > maxLen ? cleaned.substring(0, maxLen - 3) + '...' : cleaned
   }
 

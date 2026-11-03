@@ -483,7 +483,9 @@ class AnalyticsServiceClass {
 
     // domain tracking
     if (opts.url) {
-      const domain = extractDomain(opts.url)
+      const domain = this.currentSession?.url === opts.url
+        ? this.currentSession.domain ?? extractDomain(opts.url)
+        : extractDomain(opts.url)
       stats.topDomains[domain] = (stats.topDomains[domain] || 0) + 1
     }
 
@@ -954,10 +956,10 @@ class AnalyticsServiceClass {
       const cutoffMs = cutoff.getTime()
       const cutoffStr = cutoff.toISOString().split('T')[0]
 
-      const allDaily = await databaseService.getAll<DailyStats>(DB_CONFIGS.analytics, STORE_DAILY)
-      for (const day of allDaily) {
-        if (day.date < cutoffStr) {
-          await databaseService.delete(DB_CONFIGS.analytics, STORE_DAILY, day.date)
+      const dailyDates = await databaseService.getAllKeys<string>(DB_CONFIGS.analytics, STORE_DAILY)
+      for (const date of dailyDates) {
+        if (date < cutoffStr) {
+          await databaseService.delete(DB_CONFIGS.analytics, STORE_DAILY, date)
         }
       }
 

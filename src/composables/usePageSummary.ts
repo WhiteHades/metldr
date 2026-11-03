@@ -6,6 +6,13 @@ import { cacheService } from '@/services/CacheService'
 import { storageService } from '@/services/StorageService'
 import { pdfService } from '@/services/pdf/PdfService'
 
+const gmailThreadPattern = /#[^/]+\/(?:[^/]+\/)?([A-Za-z0-9_-]{16,})$/
+const summaryBulletLinePattern = /^[-•*]|^\d+\./
+const summaryBulletMarkerPattern = /^[-•*]\s*/
+const summaryNumberMarkerPattern = /^\d+\.\s*/
+const summaryWhitespacePattern = /\s+/
+
+
 const log = logger.createScoped('PageSummary')
 
 declare const Summarizer: {
@@ -43,7 +50,7 @@ const isViewingEmailThread = computed(() => {
   if (!isEmailClient.value || !currentTabUrl.value) return false
   try {
     const hash = new URL(currentTabUrl.value).hash
-    const hashMatch = hash.match(/#[^/]+\/(?:[^/]+\/)?([A-Za-z0-9_-]{16,})$/)
+    const hashMatch = hash.match(gmailThreadPattern)
     return !!hashMatch
   } catch {
     return false
@@ -99,8 +106,8 @@ const chatDisabledReason = computed(() => {
 function parseBullets(text: string): string[] {
   const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0)
   const bullets = lines
-    .filter(l => /^[-•*]|^\d+\./.test(l))
-    .map(l => l.replace(/^[-•*]\s*/, '').replace(/^\d+\.\s*/, '').trim())
+    .filter(l => summaryBulletLinePattern.test(l))
+    .map(l => l.replace(summaryBulletMarkerPattern, '').replace(summaryNumberMarkerPattern, '').trim())
     .filter(l => l.length > 10)
     .slice(0, 5)
   if (bullets.length === 0 && lines.length > 0) {
@@ -236,7 +243,7 @@ export function usePageSummary() {
           const pdfFilename = decodeURIComponent(urlParts[urlParts.length - 1] || 'PDF Document')
           const bullets = parseBullets(pdfSummary)
           const aiInfo = await getActiveAIInfo()
-          const pdfWordCount = pdfSummary.split(/\s+/).length
+          const pdfWordCount = pdfSummary.split(summaryWhitespacePattern).length
           const pdfReadTimeMin = Math.max(1, Math.round(pdfWordCount / 200))
           
           const summaryData: AppPageSummary = {
@@ -438,7 +445,7 @@ export function usePageSummary() {
       
       const bullets = parseBullets(result.summary)
       const aiInfo = await getActiveAIInfo()
-      const wordCount = result.fullText.split(/\s+/).length
+      const wordCount = result.fullText.split(summaryWhitespacePattern).length
       const readTimeMin = Math.max(1, Math.round(wordCount / 200)) // ~200 wpm avg reading speed
       
       const summaryData: AppPageSummary = {

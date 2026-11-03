@@ -5,6 +5,10 @@ import { chunkingService } from './ChunkingService'
 import { embeddingProvider } from './EmbeddingProvider'
 import { localModels } from '../ai/LocalModelProvider'
 
+const punctuationPattern = /[^\w\s]/g
+const tokenWhitespacePattern = /\s+/
+
+
 interface SessionChunk {
   id: string
   text: string
@@ -53,8 +57,8 @@ class SessionInvertedIndex {
 
   private tokenize(text: string): string[] {
     return text.toLowerCase()
-      .replace(/[^\w\s]/g, ' ')
-      .split(/\s+/)
+      .replace(punctuationPattern, ' ')
+      .split(tokenWhitespacePattern)
       .filter(t => t.length > 2)
   }
 }

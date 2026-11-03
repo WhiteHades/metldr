@@ -1,6 +1,10 @@
 import { AnswerEventKind, AnswerFailureKind, DomEventKind, DomMutationKind, TaskEventKind, type DomSession, type GuestSession } from "../../crates/metldr-answer-codec/pkg/answer_codec.js";
 import workerSource from "./answer-worker-entry.ts?worker-source";
 
+const attributeHyphenPattern = /-([a-z])/g;
+const attributeUppercasePattern = /[A-Z]/g;
+
+
 type Work = { kind: "document" | "consume" } | { kind: "functions" | "expression"; code: string }
   | { kind: "event"; node: number; event: DomEventKind; encoded: string };
 type Job = { work: Work; resolve(): void; reject(error: Error): void };
@@ -38,7 +42,7 @@ export class AnswerProjection {
       disabled: "disabled" in element && typeof element.disabled === "boolean" ? element.disabled : undefined,
       dataset: Object.fromEntries(Array.from(element.attributes)
         .filter(attribute => attribute.name.startsWith("data-"))
-        .map(attribute => [attribute.name.slice(5).replace(/-([a-z])/g, (_, letter: string) => letter.toUpperCase()), attribute.value])),
+        .map(attribute => [attribute.name.slice(5).replace(attributeHyphenPattern, (_, letter: string) => letter.toUpperCase()), attribute.value])),
     }));
     this.dom = options.session.mount_dom(Uint32Array.from(nodes.map(node => node.parent)));
     this.url = URL.createObjectURL(new Blob([workerSource], { type: "text/javascript" }));
@@ -176,7 +180,7 @@ export class AnswerProjection {
                 if (!("disabled" in element) || typeof element.disabled !== "boolean") throw new Error("Answer element cannot be disabled.");
                 element.disabled = operation.disabled(); break;
               case DomMutationKind.SetDataset:
-                element.setAttribute(`data-${operation.key().replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`)}`, operation.text()); break;
+                element.setAttribute(`data-${operation.key().replace(attributeUppercasePattern, letter => `-${letter.toLowerCase()}`)}`, operation.text()); break;
               case DomMutationKind.Listen: this.listen(element, node, operation.event_kind()); break;
               default: { const exhaustive: never = kind; throw new Error(String(exhaustive)); }
             }

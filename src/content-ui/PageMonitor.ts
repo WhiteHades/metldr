@@ -1,5 +1,16 @@
 import type { PageInfo, ExtractedContent, PreSummarizeData, PreSummarizeCallback } from '../types'
 
+const DOMAIN_CHECKS = [
+  { pattern: /mail\.google\.com/, type: 'email', confidence: 1.0 },
+  { pattern: /(docs?\.| documentation|developer\.|api\.|guide\.)/, type: 'documentation', confidence: 0.9 },
+  { pattern: /(reddit\.com|news\.ycombinator\.com|stackoverflow\.com)/, type: 'forum', confidence: 0.95 },
+  { pattern: /(arxiv\.org|\.edu|scholar\.google)/, type: 'academic', confidence: 0.9 },
+  { pattern: /(medium\.com|substack\.com|dev\.to|hashnode)/, type: 'article', confidence: 0.85 },
+  { pattern: /github\.com.*\/(readme|blob|tree)/, type: 'documentation', confidence: 0.8 },
+  { pattern: /wikipedia\.org/, type: 'encyclopedia', confidence: 1.0 }
+]
+const WHITESPACE_REGEX = /\s+/
+
 export class PageMonitor {
   private pageType = 'unknown'
   private confidence = 0
@@ -25,17 +36,7 @@ export class PageMonitor {
     const hostname = window.location.hostname
     const doc = document
 
-    const domainChecks = [
-      { pattern: /mail\.google\.com/, type: 'email', confidence: 1.0 },
-      { pattern: /(docs?\.| documentation|developer\.|api\.|guide\.)/, type: 'documentation', confidence: 0.9 },
-      { pattern: /(reddit\.com|news\.ycombinator\.com|stackoverflow\.com)/, type: 'forum', confidence: 0.95 },
-      { pattern: /(arxiv\.org|\.edu|scholar\.google)/, type: 'academic', confidence: 0.9 },
-      { pattern: /(medium\.com|substack\.com|dev\.to|hashnode)/, type: 'article', confidence: 0.85 },
-      { pattern: /github\.com.*\/(readme|blob|tree)/, type: 'documentation', confidence: 0.8 },
-      { pattern: /wikipedia\.org/, type: 'encyclopedia', confidence: 1.0 }
-    ]
-
-    for (const check of domainChecks) {
+    for (const check of DOMAIN_CHECKS) {
       if (check.pattern.test(hostname) || check.pattern.test(url)) {
         this.pageType = check.type
         this.confidence = check.confidence
@@ -70,7 +71,7 @@ export class PageMonitor {
     
     const minWords = 100
     const textContent = (main || document.body).textContent || ''
-    const wordCount = textContent.split(/\s+/).length
+    const wordCount = textContent.split(WHITESPACE_REGEX).length
     
     return wordCount >= minWords
   }

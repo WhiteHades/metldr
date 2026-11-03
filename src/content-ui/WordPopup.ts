@@ -2,6 +2,11 @@ import { gsap } from 'gsap'
 import { UIService } from './UIService'
 import type { ContextData, LookupResponse, Definition } from '../types'
 
+const LANGUAGE_SUBDOMAIN_REGEX = /^([a-z]{2})\./
+const WHITESPACE_REGEX = /\s/
+const VALID_WORD_REGEX = /^[\p{L}\p{M}'-]+$/u
+const SENTENCE_END_REGEX = /[.!?\n]/
+
 export class WordPopup {
   private container: HTMLElement | null = null
   private anchorRange: Range | null = null
@@ -28,7 +33,7 @@ export class WordPopup {
     if (htmlLang && htmlLang.length === 2) return htmlLang
     
     const hostname = window.location.hostname
-    const subdomainMatch = hostname.match(/^([a-z]{2})\./)
+    const subdomainMatch = hostname.match(LANGUAGE_SUBDOMAIN_REGEX)
     if (subdomainMatch) return subdomainMatch[1]
     
     return undefined
@@ -76,10 +81,10 @@ export class WordPopup {
     if (!selectedText) return
 
 
-    const hasSpaces = /\s/.test(selectedText)
+    const hasSpaces = WHITESPACE_REGEX.test(selectedText)
     const isTooLong = selectedText.length > 30
     const isTooShort = selectedText.length < 2
-    const isValidWord = /^[\p{L}\p{M}'-]+$/u.test(selectedText)
+    const isValidWord = VALID_WORD_REGEX.test(selectedText)
     
     if (hasSpaces || isTooLong || isTooShort || !isValidWord) {
       return
@@ -94,19 +99,18 @@ export class WordPopup {
       const fullText = node.textContent || ''
       const offset = range.startOffset
 
-      const sentenceEndChars = /[.!?\n]/
       let sentenceStart = 0
       let sentenceEnd = fullText.length
 
       for (let i = offset; i >= 0; i--) {
-        if (sentenceEndChars.test(fullText[i]) || i === 0) {
+        if (SENTENCE_END_REGEX.test(fullText[i]) || i === 0) {
           sentenceStart = i === 0 ? 0 : i + 1
           break
         }
       }
 
       for (let i = offset + selectedText.length; i < fullText.length; i++) {
-        if (sentenceEndChars.test(fullText[i])) {
+        if (SENTENCE_END_REGEX.test(fullText[i])) {
           sentenceEnd = i + 1
           break
         }

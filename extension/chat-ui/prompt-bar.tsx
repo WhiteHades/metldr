@@ -25,6 +25,10 @@ import { createShader, playSweep, accentChain, ACCENTS } from "glimm";
 import type { UiDestination } from "../../crates/metldr-panel/pkg/metldr_panel.js";
 import "./prompt-bar.css";
 
+const mentionInputPattern = /(^|\s)([@/])([\w-]*)$/;
+const mentionSuffixPattern = /(^|\s)[@/][\w-]*$/;
+
+
 export type PromptChoice = Pick<UiDestination, "value" | "label" | "enabled" | "supports_plan">;
 type CodexMode = "configured" | "plan";
 const codexModes: readonly CodexMode[] = ["configured", "plan"];
@@ -92,7 +96,7 @@ export default function PromptBar({ draft, onDraftChange, choices, selection, on
   const [dismissed, setDismissed] = useState(false);
   const [engaged, setEngaged] = useState(false);
   const [modelHovered, setModelHovered] = useState<string | null>(null);
-  const token = dismissed ? null : /(^|\s)([@/])([\w-]*)$/.exec(draft);
+  const token = dismissed ? null : mentionInputPattern.exec(draft);
   const commandMenu = token?.[2] === "/";
   const query = token?.[3]?.toLowerCase() ?? "";
   const pageMatches = !commandMenu && "current page".includes(query);
@@ -229,7 +233,7 @@ export default function PromptBar({ draft, onDraftChange, choices, selection, on
             onChange={event => {
               onDraftChange(event.target.value);
               setDismissed(false);
-              if (!/(^|\s)[@/][\w-]*$/.test(event.target.value)) sourceMenu.current?.hidePopover();
+              if (!mentionSuffixPattern.test(event.target.value)) sourceMenu.current?.hidePopover();
             }}
             onKeyDown={event => {
               if (event.nativeEvent.isComposing) return;
