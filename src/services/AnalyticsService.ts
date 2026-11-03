@@ -631,9 +631,11 @@ class AnalyticsServiceClass {
 
   async getAnalyticsSummary(days = 30): Promise<AnalyticsSummary> {
     try {
-      const allDaily = await databaseService.getAll<DailyStats>(DB_CONFIGS.analytics, STORE_DAILY)
-      const allSessions = await databaseService.getAll<SessionRecord>(DB_CONFIGS.analytics, STORE_SESSIONS)
-      const allEvents = await databaseService.getAll<AnalyticsEvent>(DB_CONFIGS.analytics, STORE_EVENTS)
+      const [allDaily, allSessions, allEvents] = await Promise.all([
+        databaseService.getAll<DailyStats>(DB_CONFIGS.analytics, STORE_DAILY),
+        databaseService.getAll<SessionRecord>(DB_CONFIGS.analytics, STORE_SESSIONS),
+        databaseService.getAll<AnalyticsEvent>(DB_CONFIGS.analytics, STORE_EVENTS)
+      ])
 
       // filter to requested days
       const cutoff = new Date()

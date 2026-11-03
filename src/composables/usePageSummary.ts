@@ -61,8 +61,10 @@ const isLocalPdfPending = computed(() => {
 // get active AI provider and model from storage (same pattern as useSettings)
 async function getActiveAIInfo(): Promise<{ provider: 'chrome-ai' | 'ollama', model: string }> {
   try {
-    const provider = await storageService.get<'chrome-ai' | 'ollama'>('preferredProvider', 'chrome-ai')
-    const selectedModel = await storageService.get<string>('selectedModel', 'llama3.2')
+    const [provider, selectedModel] = await Promise.all([
+      storageService.get<'chrome-ai' | 'ollama'>('preferredProvider', 'chrome-ai'),
+      storageService.get<string>('selectedModel', 'llama3.2')
+    ])
     const model = provider === 'chrome-ai' ? 'gemini-nano' : selectedModel
     return { provider, model }
   } catch {
