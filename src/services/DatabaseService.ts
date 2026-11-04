@@ -205,14 +205,14 @@ class DatabaseServiceClass {
     })
   }
 
-  async count(config: DatabaseConfig, storeName: string): Promise<number> {
+  async count(config: DatabaseConfig, storeName: string, query?: IDBValidKey | IDBKeyRange): Promise<number> {
     const db = await this.getDatabase(config)
 
     return new Promise((resolve) => {
       try {
         const tx = db.transaction([storeName], 'readonly')
         const store = tx.objectStore(storeName)
-        const request = store.count()
+        const request = store.count(query)
 
         request.onsuccess = () => resolve(request.result)
         request.onerror = () => resolve(0)

@@ -218,12 +218,10 @@ export class VectorStore {
       return true
     }
     
-    // fallback: check IDB for all source types
-    for (const type of ['article', 'pdf', 'email']) {
-      const doc = await databaseService.get<any>(DB_CONFIGS.cache, 'page_cache', `rag:${type}:${sourceId}:chunk:0`)
-      if (doc) return true
-    }
-    return false
+    const counts = await Promise.all(['article', 'pdf', 'email'].map(type =>
+      databaseService.count(DB_CONFIGS.cache, 'page_cache', `rag:${type}:${sourceId}:chunk:0`)
+    ))
+    return counts.some(count => count > 0)
   }
 
   // get doc count for verification
@@ -237,18 +235,15 @@ export class VectorStore {
     const db = await databaseService.getDatabase(DB_CONFIGS.cache)
     const tx = db.transaction('page_cache', 'readonly')
     const store = tx.objectStore('page_cache')
-    const cursorRequest = store.openCursor()
+    const cursorRequest = store.openCursor(IDBKeyRange.bound('rag:', 'rag;', false, true))
 
     return new Promise<void>((resolve) => {
       let count = 0
-      cursorRequest.onsuccess = (e) => {
-        const cursor = (e.target as IDBRequest).result as IDBCursorWithValue
+      cursorRequest.onsuccess = () => {
+        const cursor = cursorRequest.result
         if (cursor) {
-          const val = cursor.value
-          if (typeof val.url === 'string' && val.url.startsWith('rag:')) {
-            this.invertedIndex.add(val as VectorEntry)
-            count++
-          }
+          this.invertedIndex.add(cursor.value)
+          count++
           cursor.continue()
         } else {
           console.log(`[VectorStore] Inverted index rebuilt with ${count} documents.`)
