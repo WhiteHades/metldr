@@ -86,7 +86,14 @@ pub(super) fn audit(read: &redb::ReadTransaction, profile: &Profile) -> Result<(
     let runs = read.open_table(RUNS)?;
     let conversations = read.open_table(CONVERSATIONS)?;
     let launches = read.open_table(LAUNCHES)?;
-    audit_tables(profile, &artifacts, &runs, &conversations, &launches)
+    audit_tables(
+        profile,
+        &artifacts,
+        &runs,
+        &conversations,
+        &launches,
+        &read.open_table(super::summary::RUN_HEADERS)?,
+    )
 }
 
 pub(super) fn audit_tables(
@@ -95,7 +102,12 @@ pub(super) fn audit_tables(
     runs: &impl ReadableTable<&'static str, &'static [u8]>,
     conversations: &impl ReadableTable<&'static str, &'static [u8]>,
     launches: &impl ReadableTable<&'static str, &'static [u8]>,
+    headers: &impl ReadableTable<&'static str, super::summary::RunFields<'static>>,
 ) -> Result<()> {
+    let prefix = format!("{}:", profile.store);
+    if headers.len()? != runs.len()? {
+        return Err("saved run header count differs".into());
+    }
     for row in artifacts.iter()? {
         let (key, bytes) = row?;
         let id = key.value();
@@ -154,6 +166,12 @@ pub(super) fn audit_tables(
         if run.value.id != run_id || run.revision == 0 {
             return Err("saved run identity differs".into());
         }
+        run.value.validate(|id| {
+            id.strip_prefix(&prefix)
+                .and_then(|value| value.parse::<u64>().ok())
+                .is_some_and(|number| number > 0 && number < profile.next)
+        })?;
+        super::summary::audit_run(headers, run_id, &run)?;
         let refs = artifact_refs(&run.value);
         if refs.len() > 4 {
             return Err("run exceeds artifact reference limit".into());

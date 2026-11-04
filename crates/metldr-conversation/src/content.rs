@@ -87,16 +87,20 @@ impl Content {
     pub fn text(&self) -> Cow<'_, str> {
         match &self.0 {
             ContentKind::Flat(text) => Cow::Borrowed(text),
-            ContentKind::Native(entries) => Cow::Owned(
-                entries
-                    .iter()
-                    .filter_map(|entry| match entry {
-                        Entry::Message { text, .. } => Some(text.as_str()),
-                        Entry::Tool { .. } | Entry::Artifact { .. } => None,
-                    })
-                    .collect(),
-            ),
+            ContentKind::Native(_) => Cow::Owned(self.text_parts().collect()),
         }
+    }
+
+    pub fn text_parts(&self) -> impl Iterator<Item = &str> {
+        let (flat, entries): (Option<&str>, &[Entry]) = match &self.0 {
+            ContentKind::Flat(text) => (Some(text), &[]),
+            ContentKind::Native(entries) => (None, entries),
+        };
+        flat.into_iter()
+            .chain(entries.iter().filter_map(|entry| match entry {
+                Entry::Message { text, .. } => Some(text.as_str()),
+                Entry::Tool { .. } | Entry::Artifact { .. } => None,
+            }))
     }
 
     pub fn len(&self) -> usize {

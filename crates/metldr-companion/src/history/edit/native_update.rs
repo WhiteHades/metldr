@@ -97,16 +97,15 @@ impl Edit<'_> {
             }
             storage(|| {
                 if run_changed {
-                    self.write.open_table(RUNS)?.insert(
-                        task.run.id.as_str(),
-                        encode(&Record {
+                    super::super::summary::put_run(
+                        self.write,
+                        &Record {
                             conversation: scope.conversation.clone(),
                             revision: before.versions[0]
                                 .checked_add(1)
                                 .ok_or("native run revision exhausted")?,
                             value: &task.run,
-                        })?
-                        .as_slice(),
+                        },
                     )?;
                 }
                 if launch_changed {

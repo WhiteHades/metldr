@@ -121,12 +121,7 @@ impl Edit<'_> {
                         source: source.clone(),
                     },
                 };
-                if self
-                    .write
-                    .open_table(SOURCES)?
-                    .insert(source.id.as_str(), encode(&record)?.as_slice())?
-                    .is_some()
-                {
+                if super::super::summary::put_source(self.write, &source.id, &record)? {
                     return Err("new source collides with saved history".into());
                 }
                 self.write.open_table(CONVERSATIONS)?.insert(

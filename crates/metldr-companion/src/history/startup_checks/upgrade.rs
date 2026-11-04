@@ -177,7 +177,7 @@ fn actual_old_private_host_upgrades_and_cannot_reopen_new_history() -> Result<()
     let old_format = initial["profile"]["format"]
         .as_u64()
         .ok_or("old format absent")?;
-    assert!(matches!(old_format, 10..=17));
+    assert!(matches!(old_format, 10..=18));
     if let Some(expected) = std::env::var_os("METLDR_HISTORY_EXPECT_FORMAT") {
         let expected = expected
             .to_str()
@@ -192,6 +192,7 @@ fn actual_old_private_host_upgrades_and_cannot_reopen_new_history() -> Result<()
             15 => 16,
             16 => 17,
             17 => 18,
+            18 => 19,
             format => format,
         }
     );
@@ -413,6 +414,16 @@ fn actual_old_private_host_upgrades_and_cannot_reopen_new_history() -> Result<()
     {
         let db = redb::Database::open(directory.0.join("history.redb"))?;
         assert_eq!(db.begin_read()?.open_table(NATIVE_CHOICES)?.len()?, 3);
+        let read = db.begin_read()?;
+        assert_eq!(
+            read.open_table(super::super::summary::RUN_HEADERS)?.len()?,
+            read.open_table(RUNS)?.len()?
+        );
+        assert_eq!(
+            read.open_table(super::super::summary::SOURCE_HEADERS)?
+                .len()?,
+            read.open_table(SOURCES)?.len()?
+        );
         if old_format == 15 {
             assert_eq!(db.begin_read()?.open_table(ARTIFACTS)?.len()?, 0);
         }

@@ -1,4 +1,4 @@
-use super::{Edit, Selection, record, storage};
+use super::{Edit, Selection, storage};
 use crate::{
     Result,
     browser_action::Action,
@@ -47,6 +47,39 @@ pub(crate) struct Observed<T> {
 }
 
 impl Edit<'_> {
+    pub(super) fn saved_run_header(
+        &self,
+        id: &str,
+    ) -> Result<Option<super::super::summary::RunHeader>> {
+        storage(|| {
+            let header = super::super::summary::run(self.write, id)?;
+            if let Some(header) = &header {
+                if !self.valid_id(id) || !self.valid_id(&header.source) {
+                    return Err("saved run header identity differs".into());
+                }
+                let number = id
+                    .rsplit(':')
+                    .next()
+                    .ok_or("invalid saved run identity")?
+                    .parse::<u64>()?;
+                if self
+                    .write
+                    .open_table(RUN_ORDER)?
+                    .get((header.conversation.as_str(), number))?
+                    .is_none_or(|saved| saved.value() != id)
+                {
+                    return Err("saved run order differs".into());
+                }
+                if self.write.open_table(ACTIVE_RUNS)?.get(id)?.is_some()
+                    == header.status.terminal()
+                {
+                    return Err("saved active run index differs".into());
+                }
+            }
+            Ok(header)
+        })
+    }
+
     pub(crate) fn sequence(&self) -> Result<Counter> {
         self.checked(
             self.profile
@@ -95,7 +128,7 @@ impl Edit<'_> {
                     break;
                 }
                 let saved = storage(|| {
-                    self.saved_run(&id)?
+                    self.saved_run_header(&id)?
                         .ok_or_else(|| "listed run is absent".into())
                 })?;
                 storage(|| {
@@ -110,16 +143,18 @@ impl Edit<'_> {
                     }
                     Ok(())
                 })?;
-                let run = saved.value;
+                let run = saved;
                 page.runs.push(RunSummary {
-                    id: run.id,
-                    source_available: self.source(&run.source)?.is_some(),
+                    id,
+                    source_available: storage(|| {
+                        super::super::summary::source(self.write, &scope.conversation, &run.source)
+                    })?,
                     source: run.source,
-                    revision: Counter(saved.revision),
+                    revision: Counter(run.revision),
                     kind: run.kind,
                     status: run.status,
-                    question: run.question.as_deref().map(|text| Preview::text(text, 256)),
-                    output: Preview::text(&run.output.text(), 512),
+                    question: run.question,
+                    output: run.output,
                 });
                 page.next = Some(Cursor {
                     anchor: Counter(anchor),
@@ -173,12 +208,10 @@ impl Edit<'_> {
     ) -> Result<Observed<Option<Source>>> {
         self.checked((|| {
             self.require_selection(scope)?;
-            let value = self.source(id)?;
-            let saved: Record<Provenance> =
-                record(self.write, SOURCES, id)?.ok_or("source is absent")?;
+            let saved = self.source_record_in(&scope.conversation, id)?;
             Ok(Observed {
                 revision: Counter(saved.revision),
-                value,
+                value: saved.value,
             })
         })())
     }

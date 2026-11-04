@@ -5,7 +5,7 @@ use crate::{
     model::{Run, Status},
 };
 use metldr_history_pages::{Assembler, Counter, DocumentKind, Identity, Snapshot};
-use redb::{ReadableDatabase, ReadableTableMetadata};
+use redb::{ReadableDatabase, ReadableTable, ReadableTableMetadata};
 use std::{
     fs,
     path::PathBuf,
@@ -412,5 +412,82 @@ fn escaped_pages(history: &mut History, selection: &super::Selection) -> Result<
         .is_err()
     );
     assert_eq!(serde_json::to_value(profile(history)?)?, before);
+    Ok(())
+}
+
+#[test]
+fn history_metadata_backfill_is_atomic_and_checked_on_reopen() -> Result<()> {
+    for corrupt in [false, true] {
+        let directory = Directory::new();
+        let disk = crate::store::Disk::lock(directory.0.clone())?;
+        let path = directory.0.join("history.redb");
+        let mut legacy = fixture::legacy();
+        crate::recovery::interrupt(&mut legacy)?;
+        let mut history = History::import_new(&path, &serde_json::to_vec(&legacy)?, disk.lease())?;
+        let selection = history.selection()?;
+        let expected =
+            serde_json::to_value(history.edit(|edit| edit.runs_page(&selection, None))?)?;
+        let id = legacy
+            .view
+            .runs
+            .iter()
+            .filter(|run| run.kind != "agent")
+            .max_by(|a, b| a.id.cmp(&b.id))
+            .ok_or("flat fixture run is absent")?
+            .id
+            .clone();
+        {
+            let write = history.db.begin_write()?;
+            assert!(write.delete_table(super::summary::RUN_HEADERS)?);
+            assert!(write.delete_table(super::summary::SOURCE_HEADERS)?);
+            let mut meta = write.open_table(META)?;
+            let mut saved: Profile = decode(meta.get("profile")?.unwrap().value())?;
+            saved.format = 18;
+            meta.insert("profile", encode(&saved)?.as_slice())?;
+            drop(meta);
+            if corrupt {
+                write
+                    .open_table(RUNS)?
+                    .insert(id.as_str(), b"invalid".as_slice())?;
+            }
+            write.commit()?;
+        }
+        drop(history);
+        if corrupt {
+            assert!(History::open(&path, disk.lease()).is_err());
+            let db = redb::Database::open(&path)?;
+            let read = db.begin_read()?;
+            let saved: Profile = decode(read.open_table(META)?.get("profile")?.unwrap().value())?;
+            assert_eq!(saved.format, 18);
+            assert!(read.open_table(super::summary::RUN_HEADERS).is_err());
+            assert!(read.open_table(super::summary::SOURCE_HEADERS).is_err());
+            continue;
+        }
+        let mut history = History::open(&path, disk.lease())?;
+        assert_eq!(profile(&history)?.format, FORMAT);
+        assert_eq!(
+            serde_json::to_value(history.edit(|edit| edit.runs_page(&selection, None))?)?,
+            expected
+        );
+        let read = history.db.begin_read()?;
+        assert_eq!(
+            read.open_table(super::summary::RUN_HEADERS)?.len()?,
+            read.open_table(RUNS)?.len()?
+        );
+        assert_eq!(
+            read.open_table(super::summary::SOURCE_HEADERS)?.len()?,
+            read.open_table(SOURCES)?.len()?
+        );
+        drop(read);
+        {
+            let write = history.db.begin_write()?;
+            write
+                .open_table(super::summary::RUN_HEADERS)?
+                .remove(id.as_str())?;
+            write.commit()?;
+        }
+        drop(history);
+        assert!(History::open(&path, disk.lease()).is_err());
+    }
     Ok(())
 }
