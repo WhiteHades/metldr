@@ -1,9 +1,6 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import {
-  Bar as RechartsBar, BarChart as RechartsBarChart, XAxis, YAxis, Tooltip,
-  ResponsiveContainer, Pie as RechartsPie, PieChart as RechartsPieChart,
-} from "recharts";
+import { useEffect, useRef, useState } from "react";
 import { z } from "zod";
+import type { ChartPlot } from "./chart-plot";
 import type { UiBridge } from "../../crates/metldr-panel/pkg/metldr_panel.js";
 import "./chart.css";
 
@@ -14,21 +11,12 @@ const Chart = z.object({
 }).strict().refine(chart => chart.kind !== "pie" || chart.data.every(({ value }) => value >= 0));
 const ChartResult = z.object({ chart: Chart, source: z.string().min(1).max(80) }).strict();
 const Export = z.object({ filename: z.string().min(1), html: z.string() }).strict();
-type ChartValue = z.infer<typeof Chart>;
+export type ChartValue = z.infer<typeof Chart>;
 type Reference = z.infer<typeof ChartReference>;
 type Reader = (reference: Reference) => Promise<string>;
 type ExportValue = z.infer<typeof Export>;
 type Exporter = (reference: Reference) => Promise<ExportValue>;
-type SavedResult = { kind: "ready"; chart: ChartValue; source: string } | { kind: "failed" };
-
-const colors = ["#3b82f6", "#8b5cf6", "#ec4899", "#f59e0b", "#10b981", "#06b6d4", "#f97316"];
-const subscribeMotion = (notify: () => void) => {
-  const query = matchMedia("(prefers-reduced-motion: reduce)");
-  query.addEventListener("change", notify);
-  return () => query.removeEventListener("change", notify);
-};
-const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
-const serverMotion = () => false;
+type SavedResult = { kind: "ready"; chart: ChartValue; source: string; Plot: typeof ChartPlot } | { kind: "failed" };
 
 export function SavedChart({ reference, read, exportHtml }: { reference: Reference; read: Reader; exportHtml: Exporter }) {
   const [attempt, setAttempt] = useState(0);
@@ -37,10 +25,10 @@ export function SavedChart({ reference, read, exportHtml }: { reference: Referen
   useEffect(() => {
     let live = true;
     const current = { runId, artifactId };
-    void Promise.resolve().then(() => read(current)).then(encoded => {
+    void Promise.all([Promise.resolve().then(() => read(current)), import("./chart-plot")]).then(([encoded, { ChartPlot }]) => {
       if (!live) return;
       const parsed = ChartResult.parse(JSON.parse(encoded));
-      if (live) setSaved({ reference: current, read, attempt, result: { kind: "ready", chart: parsed.chart, source: parsed.source } });
+      if (live) setSaved({ reference: current, read, attempt, result: { kind: "ready", chart: parsed.chart, source: parsed.source, Plot: ChartPlot } });
     }).catch(() => {
       if (live) setSaved({ reference: current, read, attempt, result: { kind: "failed" } });
     });
@@ -49,17 +37,16 @@ export function SavedChart({ reference, read, exportHtml }: { reference: Referen
   const current = saved?.reference.runId === runId && saved.reference.artifactId === artifactId && saved.read === read && saved.attempt === attempt ? saved.result : undefined;
   if (!current) return <p role="status">Loading chart</p>;
   if (current.kind === "failed") return <><p role="alert">The saved chart could not be loaded.</p><button className="metldr-chart-retry" type="button" onClick={() => setAttempt(value => value + 1)}>Retry loading chart</button></>;
-  return <ChartView key={`${runId}:${artifactId}:${attempt}`} chart={current.chart} source={current.source} reference={reference} exportHtml={exportHtml} />;
+  return <ChartView key={`${runId}:${artifactId}:${attempt}`} chart={current.chart} source={current.source} reference={reference} exportHtml={exportHtml} Plot={current.Plot} />;
 }
 
-function ChartView({ chart, source, reference, exportHtml }: { chart: ChartValue; source: string; reference: Reference; exportHtml: Exporter }) {
+function ChartView({ chart, source, reference, exportHtml, Plot }: { chart: ChartValue; source: string; reference: Reference; exportHtml: Exporter; Plot: typeof ChartPlot }) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState("");
   const menu = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const lifetime = useRef<object | null>(null);
-  const animate = !useSyncExternalStore(subscribeMotion, reducedMotion, serverMotion);
   useEffect(() => {
     lifetime.current = {};
     return () => { lifetime.current = null; };
@@ -103,21 +90,7 @@ function ChartView({ chart, source, reference, exportHtml }: { chart: ChartValue
   return <div className="metldr-chart-wrap" data-kind={chart.kind}>
     <section className="metldr-chart" aria-labelledby={`chart-${reference.artifactId}`}>
       <div className="metldr-chart-head"><h3 id={`chart-${reference.artifactId}`}>{chart.title}</h3><p>{chart.description}</p></div>
-      <div className="metldr-chart-plot">
-        {chart.data.length === 0 ? <p className="metldr-chart-empty">No data available</p> : chart.kind === "bar" ? <ResponsiveContainer width="100%" height={300}>
-          <RechartsBarChart data={chart.data.map((entry, index) => ({ ...entry, fill: colors[index % colors.length] }))} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
-            <XAxis dataKey="label" tick={{ fontSize: 12 }} stroke="var(--ink-2)" /><YAxis tick={{ fontSize: 12 }} stroke="var(--ink-2)" />
-            <Tooltip itemStyle={{ color: "var(--ink)" }} labelStyle={{ color: "var(--ink)" }} contentStyle={{ backgroundColor: "var(--surface)", border: "1px solid var(--line)", borderRadius: 8, paddingBlock: 8, paddingInline: 12, color: "var(--ink)" }} />
-            <RechartsBar dataKey="value" radius={[4, 4, 0, 0]} isAnimationActive={animate} animationDuration={800} animationEasing="ease-out" />
-          </RechartsBarChart>
-        </ResponsiveContainer> : <>
-          <ResponsiveContainer width="100%" height={300}><RechartsPieChart>
-            <RechartsPie data={chart.data.map((entry, index) => ({ ...entry, fill: colors[index % colors.length] }))} dataKey="value" nameKey="label" cx="50%" cy="50%" outerRadius={100} isAnimationActive={animate} animationDuration={800} animationEasing="ease-out" animationBegin={200} />
-            <Tooltip itemStyle={{ color: "var(--ink)" }} labelStyle={{ color: "var(--ink)" }} contentStyle={{ backgroundColor: "var(--surface)", border: "1px solid var(--line)", borderRadius: 8, paddingBlock: 8, paddingInline: 12, color: "var(--ink)" }} />
-          </RechartsPieChart></ResponsiveContainer>
-          <div className="metldr-chart-legend">{chart.data.map((item, index) => <div key={index}><span style={{ backgroundColor: colors[index % colors.length] }} /><span>{item.label}</span></div>)}</div>
-        </>}
-      </div>
+      <Plot chart={chart} />
       {chart.data.length > 0 && <details className="metldr-chart-data">
         <summary>View chart data</summary>
         <table><thead><tr><th scope="col">Label</th><th scope="col">Value</th></tr></thead><tbody>{chart.data.map((item, index) => <tr key={index}><th scope="row">{item.label}</th><td>{item.value}</td></tr>)}</tbody></table>
