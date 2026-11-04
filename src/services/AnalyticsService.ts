@@ -376,11 +376,13 @@ class AnalyticsServiceClass {
       summaryGenerated: false
     }
 
-    await Promise.all([
-      this.logEvent('session_start', { context, tab, url, domain }),
-      this.logEvent('panel_opened', { url }),
-      domain ? this.trackDomain(domain) : undefined
-    ])
+    await this.logEvent('session_start', { context, tab, url, domain })
+    await this.logEvent('panel_opened', { url })
+
+    // track domain
+    if (domain) {
+      await this.trackDomain(domain)
+    }
 
     // start timer for time tracking
     this.lastTickTime = Date.now()
