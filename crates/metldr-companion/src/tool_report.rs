@@ -13,12 +13,35 @@ pub(super) struct Preview {
 
 impl Preview {
     pub fn text(text: &str, limit: usize) -> Self {
-        let mut preview = Self {
-            text: text.into(),
+        let mut end = limit.min(text.len());
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        Self {
+            text: text[..end].into(),
+            truncated: end < text.len(),
+        }
+    }
+
+    pub fn parts<'a>(parts: impl IntoIterator<Item = &'a str>, limit: usize) -> Self {
+        let mut text = String::new();
+        for part in parts {
+            let mut end = (limit - text.len()).min(part.len());
+            while !part.is_char_boundary(end) {
+                end -= 1;
+            }
+            text.push_str(&part[..end]);
+            if end < part.len() {
+                return Self {
+                    text,
+                    truncated: true,
+                };
+            }
+        }
+        Self {
+            text,
             truncated: false,
-        };
-        preview.limit(limit);
-        preview
+        }
     }
 
     pub fn input(value: &Value) -> Self {
@@ -424,6 +447,15 @@ mod tests {
         let preview = Preview::text("éé", 3);
         assert_eq!(preview.text, "é");
         assert!(preview.truncated);
+        for limit in 0..=10 {
+            assert_eq!(
+                Preview::parts(["", "é", "🌱", "x", ""], limit),
+                Preview::text("é🌱x", limit)
+            );
+        }
+        let bounded =
+            std::iter::once("long").chain(std::iter::once_with(|| panic!("read beyond preview")));
+        assert_eq!(Preview::parts(bounded, 2).text, "lo");
         assert!(Call::new("bad\nidentity").is_err());
         assert_eq!(
             Preview::pi_result(&json!({"content":[{"type":"text","text":"FILE_ONLY_73"}]}))

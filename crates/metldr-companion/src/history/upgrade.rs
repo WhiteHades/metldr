@@ -24,7 +24,7 @@ pub(super) fn run(db: &Database) -> Result<()> {
     )?;
     match profile.format {
         FORMAT => return Ok(()),
-        10..=17 => (),
+        10..=18 => (),
         _ => return Err("unsupported history profile format".into()),
     }
     require_base_tables(&read)?;
@@ -83,7 +83,7 @@ pub(super) fn run(db: &Database) -> Result<()> {
         )?;
         match profile.format {
             FORMAT => return Ok(()),
-            10..=17 => (),
+            10..=18 => (),
             _ => return Err("unsupported history profile format".into()),
         }
         let format = profile.format;
@@ -187,6 +187,7 @@ pub(super) fn run(db: &Database) -> Result<()> {
                 });
             }
         }
+        super::summary::backfill(&write, &profile)?;
         profile.format = FORMAT;
         profile.validate()?;
         super::artifacts::audit_tables(
@@ -195,6 +196,7 @@ pub(super) fn run(db: &Database) -> Result<()> {
             &write.open_table(RUNS)?,
             &write.open_table(CONVERSATIONS)?,
             &write.open_table(LAUNCHES)?,
+            &write.open_table(super::summary::RUN_HEADERS)?,
         )?;
         meta.insert("profile", encode(&profile)?.as_slice())?;
     }

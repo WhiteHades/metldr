@@ -156,6 +156,10 @@ impl Prepared {
         let mut write = db.begin_write()?;
         write.set_durability(Durability::Immediate)?;
         write.set_two_phase_commit(true);
+        write.open_table(RUNS)?;
+        write.open_table(SOURCES)?;
+        write.open_table(super::summary::RUN_HEADERS)?;
+        write.open_table(super::summary::SOURCE_HEADERS)?;
         {
             let mut meta = write.open_table(META)?;
             meta.insert("profile", encode(&profile)?.as_slice())?;
@@ -170,11 +174,6 @@ impl Prepared {
                 self.conversation.as_str(),
             )?;
             write.open_table(SELECTIONS)?;
-            let owned = |value| Record {
-                conversation: self.conversation.clone(),
-                revision: 1,
-                value,
-            };
             let prefix = format!("{store}:");
             let number = |id: &str| -> Result<u64> {
                 Ok(id
@@ -208,7 +207,6 @@ impl Prepared {
                 }
             }
             {
-                let mut records = write.open_table(RUNS)?;
                 let mut order = write.open_table(RUN_ORDER)?;
                 let mut active = write.open_table(ACTIVE_RUNS)?;
                 let mut context = write.open_table(CONTEXT)?;
@@ -236,7 +234,14 @@ impl Prepared {
                     {
                         return Err("legacy run order collision".into());
                     }
-                    records.insert(id.as_str(), encode(&owned(run))?.as_slice())?;
+                    super::summary::put_run(
+                        &write,
+                        &Record {
+                            conversation: self.conversation.clone(),
+                            revision: 1,
+                            value: &run,
+                        },
+                    )?;
                 }
             }
             macro_rules! copy_map {
@@ -257,7 +262,16 @@ impl Prepared {
                     }
                 }};
             }
-            copy_map!(SOURCES, self.sources);
+            for (id, value) in self.sources {
+                let record = Record {
+                    conversation: self.conversation.clone(),
+                    revision: 1,
+                    value,
+                };
+                if super::summary::put_source(&write, &id, &record)? {
+                    return Err("legacy record identity collision".into());
+                }
+            }
             copy_map!(LAUNCHES, launches);
             copy_map!(PI, workflows);
             copy_map!(CODEX, codex_workflows);

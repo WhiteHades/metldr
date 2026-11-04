@@ -18,6 +18,7 @@ mod import;
 #[cfg(target_os = "linux")]
 mod migrate;
 mod schema;
+mod summary;
 mod upgrade;
 
 #[cfg(test)]
@@ -96,7 +97,9 @@ impl History {
         let profile: schema::Profile = schema::decode(bytes.value())?;
         profile.validate()?;
         schema::require_base_tables(&read)?;
+        summary::require(&read)?;
         artifacts::audit(&read, &profile)?;
+        summary::audit_sources(&read, &profile)?;
         read.open_table(schema::NATIVE_CHOICES)?;
         read.open_table(schema::SELECTIONS)?;
         let order = read.open_table(schema::CONVERSATION_ORDER)?;

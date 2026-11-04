@@ -1,8 +1,5 @@
 import type {
   SupportedLanguage,
-  CacheEntry,
-  EmailSummaryEntry,
-  WordDefinitionEntry,
   DictEntry,
   DictMetaEntry,
   DownloadProgress,
@@ -71,86 +68,6 @@ export class StorageManager {
     })
   }
 
-  async cacheSet(key: string, value: unknown, ttl = 7 * 24 * 60 * 60 * 1000): Promise<void> {
-    if (!this.cacheDb) await this.initCache()
-    const transaction = this.cacheDb!.transaction(['ollama_cache'], 'readwrite')
-    const store = transaction.objectStore('ollama_cache')
-    store.put({ key, value, timestamp: Date.now(), ttl })
-  }
-
-  async cacheGet(key: string): Promise<unknown> {
-    if (!this.cacheDb) await this.initCache()
-    return new Promise((resolve) => {
-      const transaction = this.cacheDb!.transaction(['ollama_cache'], 'readonly')
-      const store = transaction.objectStore('ollama_cache')
-      const request = store.get(key)
-      request.onsuccess = () => {
-        const result = request.result as CacheEntry | undefined
-        if (!result) {
-          resolve(null)
-          return
-        }
-        const { value, timestamp, ttl } = result
-        if (Date.now() > timestamp + ttl) {
-          this.cacheDelete(key)
-          resolve(null)
-          return
-        }
-        resolve(value)
-      }
-      request.onerror = () => resolve(null)
-    })
-  }
-
-  async cacheDelete(key: string): Promise<void> {
-    if (!this.cacheDb) await this.initCache()
-    const transaction = this.cacheDb!.transaction(['ollama_cache'], 'readwrite')
-    const store = transaction.objectStore('ollama_cache')
-    store.delete(key)
-  }
-
-  async emailSummarySet(emailId: string, summary: unknown, metadata: Record<string, unknown> = {}): Promise<void> {
-    if (!this.cacheDb) await this.initCache()
-    const transaction = this.cacheDb!.transaction(['email_summaries'], 'readwrite')
-    const store = transaction.objectStore('email_summaries')
-    store.put({ emailId, summary, timestamp: Date.now(), ...metadata })
-  }
-
-  async emailSummaryGet(emailId: string): Promise<{ summary: unknown; metadata: EmailSummaryEntry } | null> {
-    if (!this.cacheDb) await this.initCache()
-    return new Promise((resolve) => {
-      const transaction = this.cacheDb!.transaction(['email_summaries'], 'readonly')
-      const store = transaction.objectStore('email_summaries')
-      const request = store.get(emailId)
-      request.onsuccess = () => {
-        const result = request.result as EmailSummaryEntry | undefined
-        resolve(result ? { summary: result.summary, metadata: result } : null)
-      }
-      request.onerror = () => resolve(null)
-    })
-  }
-
-  async wordDefinitionSet(word: string, definition: unknown): Promise<void> {
-    if (!this.cacheDb) await this.initCache()
-    const transaction = this.cacheDb!.transaction(['word_definitions'], 'readwrite')
-    const store = transaction.objectStore('word_definitions')
-    store.put({ word, definition })
-  }
-
-  async wordDefinitionGet(word: string): Promise<unknown> {
-    if (!this.cacheDb) await this.initCache()
-    return new Promise((resolve) => {
-      const transaction = this.cacheDb!.transaction(['word_definitions'], 'readonly')
-      const store = transaction.objectStore('word_definitions')
-      const request = store.get(word)
-      request.onsuccess = () => {
-        const result = request.result as WordDefinitionEntry | undefined
-        resolve(result ? result.definition : null)
-      }
-      request.onerror = () => resolve(null)
-    })
-  }
-
   async cacheClearAll(): Promise<void> {
     if (!this.cacheDb) await this.initCache()
     const stores = ['ollama_cache', 'email_summaries', 'word_definitions']
@@ -159,29 +76,6 @@ export class StorageManager {
       const store = transaction.objectStore(storeName)
       store.clear()
     }
-  }
-
-  async cacheCleanup(): Promise<void> {
-    if (!this.cacheDb) await this.initCache()
-    const transaction = this.cacheDb!.transaction(['ollama_cache'], 'readwrite')
-    const store = transaction.objectStore('ollama_cache')
-    const index = store.index('timestamp')
-    const request = index.openCursor()
-    return new Promise<void>((resolve) => {
-      request.onsuccess = (event) => {
-        const target = event.target as IDBRequest<IDBCursorWithValue | null>
-        const cursor = target.result
-        if (!cursor) {
-          resolve()
-          return
-        }
-        const { timestamp, ttl } = cursor.value as CacheEntry
-        if (Date.now() > timestamp + ttl) {
-          cursor.delete()
-        }
-        cursor.continue()
-      }
-    })
   }
 
   async initDictionary(): Promise<IDBDatabase> {

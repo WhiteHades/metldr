@@ -656,11 +656,8 @@ export class BackgroundBootstrap {
   static _onGetEmailCache(msg: GetEmailCacheMessage, respond: ResponseCallback): void {
     (async () => {
       try {
-        const session = await cacheService.getEmailSession(msg.emailId)
-        respond({ 
-          cached: session?.summary || null,
-          emailCount: (session as any)?.emailCount || 0
-        })
+        const cached = await cacheService.getEmailCache(msg.emailId)
+        respond({ cached: cached.summary, emailCount: cached.emailCount })
       } catch (err) {
         log.error('onGetEmailCache]', (err as Error).message)
         respond({ cached: null, emailCount: 0 })
@@ -671,9 +668,9 @@ export class BackgroundBootstrap {
   static _onSetEmailCache(msg: SetEmailCacheMessage & { emailCount?: number }, respond: ResponseCallback): void {
     (async () => {
       try {
-        await cacheService.updateEmailSession(msg.emailId, { 
+        await cacheService.updateEmailSession(msg.emailId, {
           summary: msg.summary,
-          ...(msg.emailCount !== undefined && { emailCount: msg.emailCount } as any)
+          ...(msg.emailCount !== undefined && { emailCount: msg.emailCount })
         })
         respond({ success: true })
       } catch (err) {

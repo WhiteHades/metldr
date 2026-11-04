@@ -122,14 +122,13 @@ impl Edit<'_> {
         };
         storage(|| {
             self.save_native_workflow(scope, name, &task.workflow, workflow_revision)?;
-            self.write.open_table(RUNS)?.insert(
-                task.run.id.as_str(),
-                encode(&Record {
+            super::super::summary::put_run(
+                self.write,
+                &Record {
                     conversation: scope.conversation.clone(),
                     revision: 1,
                     value: &task.run,
-                })?
-                .as_slice(),
+                },
             )?;
             if self
                 .write

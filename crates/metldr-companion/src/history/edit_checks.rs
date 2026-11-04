@@ -529,6 +529,8 @@ fn format_sixteen_migrates_tables_and_refuses_generated_records() -> Result<()> 
         profile.format = 16;
         meta.insert("profile", encode(&profile)?.as_slice())?;
         drop(meta);
+        write.delete_table(super::summary::RUN_HEADERS)?;
+        write.delete_table(super::summary::SOURCE_HEADERS)?;
         write.commit()?;
         Ok(())
     }

@@ -69,6 +69,14 @@ mod checks {
             matches!(&display.entries().collect::<Vec<_>>()[..], [EntryRef::Message {text:"Before",..}, EntryRef::Artifact { id, presentation: ArtifactPresentation::Table }, EntryRef::Message {text:"After",..}] if *id == &artifact)
         );
         assert_eq!(display.text(), "BeforeAfter");
+        assert_eq!(restored.text_parts().collect::<String>(), "BeforeAfter");
+        assert_eq!(
+            Content::flat("é🌱".into())
+                .unwrap()
+                .text_parts()
+                .collect::<String>(),
+            "é🌱"
+        );
         assert!(
             Content::flat("old history".into())
                 .unwrap()

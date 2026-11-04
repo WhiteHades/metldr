@@ -410,9 +410,7 @@ impl Edit<'_> {
                 revision: 1,
                 value: &launch,
             };
-            self.write
-                .open_table(RUNS)?
-                .insert(run.id.as_str(), encode(&owned_run)?.as_slice())?;
+            super::summary::put_run(self.write, &owned_run)?;
             if self
                 .write
                 .open_table(LAUNCHES)?
@@ -517,14 +515,14 @@ impl Edit<'_> {
                     return Err("completed context index collision".into());
                 }
             }
-            let after = Record {
-                conversation: before.conversation,
-                revision,
-                value: &run,
-            };
-            self.write
-                .open_table(RUNS)?
-                .insert(run.id.as_str(), encode(&after)?.as_slice())?;
+            super::summary::put_run(
+                self.write,
+                &Record {
+                    conversation: before.conversation,
+                    revision,
+                    value: &run,
+                },
+            )?;
             let mut active = self.write.open_table(ACTIVE_RUNS)?;
             if run.status.terminal() {
                 active.remove(run.id.as_str())?;
@@ -583,6 +581,11 @@ impl Edit<'_> {
                     return Err("saved run key differs".into());
                 }
                 run.value.validate(|id| self.valid_id(id))?;
+                super::summary::audit_run(
+                    &self.write.open_table(super::summary::RUN_HEADERS)?,
+                    id,
+                    run,
+                )?;
                 let number = id
                     .rsplit(':')
                     .next()
@@ -640,25 +643,34 @@ impl Edit<'_> {
     }
 
     fn source_in(&self, conversation: &str, id: &str) -> Result<Option<Source>> {
+        Ok(self.source_record_in(conversation, id)?.value)
+    }
+
+    fn source_record_in(&self, conversation: &str, id: &str) -> Result<Record<Option<Source>>> {
         storage(|| {
             let source: Record<Provenance> =
                 record(self.write, SOURCES, id)?.ok_or("run source is absent")?;
             if source.conversation != conversation {
                 return Err("source ownership differs".into());
             }
-            match source.value {
+            let value = match source.value {
                 Provenance::Known { source } => {
                     if source.id != id || !self.valid_id(id) {
                         return Err("source identity differs".into());
                     }
                     crate::model::check_page_fields(&source.page)?;
-                    Ok(Some(source))
+                    Some(source)
                 }
                 Provenance::LegacyUnavailable { id: saved } if saved == id && self.valid_id(id) => {
-                    Ok(None)
+                    None
                 }
-                _ => Err("invalid unavailable source identity".into()),
-            }
+                _ => return Err("invalid unavailable source identity".into()),
+            };
+            Ok(Record {
+                conversation: source.conversation,
+                revision: source.revision,
+                value,
+            })
         })
     }
 
