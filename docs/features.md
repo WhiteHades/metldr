@@ -60,6 +60,7 @@ Connect a provider through its API key to run browser tasks or ask about a saved
 
 ## Planned email, messaging and remote control
 
+- Triage your inbox, flag urgent messages and draft follow-ups for threads without a reply after a period you choose.
 - Draft and send approved Gmail messages with recipients, cc, bcc, subject and plain-text or HTML bodies, then verify the result in Sent.
 - List, search and read WhatsApp Web chats, send approved text or files, add reactions and manage read status.
 - Support approved WhatsApp group member and administrator actions.
