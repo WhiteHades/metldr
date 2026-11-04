@@ -261,6 +261,16 @@ mod checks {
                 .is_err()
         );
         assert_eq!(bounded.text().len(), MAX_TEXT_BYTES);
+        let unchanged = bounded.clone();
+        assert!(
+            bounded
+                .change(Change::Append {
+                    key: key.clone(),
+                    text: "é".into(),
+                })
+                .is_err()
+        );
+        assert_eq!(bounded, unchanged);
         assert!(matches!(
             Display::new(bounded.projection()).unwrap().entries().next(),
             Some(EntryRef::Message {
@@ -285,6 +295,22 @@ mod checks {
                 text: "live".into(),
             })
             .unwrap();
+        let completed = complete.clone();
+        assert_eq!(
+            complete.change(Change::Append {
+                key: final_key.clone(),
+                text: String::new(),
+            }),
+            Err("cannot append to a completed message".into())
+        );
+        assert_eq!(complete, completed);
+        assert_eq!(
+            complete.change(Change::Append {
+                key: MessageKey::Observed { ordinal: 0 },
+                text: String::new(),
+            }),
+            Err("observed message ordinal must be between 1 and 64".into())
+        );
         complete.end(Ending::Complete).unwrap();
         let complete_display = Display::new(complete.projection()).unwrap();
         let entries: Vec<_> = complete_display.entries().collect();
