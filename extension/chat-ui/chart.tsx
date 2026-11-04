@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { ChartPlot } from "./chart-plot";
 import { z } from "zod";
+import type { ChartPlot } from "./chart-plot";
 import type { UiBridge } from "../../crates/metldr-panel/pkg/metldr_panel.js";
 import "./chart.css";
 
@@ -16,7 +16,7 @@ type Reference = z.infer<typeof ChartReference>;
 type Reader = (reference: Reference) => Promise<string>;
 type ExportValue = z.infer<typeof Export>;
 type Exporter = (reference: Reference) => Promise<ExportValue>;
-type SavedResult = { kind: "ready"; chart: ChartValue; source: string } | { kind: "failed" };
+type SavedResult = { kind: "ready"; chart: ChartValue; source: string; Plot: typeof ChartPlot } | { kind: "failed" };
 
 export function SavedChart({ reference, read, exportHtml }: { reference: Reference; read: Reader; exportHtml: Exporter }) {
   const [attempt, setAttempt] = useState(0);
@@ -25,10 +25,10 @@ export function SavedChart({ reference, read, exportHtml }: { reference: Referen
   useEffect(() => {
     let live = true;
     const current = { runId, artifactId };
-    void Promise.resolve().then(() => read(current)).then(encoded => {
+    void Promise.all([Promise.resolve().then(() => read(current)), import("./chart-plot")]).then(([encoded, { ChartPlot }]) => {
       if (!live) return;
       const parsed = ChartResult.parse(JSON.parse(encoded));
-      if (live) setSaved({ reference: current, read, attempt, result: { kind: "ready", chart: parsed.chart, source: parsed.source } });
+      if (live) setSaved({ reference: current, read, attempt, result: { kind: "ready", chart: parsed.chart, source: parsed.source, Plot: ChartPlot } });
     }).catch(() => {
       if (live) setSaved({ reference: current, read, attempt, result: { kind: "failed" } });
     });
@@ -37,10 +37,10 @@ export function SavedChart({ reference, read, exportHtml }: { reference: Referen
   const current = saved?.reference.runId === runId && saved.reference.artifactId === artifactId && saved.read === read && saved.attempt === attempt ? saved.result : undefined;
   if (!current) return <p role="status">Loading chart</p>;
   if (current.kind === "failed") return <><p role="alert">The saved chart could not be loaded.</p><button className="metldr-chart-retry" type="button" onClick={() => setAttempt(value => value + 1)}>Retry loading chart</button></>;
-  return <ChartView key={`${runId}:${artifactId}:${attempt}`} chart={current.chart} source={current.source} reference={reference} exportHtml={exportHtml} />;
+  return <ChartView key={`${runId}:${artifactId}:${attempt}`} chart={current.chart} source={current.source} reference={reference} exportHtml={exportHtml} Plot={current.Plot} />;
 }
 
-function ChartView({ chart, source, reference, exportHtml }: { chart: ChartValue; source: string; reference: Reference; exportHtml: Exporter }) {
+function ChartView({ chart, source, reference, exportHtml, Plot }: { chart: ChartValue; source: string; reference: Reference; exportHtml: Exporter; Plot: typeof ChartPlot }) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState("");
@@ -90,7 +90,7 @@ function ChartView({ chart, source, reference, exportHtml }: { chart: ChartValue
   return <div className="metldr-chart-wrap" data-kind={chart.kind}>
     <section className="metldr-chart" aria-labelledby={`chart-${reference.artifactId}`}>
       <div className="metldr-chart-head"><h3 id={`chart-${reference.artifactId}`}>{chart.title}</h3><p>{chart.description}</p></div>
-      <ChartPlot chart={chart} />
+      <Plot chart={chart} />
       {chart.data.length > 0 && <details className="metldr-chart-data">
         <summary>View chart data</summary>
         <table><thead><tr><th scope="col">Label</th><th scope="col">Value</th></tr></thead><tbody>{chart.data.map((item, index) => <tr key={index}><th scope="row">{item.label}</th><td>{item.value}</td></tr>)}</tbody></table>
