@@ -5,6 +5,7 @@ pub(super) mod selects;
 pub(super) use buttons::{arm_button, button_receipt, check_button};
 
 const HELPERS: &str = r#"
+const encoder = new TextEncoder();
 const whitespacePattern = /\s+/g;
 const labelReferencesPattern = /\s+/;
 const secretMetadataPattern = /password|passcode|one[ -]?time[ -]?code|\botp\b|token|secret|api[ _-]?key|payment[ _-]?card|credit[ _-]?card|card[ _-]?(number|cvc|cvv)|cc[ _-]?(number|name|exp|csc|cvc|cvv)|\b(cvc|cvv)\b|social[ _-]?security|\bssn\b/;
@@ -12,7 +13,7 @@ const clean = value => String(value || '').replace(whitespacePattern, ' ').trim(
 const bounded = (value, limit) => {
   let text = '', size = 0, truncated = false;
   for (const character of String(value || '')) {
-    const bytes = new TextEncoder().encode(character).length;
+    const bytes = encoder.encode(character).length;
     if (size + bytes > limit) { truncated = true; break; }
     text += character; size += bytes;
   }
@@ -172,7 +173,7 @@ while (walker.nextNode()) {
   if (part) {
     const separator = summary.text ? ' ' : '';
     const [piece, separatorTruncated] = bounded(separator + part, 4096 - bytes);
-    summary.text += piece; bytes += new TextEncoder().encode(piece).length;
+    summary.text += piece; bytes += encoder.encode(piece).length;
     if (separatorTruncated || truncated) summary.text_truncated = true;
   }
   if (truncated && !part) summary.text_truncated = true;
@@ -191,7 +192,7 @@ pub(super) fn read_value(slot: usize, check_label: &str) -> String {
     let slot = serde_json::to_string(&slot).expect("usize serializes");
     let label = serde_json::to_string(check_label).expect("string serializes");
     function(&format!(
-        "const element = root[{slot}]; const current = eligible(element); if (current === null || current !== {label} || new TextEncoder().encode(element.value).length > 1024) return null; return element.value;"
+        "const element = root[{slot}]; const current = eligible(element); if (current === null || current !== {label} || encoder.encode(element.value).length > 1024) return null; return element.value;"
     ))
 }
 

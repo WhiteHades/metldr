@@ -24,7 +24,7 @@ const captureSelect = element => {
     const value = node.value;
     const parent = node.parentElement;
     const group_label = parent instanceof HTMLOptGroupElement ? parent.label : null;
-    if (check_label.length > 512 || node.id.length > 512 || group_label?.length > 512 || new TextEncoder().encode(value).length > 1024) return { oversized: true };
+    if (check_label.length > 512 || node.id.length > 512 || group_label?.length > 512 || encoder.encode(value).length > 1024) return { oversized: true };
     const index = options.length;
     options.push({ node, index, id: node.id, parent, group_label, check_label, label: bounded(check_label || `Option ${index + 1}`, 128)[0], value, enabled: optionEnabled(node) });
   }
