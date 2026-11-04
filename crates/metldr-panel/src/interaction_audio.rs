@@ -16,6 +16,8 @@ const SILENCE: f64 = 0.0001;
 thread_local! {
     static LISTENER: RefCell<Option<Listener>> = const { RefCell::new(None) };
     static AUDIO: RefCell<AudioState> = const { RefCell::new(AudioState { context: None, master: None }) };
+    static RELEASE_LABEL: RegExp = RegExp::new("close|dismiss|remove|delete|collapse|cancel|clear", "i");
+    static PULSE_LABEL: RegExp = RegExp::new("send|save|submit|calculate|create|add|upgrade|replay", "i");
 }
 
 struct Listener {
@@ -224,14 +226,14 @@ fn cue_for(element: &Element) -> Cue {
     )
     .trim()
     .to_owned();
-    if RegExp::new("close|dismiss|remove|delete|collapse|cancel|clear", "i").test(&label) {
+    if RELEASE_LABEL.with(|pattern| pattern.test(&label)) {
         return Cue::Release;
     }
     if element.matches("input[type='checkbox'], input[type='radio'], select, [role='checkbox'], [role='radio'], [role='switch'], [role='tab'], [aria-pressed]").unwrap_or(false) { return Cue::Tick; }
     if element.matches("a[href]").unwrap_or(false) {
         return Cue::Page;
     }
-    if RegExp::new("send|save|submit|calculate|create|add|upgrade|replay", "i").test(&label) {
+    if PULSE_LABEL.with(|pattern| pattern.test(&label)) {
         return Cue::Pulse;
     }
     if element.matches("input, textarea").unwrap_or(false) {
