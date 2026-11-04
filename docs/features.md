@@ -12,79 +12,162 @@ Connect a provider through its API key to run browser tasks or ask about a saved
 
 ## Planned browser and conversation features
 
-- Give instructions in ordinary language and work in the signed-in tabs you allow.
-- Read page structure, inspect controls and screenshots, navigate, click, type, scroll, select and drag across allowed tabs.
-- Fill forms and edit text fields, textareas and supported rich editors with a preview of consequential changes.
-- Review a plan and approve actions individually or through scoped session auto-approval rules.
-- Verify what happened after an action, check link destinations and liveness, detect changed pages and redirects, and show uncertain results before another attempt.
-- Stop active work, retain completed results and recover interrupted tasks without repeating uncertain writes.
-- Keep saved conversations, attachments, page suggestions and a live activity stream, with keyboard controls for opening and stopping work. Reopen conversations and recover saved results after a restart.
-- Organize projects with goals, files, several conversations and saved progress.
-- Discover website-provided WebMCP tools and route their results through the same task controls.
+* Work in your allowed signed in tabs.
+* Read pages and inspect their controls.
+* Capture screenshots and inspect page layouts.
+* Navigate pages, history and multiple tabs.
+* Group tabs by task or conversation.
+* Track new tabs and browser popups.
+* Click, hover and open context menus.
+* Use single and double clicks.
+* Drag, drop, scroll and select.
+* Use keyboard shortcuts and the clipboard.
+* Fill forms across several pages.
+* Upload files and edit rich text.
+* Run approved page scripts for complex tasks.
+* Use page tools through WebMCP.
+* Review plans and scoped approval rules.
+* Set scoped automatic approvals for each session.
+* Stop, pause and resume tasks.
+* Verify results, redirects and dead links.
+* See when browser control is active.
+* Keep chats, attachments and live activity.
+* Get contextual suggestions while browsing.
+* Restore conversations and interrupted results.
+* Send selected content to the sidebar.
+* Open website prompts in the sidebar.
+* Organize projects, goals and working directories.
+* Continue work across multiple conversations.
 
 ## Planned everyday workflows
 
-- Summarize pages, emails and PDFs, then ask follow-up questions with citations to the saved sources.
-- Compare products, prices and research sources while preserving currencies, billing periods and missing information.
-- Find and qualify leads, gather supporting evidence and prepare approved outreach or connection requests.
-- Fill applications and surveys from your resume, company information or attached documents.
-- Extract products, prices and invoice details into spreadsheets.
-- Reconcile payouts against orders and flag missing payments, currency differences and other discrepancies.
-- Screen applicants against saved criteria and update applicant tracking systems, with approval for consequential changes.
-- Prepare calendar agendas, find available times and draft invitations with the correct timezone and participants.
-- Build recurring reports from several dashboards, with saved templates, source links and visible gaps when a source is unavailable.
+* Summarize pages, emails, PDFs and video transcripts.
+* Triage inboxes and flag urgent messages.
+* Draft follow up messages for unanswered threads.
+* Research companies, suppliers and products.
+* Compare prices, quotes and sources with citations.
+* Find, qualify and track leads.
+* Draft outreach and connection requests.
+* Complete applications and surveys from documents.
+* Extract invoices and reconcile payments.
+* Screen applicants and update recruitment systems.
+* Plan agendas, appointments and invitations.
+* Build recurring reports across dashboards.
+* Query BigQuery and connected data warehouses.
+* Explain code, contracts and research.
+* Create study notes and flashcards.
+* Track orders, bookings and price changes.
 
 ## Planned reusable work and automation
 
-- Teach a workflow through instructions or a deliberate demonstration in selected tabs, then review it before saving.
-- Save versioned workflows with variable inputs, allowed sites and files, output destinations, model choices and approval rules.
-- Run a saved workflow manually, through a slash command, on a schedule or from an authorized remote client.
-- Save reusable Skills, import them from validated URLs or ZIP files, and attach context files.
-- Inspect, edit, disable and delete correction memory scoped to a workflow or project.
-- Generate, preview, approve, edit and remove site tools. Run them on matching URLs and undo supported changes.
-- Schedule recurring work with timezones, exceptions, missed-run handling and rules for overlapping runs.
-- Start approved workflows from scoped page-title triggers, with visible pause and removal controls.
-- Follow tasks through a dashboard, inspect run histories and results, and receive notifications for failures or decisions that need attention.
-- Cache stable prompts and reuse learned site actions for repeat work, with usage and cost information where the provider supplies it.
+* Teach workflows through instructions or demonstrations.
+* Save versioned workflows and reusable templates.
+* Set workflow inputs, outputs and approval rules.
+* Run workflows manually or on schedules.
+* Run workflows and Skills through slash commands.
+* Set timezones, exceptions and overlap rules.
+* Trigger workflows from page title changes.
+* Pause, resume or remove scheduled work.
+* Recover missed and interrupted scheduled runs.
+* Keep tasks running with the panel closed.
+* Track tasks, exceptions and run histories.
+* Start and manage tasks from a dashboard.
+* Create, import and share Skills.
+* Import Skills from URLs or ZIP files.
+* Browse built in, site and plugin Skills.
+* Manage context files and editable preference memory.
+* Inspect, edit, disable or delete stored memory.
+* Scope corrections to projects or workflows.
+* Optionally sync memory, projects, workflows and preferences.
+* Manage team workspaces and member access.
+* Set shared and individual usage budgets.
+* Preview, edit and undo site scripts.
+* List and remove saved site scripts.
+* Run scripts automatically on matching pages.
+* Reuse learned site tools and cached prompts.
+* Add custom tools and dashboards to pages.
+* Apply reading preferences and page shortcuts.
+* Receive completion alerts and approval requests.
 
 ## Planned files and interactive answers
 
-- Read and write selected local files and folders, with access limited to the destinations you approve.
-- Work with spreadsheets, documents and PDFs, including Excel and CSV files and browser documents such as Google Sheets and Docs. Each format needs its own supported operations and preservation checks.
-- Extract PDF text, recognize text in scanned documents and preserve dictionary lookup and language support.
-- Download, edit and reuse files produced by a task.
-- Present answers as text, tables, charts, diagrams, calculators, maps and interactive explanations.
-- Stream answers as they are produced, use local controls and deliberately turn an answer into a follow-up request.
-- Save answer artifacts, export useful results and reopen them after a restart.
-- Keep generated answer code isolated from credentials, extension APIs and browser automation permissions.
+* Pin local files and folders to chats.
+* Browse and manage approved working directories.
+* Read and write files within approved locations.
+* Edit Excel, CSV and browser spreadsheets.
+* Read and write Google Sheets cell blocks.
+* Format and edit browser documents.
+* Preserve formulas and unrelated document content.
+* Search chats, pages, files and documents.
+* Read and edit Word documents.
+* Use PDF text, OCR and dictionary lookup.
+* Preview PDFs, images and generated files.
+* Zoom and navigate PDF documents.
+* Attach files, clipboard images and selected text.
+* Copy images between allowed websites.
+* Read large pages and files in chunks.
+* Keep screenshot history during long tasks.
+* Download folders as ZIP files.
+* Download all task outputs together.
+* Get tables, charts, diagrams, calculators and maps.
+* Use interactive explanations and local controls.
+* Stream answers and save reusable artifacts.
+* Export results with screenshots.
+* Record approved task videos for replay.
+* Print pages and answers to PDF.
 
 ## Planned email, messaging and remote control
 
-- Triage your inbox, flag urgent messages and draft follow-ups for threads without a reply after a period you choose.
-- Draft and send approved Gmail messages with recipients, cc, bcc, subject and plain-text or HTML bodies, then verify the result in Sent.
-- List, search and read WhatsApp Web chats, send approved text or files, add reactions and manage read status.
-- Support approved WhatsApp group member and administrator actions.
-- Dictate instructions in the sidebar, edit the transcript and use a browser shortcut. Speech service options may need their own provider key.
-- Pair authorized messaging or Model Context Protocol clients to start tasks, retrieve results and answer approvals remotely.
-- Select the intended device and browser profile for remote work, and revoke access when it is no longer needed.
+* Draft, reply, forward and send Gmail.
+* Verify sent mail and approval outcomes.
+* Read, search and manage WhatsApp chats.
+* Send approved messages, files and reactions.
+* Manage group members, roles and invite links.
+* Control read status and conversation history.
+* Dictate prompts and edit voice transcripts.
+* Review or cancel voice recordings.
+* Receive tasks through Telegram or WhatsApp.
+* Send remote voice notes, photos and files.
+* Receive results, screenshots and status updates.
+* Approve remote actions and cancel work.
+* Pair, switch and revoke devices or profiles.
+* Let authorized MCP clients control tasks.
 
 ## Planned model choice, access and reliability
 
-- Choose popular provider APIs, compatible custom endpoints, browser models or local inference, with visible capability differences.
-- Run installed Codex, OpenCode and Pi normally, preserving their accounts, tools, settings, permissions and continuing sessions.
-- Use a practical local model path with clear model-download and hardware requirements, without silent fallback to a remote provider.
-- Control tasks through a CLI and select among explicitly authorized browser profiles.
-- See token usage and provider costs, with estimates distinguished from reported charges.
-- Use familiar themes, text sizes and sound preferences, with keyboard, focus, screen-reader and input-method support.
-- Preserve saved data through upgrades and recovery, with export, deletion and clear compatibility limits.
-- Use the Chrome extension and companion on Linux, Windows and macOS. Native Windows and macOS support still needs verification.
-- Keep the app responsive through efficient Rust execution, bounded background work, storage and memory use. Performance gains need measurements before they can be claimed.
-- Use the full app without an application subscription or feature paywall. External providers and optional services may charge.
+* Choose popular APIs and custom endpoints.
+* Use local AI and browser models.
+* Connect approved local and network model servers.
+* Use API keys or supported account sign ins.
+* Connect servers without keys where supported.
+* Set model timeouts and connection settings.
+* Switch models with visible capability limits.
+* Run Codex, OpenCode, Pi and Claude Code.
+* Keep agent accounts, tools, permissions and sessions.
+* Connect remote MCP servers and tools.
+* Select browser profiles through a CLI.
+* Inspect token usage and estimated costs.
+* Manage context with /compact and /usage.
+* Recover connections without silent provider switching.
+* Choose separate speech and task providers.
+* Use multilingual and accessible interface controls.
+* Set themes, text size and sound preferences.
+* Keep site, tab and file permissions explicit.
+* Isolate generated answers from browser authority.
+* Export, delete and recover saved data.
+* Preserve data through upgrades and interrupted work.
+* Review uncertain writes before any repeat attempt.
+* Keep local inference local unless you approve.
+* Show model data destinations and access limits.
+* Bound storage, memory and background work.
+* Target Linux, Windows and macOS companions.
+* Target Chrome, Edge, Brave and Chromebooks.
+* Use every feature without an app subscription.
 
 ## Permissions and compatibility
 
 Work must stay within the sites, tabs or tab groups, files, devices and profiles you allow. A saved Skill, correction or site tool does not grant extra access. Local model selection must not silently send work to a hosted service.
 
-The intended scope excludes collecting passwords, payment-card or bank credentials, solving or bypassing CAPTCHAs, and creating accounts. Chrome internal pages and other extensions' pages are unsupported. Chrome comes first; other browser and Chromebook compatibility must be documented and verified separately.
+The intended scope excludes collecting passwords, payment card or bank credentials, solving or bypassing CAPTCHAs, and creating accounts. Chrome internal pages and other extensions' pages are unsupported. Chrome comes first. Edge, Brave and Chromebook compatibility are planned targets that need separate verification. Optional sync, team workspaces and remote connections need explicit access and data controls.
 
 [Install and build](development.md) | [Privacy](../PRIVACY.md) | [Companion setup](../crates/metldr-companion/README.md)
