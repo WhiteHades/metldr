@@ -5,7 +5,10 @@ pub(super) mod selects;
 pub(super) use buttons::{arm_button, button_receipt, check_button};
 
 const HELPERS: &str = r#"
-const clean = value => String(value || '').replace(/\s+/g, ' ').trim();
+const whitespacePattern = /\s+/g;
+const labelReferencesPattern = /\s+/;
+const secretMetadataPattern = /password|passcode|one[ -]?time[ -]?code|\botp\b|token|secret|api[ _-]?key|payment[ _-]?card|credit[ _-]?card|card[ _-]?(number|cvc|cvv)|cc[ _-]?(number|name|exp|csc|cvc|cvv)|\b(cvc|cvv)\b|social[ _-]?security|\bssn\b/;
+const clean = value => String(value || '').replace(whitespacePattern, ' ').trim();
 const bounded = (value, limit) => {
   let text = '', size = 0, truncated = false;
   for (const character of String(value || '')) {
@@ -19,7 +22,7 @@ const label = element => {
   const direct = element.getAttribute('aria-label');
   if (direct) return clean(direct);
   const labelled = element.getAttribute('aria-labelledby');
-  const references = labelled ? labelled.split(/\s+/) : [];
+  const references = labelled ? labelled.split(labelReferencesPattern) : [];
   const labels = element.labels ? Array.from(element.labels) : [];
   if (references.length > 32 || labels.length > 32) return null;
   const referenced = references.map(id => labelText(document.getElementById(id)));
@@ -58,7 +61,7 @@ const safeLabel = element => {
   const metadataValues = [element.autocomplete, element.name, element.id, accessible, element.placeholder];
   if (metadataValues.some(value => String(value || '').length > 512)) return null;
   const metadata = metadataValues.join(' ').toLowerCase();
-  if (/password|passcode|one[ -]?time[ -]?code|\botp\b|token|secret|api[ _-]?key|payment[ _-]?card|credit[ _-]?card|card[ _-]?(number|cvc|cvv)|cc[ _-]?(number|name|exp|csc|cvc|cvv)|\b(cvc|cvv)\b|social[ _-]?security|\bssn\b/.test(metadata)) return null;
+  if (secretMetadataPattern.test(metadata)) return null;
   return accessible;
 };
 const textField = element => element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement && element.type === 'text';
