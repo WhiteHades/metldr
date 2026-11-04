@@ -31,6 +31,7 @@ The finished app is intended to support the features below. Some parts already e
 
 ### Tasks you can complete
 
+- Triage your inbox, flag urgent mail and draft follow-ups after a chosen period without a reply.
 - Research and compare products, prices and sources with citations.
 - Find and qualify leads, gather evidence and prepare approved outreach.
 - Fill applications and surveys from your documents.
