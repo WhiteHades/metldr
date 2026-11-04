@@ -81,13 +81,13 @@ export function useTabSession() {
     
     if (key.kind === 'email') {
       const emailId = key.value
-      const session = await cacheService.getEmailSession(emailId)
-      if (session) {
-        const msgs = Array.isArray(session.chatMessages) ? session.chatMessages : []
-        chatMessages.value = msgs
-        if (setUrlMessages) setUrlMessages(url, msgs)
+      const messages = await cacheService.getEmailChat(emailId)
+      const msgs = Array.isArray(messages) ? messages : []
+      chatMessages.value = msgs
+      if (setUrlMessages) setUrlMessages(url, msgs)
+      if (msgs.length > 0) {
         log.log('loaded gmail session', { emailId: emailId.slice(0, 20), msgs: msgs.length })
-        return msgs.length > 0
+        return true
       }
       log.log('no gmail session for', emailId.slice(0, 20))
       return false

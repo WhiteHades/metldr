@@ -1,20 +1,27 @@
 import { databaseService, DB_CONFIGS } from './DatabaseService'
 import { logger } from './LoggerService'
-import type { 
-  AppPageSummary, 
-  AppChatMessage, 
-  EmailSession, 
-  EmailSummary, 
-  ReplySuggestion, 
-  EmailMetadata 
-} from '@/types'
+import {
+  EMAIL_STORE_NAMES,
+  EMAIL_STORES,
+  SESSION_STORE_NAMES,
+  TAB_STORE_NAMES,
+  TAB_STORES,
+  request,
+  writeEmailSession,
+  writeEmailUpdate,
+  writeTabSession,
+  type CachedEmailSession,
+  type EmailHeader,
+  type EmailPayload,
+  type TabHeader,
+  type TabPayload,
+  type TabSummaryPayload,
+  type TabSessionEntry
+} from './cacheRecords'
+import type { AppPageSummary, AppChatMessage, EmailSession, EmailSummary, ReplySuggestion, EmailMetadata } from '@/types'
 
 const log = logger.createScoped('CacheService')
-const STORE_EMAIL_SESSIONS = 'email_sessions'
 const STORE_PAGE_CACHE = 'page_cache'
-const STORE_TAB_SESSIONS = 'tab_sessions'
-
-const DEFAULT_TTL_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
 
 interface CacheEntry<T> {
   timestamp: number
@@ -27,56 +34,17 @@ interface PageSummaryEntry extends CacheEntry<unknown> {
   summary: unknown
 }
 
-export interface TabSessionEntry {
-  url: string
-  timestamp: number
-  chatMessages: AppChatMessage[]
-  pageSummary: AppPageSummary | null
-  summaryCollapsed: boolean
-}
-
 export class CacheService {
   // ttl disabled - keep all data forever (storage is minimal)
   private isExpired(_entry: { timestamp?: number; ttl?: number }): boolean {
     return false
   }
 
-  async getEmailSession(emailId: string): Promise<EmailSession | null> {
+  async updateEmailSession(emailId: string, updates: Partial<Omit<EmailSession, 'emailId'>> & { emailCount?: number }): Promise<void> {
     try {
-      const result = await databaseService.get<EmailSession>(DB_CONFIGS.cache, STORE_EMAIL_SESSIONS, emailId)
-      if (!result) return null
-      if (this.isExpired(result)) {
-        this.deleteEmailSession(emailId).catch(() => {})
-        return null
-      }
-      return result
-    } catch (err) {
-      log.error('getEmailSession failed', (err as Error).message)
-      return null
-    }
-  }
-
-  async updateEmailSession(emailId: string, updates: Partial<Omit<EmailSession, 'emailId'>>): Promise<void> {
-    try {
-      const existing = await databaseService.get<EmailSession>(DB_CONFIGS.cache, STORE_EMAIL_SESSIONS, emailId)
-      const now = Date.now()
-      
-      const session: EmailSession = {
-        emailId,
-        summary: existing?.summary ?? null,
-        replySuggestions: existing?.replySuggestions ?? null,
-        chatMessages: existing?.chatMessages ?? [],
-        metadata: existing?.metadata ?? null,
-        timestamp: now,
-        ttl: updates.ttl ?? existing?.ttl ?? DEFAULT_TTL_MS,
-        ...updates
-      }
-      
-      await databaseService.put(DB_CONFIGS.cache, STORE_EMAIL_SESSIONS, session)
-      
-      if (updates.summary && !existing?.summary) {
-        chrome.runtime.sendMessage({ type: 'SUMMARY_ADDED', emailId }).catch(() => {})
-      }
+      const notify = await databaseService.transaction(DB_CONFIGS.cache, EMAIL_STORE_NAMES, 'readwrite',
+        tx => writeEmailUpdate(tx, emailId, updates))
+      if (notify) chrome.runtime.sendMessage({ type: 'SUMMARY_ADDED', emailId }).catch(() => {})
     } catch (err) {
       log.error('updateEmailSession failed', (err as Error).message)
     }
@@ -84,15 +52,37 @@ export class CacheService {
 
   async deleteEmailSession(emailId: string): Promise<void> {
     try {
-      await databaseService.delete(DB_CONFIGS.cache, STORE_EMAIL_SESSIONS, emailId)
+      await databaseService.transaction(DB_CONFIGS.cache, EMAIL_STORE_NAMES, 'readwrite', tx => {
+        for (const name of EMAIL_STORE_NAMES) tx.objectStore(name).delete(emailId)
+      })
     } catch (err) {
       log.error('deleteEmailSession failed', (err as Error).message)
     }
   }
 
   async getEmailSummary(emailId: string): Promise<EmailSummary | null> {
-    const session = await this.getEmailSession(emailId)
-    return session?.summary ?? null
+    try {
+      const payload = await databaseService.get<EmailPayload<EmailSummary | null>>(DB_CONFIGS.cache, EMAIL_STORES.summary, emailId)
+      return payload?.value ?? null
+    } catch (err) {
+      log.error('getEmailSummary failed', (err as Error).message)
+      return null
+    }
+  }
+
+  async getEmailCache(emailId: string): Promise<{ summary: EmailSummary | null; emailCount: number }> {
+    try {
+      return await databaseService.transaction(DB_CONFIGS.cache, [EMAIL_STORES.header, EMAIL_STORES.summary], 'readonly', async tx => {
+        const [header, payload] = await Promise.all([
+          request<EmailHeader | undefined>(tx.objectStore(EMAIL_STORES.header).get(emailId)),
+          request<EmailPayload<EmailSummary | null> | undefined>(tx.objectStore(EMAIL_STORES.summary).get(emailId))
+        ])
+        return { summary: payload?.value ?? null, emailCount: header?.emailCount || 0 }
+      })
+    } catch (err) {
+      log.error('getEmailCache failed', (err as Error).message)
+      return { summary: null, emailCount: 0 }
+    }
   }
 
   async setEmailSummary(emailId: string, summary: EmailSummary, metadata?: EmailMetadata | null): Promise<void> {
@@ -104,8 +94,13 @@ export class CacheService {
   }
 
   async getReplySuggestions(emailId: string): Promise<ReplySuggestion[] | null> {
-    const session = await this.getEmailSession(emailId)
-    return session?.replySuggestions ?? null
+    try {
+      const payload = await databaseService.get<EmailPayload<ReplySuggestion[] | null>>(DB_CONFIGS.cache, EMAIL_STORES.replies, emailId)
+      return payload?.value ?? null
+    } catch (err) {
+      log.error('getReplySuggestions failed', (err as Error).message)
+      return null
+    }
   }
 
   async setReplySuggestions(emailId: string, suggestions: ReplySuggestion[]): Promise<void> {
@@ -117,8 +112,13 @@ export class CacheService {
   }
 
   async getEmailChat(emailId: string): Promise<AppChatMessage[]> {
-    const session = await this.getEmailSession(emailId)
-    return session?.chatMessages ?? []
+    try {
+      const payload = await databaseService.get<EmailPayload<AppChatMessage[]>>(DB_CONFIGS.cache, EMAIL_STORES.chat, emailId)
+      return payload?.value ?? []
+    } catch (err) {
+      log.error('getEmailChat failed', (err as Error).message)
+      return []
+    }
   }
 
   async setEmailChat(emailId: string, messages: AppChatMessage[]): Promise<void> {
@@ -143,12 +143,7 @@ export class CacheService {
 
   async setPageSummary(url: string, summary: unknown, ttlSeconds = 3600): Promise<void> {
     try {
-      await databaseService.put(DB_CONFIGS.cache, STORE_PAGE_CACHE, {
-        url,
-        summary,
-        timestamp: Date.now(),
-        ttl: ttlSeconds * 1000
-      })
+      await databaseService.put(DB_CONFIGS.cache, STORE_PAGE_CACHE, { url, summary, timestamp: Date.now(), ttl: ttlSeconds * 1000 })
     } catch (err) {
       log.error('setPageSummary failed', (err as Error).message)
     }
@@ -164,30 +159,34 @@ export class CacheService {
 
   async getTabSession(url: string): Promise<TabSessionEntry | null> {
     try {
-      const result = await databaseService.get<TabSessionEntry>(DB_CONFIGS.cache, STORE_TAB_SESSIONS, url)
-      return result || null
+      return await databaseService.transaction(DB_CONFIGS.cache, TAB_STORE_NAMES, 'readonly', async tx => {
+        const [header, summary, chat] = await Promise.all([
+          request<TabHeader | undefined>(tx.objectStore(TAB_STORES.header).get(url)),
+          request<TabSummaryPayload | undefined>(tx.objectStore(TAB_STORES.summary).get(url)),
+          request<TabPayload<AppChatMessage[]> | undefined>(tx.objectStore(TAB_STORES.chat).get(url))
+        ])
+        if (!header) return null
+        return {
+          ...summary?.extra,
+          url,
+          timestamp: header.timestamp,
+          pageSummary: summary?.value ?? null,
+          chatMessages: chat?.value ?? [],
+          summaryCollapsed: header.summaryCollapsed
+        }
+      })
     } catch (err) {
       log.error('getTabSession failed', (err as Error).message)
       return null
     }
   }
 
-  async setTabSession(
-    url: string, 
-    chatMessages: AppChatMessage[], 
-    pageSummary: AppPageSummary | null, 
-    summaryCollapsed: boolean
-  ): Promise<void> {
+  async setTabSession(url: string, chatMessages: AppChatMessage[], pageSummary: AppPageSummary | null, summaryCollapsed: boolean): Promise<void> {
     try {
-      const plainMessages = JSON.parse(JSON.stringify(chatMessages))
-      const plainSummary = pageSummary ? JSON.parse(JSON.stringify(pageSummary)) : null
-      
-      await databaseService.put(DB_CONFIGS.cache, STORE_TAB_SESSIONS, {
-        url,
-        chatMessages: plainMessages,
-        pageSummary: plainSummary,
-        summaryCollapsed,
-        timestamp: Date.now()
+      const plainMessages = JSON.parse(JSON.stringify(chatMessages)) as AppChatMessage[]
+      const plainSummary = pageSummary ? JSON.parse(JSON.stringify(pageSummary)) as AppPageSummary : null
+      await databaseService.transaction(DB_CONFIGS.cache, TAB_STORE_NAMES, 'readwrite', tx => {
+        writeTabSession(tx, { url, chatMessages: plainMessages, pageSummary: plainSummary, summaryCollapsed, timestamp: Date.now() })
       })
     } catch (err) {
       log.error('setTabSession failed', (err as Error).message)
@@ -196,41 +195,52 @@ export class CacheService {
 
   async deleteTabSession(url: string): Promise<void> {
     try {
-      await databaseService.delete(DB_CONFIGS.cache, STORE_TAB_SESSIONS, url)
+      await databaseService.transaction(DB_CONFIGS.cache, TAB_STORE_NAMES, 'readwrite', tx => {
+        for (const name of TAB_STORE_NAMES) tx.objectStore(name).delete(url)
+      })
     } catch (err) {
       log.error('deleteTabSession failed', (err as Error).message)
     }
   }
 
-  async getAllTabSessions(): Promise<TabSessionEntry[]> {
+  async clearSessions(): Promise<void> {
     try {
-      return await databaseService.getAll<TabSessionEntry>(DB_CONFIGS.cache, STORE_TAB_SESSIONS)
+      await databaseService.transaction(DB_CONFIGS.cache, SESSION_STORE_NAMES, 'readwrite', tx => {
+        for (const name of SESSION_STORE_NAMES) tx.objectStore(name).clear()
+      })
     } catch (err) {
-      log.error('getAllTabSessions failed', (err as Error).message)
-      return []
+      log.error('clearSessions failed', (err as Error).message)
     }
   }
 
   async clearAll(): Promise<void> {
     try {
-      await Promise.all([
-        databaseService.clear(DB_CONFIGS.cache, STORE_EMAIL_SESSIONS),
-        databaseService.clear(DB_CONFIGS.cache, STORE_PAGE_CACHE),
-        databaseService.clear(DB_CONFIGS.cache, STORE_TAB_SESSIONS)
-      ])
+      await databaseService.transaction(DB_CONFIGS.cache, [...SESSION_STORE_NAMES, STORE_PAGE_CACHE], 'readwrite', tx => {
+        for (const name of [...SESSION_STORE_NAMES, STORE_PAGE_CACHE]) tx.objectStore(name).clear()
+      })
     } catch (err) {
       log.error('clearAll failed', (err as Error).message)
     }
   }
 
-  async getAllEmailSessions(): Promise<EmailSession[]> {
-    try {
-      return await databaseService.getAll<EmailSession>(DB_CONFIGS.cache, STORE_EMAIL_SESSIONS)
-    } catch (err) {
-      log.error('getAllEmailSessions failed', (err as Error).message)
-      return []
+  async putEmailSessions(sessions: CachedEmailSession[]): Promise<void> {
+    for (let i = 0; i < sessions.length; i += 500) {
+      const batch = sessions.slice(i, i + 500)
+      await databaseService.transaction(DB_CONFIGS.cache, EMAIL_STORE_NAMES, 'readwrite', tx => {
+        for (const session of batch) writeEmailSession(tx, session)
+      })
+    }
+  }
+
+  async putTabSessions(sessions: TabSessionEntry[]): Promise<void> {
+    for (let i = 0; i < sessions.length; i += 500) {
+      const batch = sessions.slice(i, i + 500)
+      await databaseService.transaction(DB_CONFIGS.cache, TAB_STORE_NAMES, 'readwrite', tx => {
+        for (const session of batch) writeTabSession(tx, session)
+      })
     }
   }
 }
 
+export { type TabSessionEntry } from './cacheRecords'
 export const cacheService = new CacheService()

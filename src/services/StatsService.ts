@@ -1,7 +1,6 @@
 import { databaseService, DB_CONFIGS } from './DatabaseService'
 import { logger } from './LoggerService'
-import type { EmailSession, AppChatMessage, AppPageSummary } from '@/types'
-import type { TabSessionEntry } from './CacheService'
+import { RECENT_INDEX, request, type EmailHeader, type TabHeader } from './cacheRecords'
 
 const log = logger.createScoped('StatsService')
 
@@ -45,8 +44,8 @@ class StatsServiceClass {
   async getStats(): Promise<UsageStats> {
     try {
       const [emailSessions, tabSessions] = await Promise.all([
-        databaseService.getAll<EmailSession>(DB_CONFIGS.cache, STORE_EMAIL_SESSIONS),
-        databaseService.getAll<TabSessionEntry>(DB_CONFIGS.cache, STORE_TAB_SESSIONS)
+        databaseService.getAll<EmailHeader>(DB_CONFIGS.cache, STORE_EMAIL_SESSIONS),
+        databaseService.getAll<TabHeader>(DB_CONFIGS.cache, STORE_TAB_SESSIONS)
       ])
 
       const now = Date.now()
@@ -55,12 +54,12 @@ class StatsServiceClass {
 
       // count emails with content (summary or chat)
       const emailsWithContent = emailSessions.filter(s => 
-        s.summary || (s.chatMessages && s.chatMessages.length > 0)
+        s.hasSummary || s.chatCount > 0
       )
       
       // count pages with content
       const pagesWithContent = tabSessions.filter(s => 
-        s.pageSummary || (s.chatMessages && s.chatMessages.length > 0)
+        s.hasSummary || s.chatCount > 0
       )
 
       // activity this week / today
@@ -72,26 +71,26 @@ class StatsServiceClass {
 
       // chat messages count
       const emailChatCount = emailSessions.reduce((sum, s) => 
-        sum + (s.chatMessages?.length || 0), 0)
+        sum + s.chatCount, 0)
       const pageChatCount = tabSessions.reduce((sum, s) => 
-        sum + (s.chatMessages?.length || 0), 0)
+        sum + s.chatCount, 0)
 
       // time saved calculation
-      const emailTimeSaved = emailsWithContent.filter(s => s.summary).length * MIN_PER_EMAIL
+      const emailTimeSaved = emailsWithContent.filter(s => s.hasSummary).length * MIN_PER_EMAIL
       const pageTimeSaved = pagesWithContent
-        .filter(s => s.pageSummary)
+        .filter(s => s.hasSummary)
         .reduce((sum, s) => {
-          const wordCount = s.pageSummary?.wordCount || 500
+          const wordCount = s.summaryWordCount || 500
           return sum + (wordCount / WORDS_PER_MINUTE)
         }, 0)
 
       // avg response time from summaries
       const responseTimes: number[] = []
       emailSessions.forEach(s => {
-        if (s.summary?.time_ms) responseTimes.push(s.summary.time_ms)
+        if (s.summaryTimeMs) responseTimes.push(s.summaryTimeMs)
       })
       tabSessions.forEach(s => {
-        if (s.pageSummary?.timing?.total) responseTimes.push(s.pageSummary.timing.total)
+        if (s.summaryTotalMs) responseTimes.push(s.summaryTotalMs)
       })
       const avgResponseTime = responseTimes.length > 0
         ? responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length
@@ -124,42 +123,48 @@ class StatsServiceClass {
 
   async getRecentActivity(limit = 10): Promise<ActivityItem[]> {
     try {
-      const [emailSessions, tabSessions] = await Promise.all([
-        databaseService.getAll<EmailSession>(DB_CONFIGS.cache, STORE_EMAIL_SESSIONS),
-        databaseService.getAll<TabSessionEntry>(DB_CONFIGS.cache, STORE_TAB_SESSIONS)
-      ])
+      if (limit === 0) return []
+      const [emailSessions, tabSessions] = Number.isInteger(limit) && limit > 0 && limit <= 0xffffffff
+        ? await databaseService.transaction(DB_CONFIGS.cache, [STORE_EMAIL_SESSIONS, STORE_TAB_SESSIONS], 'readonly', tx => Promise.all([
+          request<EmailHeader[]>(tx.objectStore(STORE_EMAIL_SESSIONS).index(RECENT_INDEX).getAll(undefined, limit)),
+          request<TabHeader[]>(tx.objectStore(STORE_TAB_SESSIONS).index(RECENT_INDEX).getAll(undefined, limit))
+        ]))
+        : await Promise.all([
+          databaseService.getAll<EmailHeader>(DB_CONFIGS.cache, STORE_EMAIL_SESSIONS),
+          databaseService.getAll<TabHeader>(DB_CONFIGS.cache, STORE_TAB_SESSIONS)
+        ])
 
       const activities: ActivityItem[] = []
 
       // map email sessions to activity items
       emailSessions
-        .filter(s => s.summary || (s.chatMessages && s.chatMessages.length > 0))
+        .filter(s => s.hasSummary || s.chatCount > 0)
         .forEach(session => {
           activities.push({
             id: session.emailId,
             type: 'email',
-            title: session.summary?.summary?.slice(0, 80) || 'Email conversation',
+            title: session.summaryTitle || 'Email conversation',
             timestamp: session.timestamp,
-            hasSummary: !!session.summary,
-            hasChat: (session.chatMessages?.length || 0) > 0,
-            chatCount: session.chatMessages?.length || 0,
-            timeSaved: session.summary ? MIN_PER_EMAIL : undefined
+            hasSummary: session.hasSummary,
+            hasChat: session.chatCount > 0,
+            chatCount: session.chatCount,
+            timeSaved: session.hasSummary ? MIN_PER_EMAIL : undefined
           })
         })
 
       // map page sessions to activity items
       tabSessions
-        .filter(s => s.pageSummary || (s.chatMessages && s.chatMessages.length > 0))
+        .filter(s => s.hasSummary || s.chatCount > 0)
         .forEach(session => {
-          const wordCount = session.pageSummary?.wordCount || 0
+          const wordCount = session.summaryWordCount
           activities.push({
             id: session.url,
             type: 'page',
-            title: session.pageSummary?.title || extractHostname(session.url),
+            title: session.summaryTitle,
             timestamp: session.timestamp,
-            hasSummary: !!session.pageSummary,
-            hasChat: (session.chatMessages?.length || 0) > 0,
-            chatCount: session.chatMessages?.length || 0,
+            hasSummary: session.hasSummary,
+            hasChat: session.chatCount > 0,
+            chatCount: session.chatCount,
             timeSaved: wordCount > 0 ? wordCount / WORDS_PER_MINUTE : undefined
           })
         })
@@ -168,6 +173,9 @@ class StatsServiceClass {
       return activities
         .sort((a, b) => b.timestamp - a.timestamp)
         .slice(0, limit)
+        .map(activity => activity.type === 'page' && !activity.title
+          ? { ...activity, title: extractHostname(activity.id) }
+          : activity)
     } catch (err) {
       log.error('getRecentActivity failed:', err)
       return []

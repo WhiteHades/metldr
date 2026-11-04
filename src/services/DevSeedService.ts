@@ -1,4 +1,5 @@
 import { databaseService, DB_CONFIGS } from './DatabaseService'
+import { cacheService } from './CacheService'
 import { logger } from './LoggerService'
 import type { 
   EmailSession, 
@@ -325,7 +326,7 @@ class DevSeedServiceClass {
       }
       emailSessions.push(session)
     }
-    await databaseService.putBatch(DB_CONFIGS.cache, 'email_sessions', emailSessions)
+    await cacheService.putEmailSessions(emailSessions)
     stats.emailSessions = emailSessions.length
     log.log(`✓ seeded ${emailSessions.length} email sessions`)
 
@@ -346,7 +347,7 @@ class DevSeedServiceClass {
       }
       tabSessions.push(session)
     }
-    await databaseService.putBatch(DB_CONFIGS.cache, 'tab_sessions', tabSessions)
+    await cacheService.putTabSessions(tabSessions)
     stats.tabSessions = tabSessions.length
     log.log(`✓ seeded ${tabSessions.length} tab sessions`)
 
@@ -400,8 +401,7 @@ class DevSeedServiceClass {
     log.log('🗑️ clearing all seeded data...')
     
     await Promise.all([
-      databaseService.clear(DB_CONFIGS.cache, 'email_sessions'),
-      databaseService.clear(DB_CONFIGS.cache, 'tab_sessions'),
+      cacheService.clearSessions(),
       databaseService.clear(DB_CONFIGS.analytics, 'daily_stats'),
       databaseService.clear(DB_CONFIGS.analytics, 'sessions'),
       databaseService.clear(DB_CONFIGS.analytics, 'events')

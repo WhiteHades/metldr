@@ -1,3 +1,5 @@
+import { CACHE_STORE_CONFIGS, migrateCache } from './cacheRecords'
+
 interface StoreConfig {
   readonly name: string
   readonly keyPath: string
@@ -18,7 +20,11 @@ class DatabaseServiceClass {
 
   async getDatabase(config: DatabaseConfig): Promise<IDBDatabase> {
     const existing = this.databases.get(config.name)
-    if (existing) return existing
+    if (existing?.version === config.version) return existing
+    if (existing) {
+      existing.close()
+      this.databases.delete(config.name)
+    }
 
     const pending = this.initPromises.get(config.name)
     if (pending) return pending
@@ -45,22 +51,31 @@ class DatabaseServiceClass {
       }
 
       request.onsuccess = () => {
-        resolve(request.result)
+        const db = request.result
+        db.onversionchange = () => {
+          db.close()
+          if (this.databases.get(config.name) === db) this.databases.delete(config.name)
+        }
+        resolve(db)
       }
 
       request.onupgradeneeded = (event) => {
         const db = (event.target as IDBOpenDBRequest).result
 
         for (const store of config.stores) {
-          if (!db.objectStoreNames.contains(store.name)) {
-            const objectStore = db.createObjectStore(store.name, { keyPath: store.keyPath })
-            
-            if (store.indexes) {
-              for (const index of store.indexes) {
+          const objectStore = db.objectStoreNames.contains(store.name)
+            ? request.transaction!.objectStore(store.name)
+            : db.createObjectStore(store.name, { keyPath: store.keyPath })
+          if (store.indexes) {
+            for (const index of store.indexes) {
+              if (!objectStore.indexNames.contains(index.name)) {
                 objectStore.createIndex(index.name, index.keyPath, { unique: index.unique ?? false })
               }
             }
           }
+        }
+        if (config.name === DB_CONFIGS.cache.name && event.oldVersion < 8) {
+          migrateCache(request.transaction!)
         }
       }
     })
@@ -208,19 +223,24 @@ class DatabaseServiceClass {
 
   async transaction<T>(
     config: DatabaseConfig,
-    storeNames: string[],
+    storeNames: readonly string[],
     mode: TransactionMode,
-    callback: (stores: Record<string, IDBObjectStore>) => Promise<T>
+    callback: (transaction: IDBTransaction) => T | Promise<T>
   ): Promise<T> {
     const db = await this.getDatabase(config)
-    const tx = db.transaction(storeNames, mode)
-    
-    const stores: Record<string, IDBObjectStore> = {}
-    for (const name of storeNames) {
-      stores[name] = tx.objectStore(name)
+    const tx = db.transaction([...storeNames], mode)
+    const complete = new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve()
+      tx.onabort = () => reject(tx.error ?? new Error('Database transaction aborted'))
+    })
+    try {
+      const [value] = await Promise.all([callback(tx), complete])
+      return value
+    } catch (error) {
+      try { tx.abort() } catch { /* The transaction may already have finished. */ }
+      await complete.catch(() => {})
+      throw error
     }
-
-    return callback(stores)
   }
 
   closeDatabase(name: string): void {
@@ -244,13 +264,8 @@ export const databaseService = new DatabaseServiceClass()
 export const DB_CONFIGS = {
   cache: {
     name: 'metldr_cache',
-    version: 7,
-    stores: [
-      { name: 'email_sessions', keyPath: 'emailId' },
-      { name: 'page_cache', keyPath: 'url' },
-      { name: 'tab_sessions', keyPath: 'url' },
-      { name: 'rag_metadata', keyPath: 'sourceId' }
-    ]
+    version: 8,
+    stores: CACHE_STORE_CONFIGS
   },
   dictionary: {
     name: 'metldr-dictionary',
