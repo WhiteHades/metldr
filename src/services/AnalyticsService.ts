@@ -3,6 +3,45 @@ import { logger } from './LoggerService'
 
 const log = logger.createScoped('AnalyticsService')
 
+function recentByTime<T>(index: IDBIndex, cutoff: number, limit: number): Promise<T[]> {
+  return new Promise((resolve, reject) => {
+    const rows: Array<{ key: IDBValidKey; primaryKey: IDBValidKey }> = []
+    const finish = () => {
+      const values = rows
+        .sort((a, b) => indexedDB.cmp(b.key, a.key) || indexedDB.cmp(a.primaryKey, b.primaryKey))
+        .map(row => new Promise<T>((resolve, reject) => {
+          const request = index.objectStore.get(row.primaryKey)
+          request.onsuccess = () => resolve(request.result)
+          request.onerror = () => reject(request.error)
+        }))
+      Promise.all(values).then(resolve, reject)
+    }
+    let boundaryStart = 0
+    const cursorRequest = index.openKeyCursor(IDBKeyRange.bound(cutoff, Infinity), 'prev')
+    cursorRequest.onerror = () => reject(cursorRequest.error)
+    cursorRequest.onsuccess = () => {
+      const cursor = cursorRequest.result
+      if (!cursor) { finish(); return }
+      const previous = rows[rows.length - 1]
+      if (!previous || indexedDB.cmp(previous.key, cursor.key) !== 0) boundaryStart = rows.length
+      rows.push({ key: cursor.key, primaryKey: cursor.primaryKey })
+      if (rows.length < limit) { cursor.continue(); return }
+
+      // Reverse cursors reverse primary-key ties, so refill the final timestamp forwards.
+      rows.length = boundaryStart
+      const boundary = index.openKeyCursor(IDBKeyRange.only(cursor.key))
+      boundary.onerror = () => reject(boundary.error)
+      boundary.onsuccess = () => {
+        const row = boundary.result
+        if (!row) { finish(); return }
+        rows.push({ key: row.key, primaryKey: row.primaryKey })
+        if (rows.length === limit) finish()
+        else row.continue()
+      }
+    }
+  })
+}
+
 // ============ TYPES ============
 
 // daily aggregated stats (key: YYYY-MM-DD)
@@ -633,34 +672,23 @@ class AnalyticsServiceClass {
 
   async getAnalyticsSummary(days = 30): Promise<AnalyticsSummary> {
     try {
-      const [allDaily, allSessions, allEvents] = await Promise.all([
-        databaseService.getAll<DailyStats>(DB_CONFIGS.analytics, STORE_DAILY),
-        databaseService.getAll<SessionRecord>(DB_CONFIGS.analytics, STORE_SESSIONS),
-        databaseService.getAll<AnalyticsEvent>(DB_CONFIGS.analytics, STORE_EVENTS)
-      ])
-
-      // filter to requested days
       const cutoff = new Date()
       cutoff.setDate(cutoff.getDate() - days)
       const cutoffStr = cutoff.toISOString().split('T')[0]
       const cutoffMs = cutoff.getTime()
 
-      const recentDaily = allDaily
-        .filter(d => d.date >= cutoffStr)
-        .sort((a, b) => a.date.localeCompare(b.date))
-
-      const recentSessions = allSessions
-        .filter(s => s.startTime >= cutoffMs)
-        .sort((a, b) => b.startTime - a.startTime)
-        .slice(0, 50)
-
-      const recentEvents = allEvents
-        .filter(e => e.timestamp >= cutoffMs)
-        .sort((a, b) => b.timestamp - a.timestamp)
-        .slice(0, 100)
+      const [recentDaily, activeDates, [recentSessions, recentEvents]] = await Promise.all([
+        databaseService.getAll<DailyStats>(DB_CONFIGS.analytics, STORE_DAILY, IDBKeyRange.lowerBound(cutoffStr)),
+        databaseService.getAllKeys<string>(DB_CONFIGS.analytics, STORE_DAILY,
+          IDBKeyRange.bound(0, Infinity, true), 'timeInPanel'),
+        databaseService.transaction(DB_CONFIGS.analytics, [STORE_SESSIONS, STORE_EVENTS], 'readonly', tx => Promise.all([
+          recentByTime<SessionRecord>(tx.objectStore(STORE_SESSIONS).index('startTime'), cutoffMs, 50),
+          recentByTime<AnalyticsEvent>(tx.objectStore(STORE_EVENTS).index('timestamp'), cutoffMs, 100)
+        ]))
+      ])
 
       // calculate streaks
-      const { currentStreak, longestStreak, lastActiveDate } = this.calculateStreaks(allDaily)
+      const { currentStreak, longestStreak, lastActiveDate } = this.calculateStreaks(activeDates)
 
       // aggregate totals
       const totals = recentDaily.reduce((acc, day) => ({
@@ -840,24 +868,19 @@ class AnalyticsServiceClass {
     }
   }
 
-  private calculateStreaks(allDaily: DailyStats[]): {
+  private calculateStreaks(activeDates: string[]): {
     currentStreak: number
     longestStreak: number
     lastActiveDate: string
   } {
-    if (allDaily.length === 0) {
+    if (activeDates.length === 0) {
       return { currentStreak: 0, longestStreak: 0, lastActiveDate: '' }
     }
 
-    const sorted = allDaily
-      .filter(d => d.timeInPanel > 0)
-      .sort((a, b) => b.date.localeCompare(a.date))
+    const sorted = activeDates.sort((a, b) => b.localeCompare(a))
+    const active = new Set(activeDates)
 
-    if (sorted.length === 0) {
-      return { currentStreak: 0, longestStreak: 0, lastActiveDate: '' }
-    }
-
-    const lastActiveDate = sorted[0].date
+    const lastActiveDate = sorted[0]
     let currentStreak = 0
     let longestStreak = 0
     let tempStreak = 0
@@ -870,15 +893,15 @@ class AnalyticsServiceClass {
     const yesterdayKey = yesterday.toISOString().split('T')[0]
 
     // check if active today or yesterday to start counting
-    const isActiveToday = sorted.some(d => d.date === today)
-    const isActiveYesterday = sorted.some(d => d.date === yesterdayKey)
+    const isActiveToday = active.has(today)
+    const isActiveYesterday = active.has(yesterdayKey)
 
     if (isActiveToday || isActiveYesterday) {
       let checkDate = isActiveToday ? new Date(today) : yesterday
 
       for (let i = 0; i < 365; i++) {
         const dateKey = checkDate.toISOString().split('T')[0]
-        if (sorted.some(d => d.date === dateKey)) {
+        if (active.has(dateKey)) {
           currentStreak++
           checkDate.setDate(checkDate.getDate() - 1)
         } else {
@@ -888,9 +911,9 @@ class AnalyticsServiceClass {
     }
 
     // calculate longest streak
-    sorted.sort((a, b) => a.date.localeCompare(b.date))
+    sorted.sort((a, b) => a.localeCompare(b))
     for (const day of sorted) {
-      const currentDate = new Date(day.date)
+      const currentDate = new Date(day)
       
       if (prevDate) {
         const diffDays = Math.round((currentDate.getTime() - prevDate.getTime()) / (1000 * 60 * 60 * 24))
@@ -956,26 +979,19 @@ class AnalyticsServiceClass {
       const cutoffMs = cutoff.getTime()
       const cutoffStr = cutoff.toISOString().split('T')[0]
 
-      const dailyDates = await databaseService.getAllKeys<string>(DB_CONFIGS.analytics, STORE_DAILY)
-      for (const date of dailyDates) {
-        if (date < cutoffStr) {
-          await databaseService.delete(DB_CONFIGS.analytics, STORE_DAILY, date)
+      await databaseService.transaction(DB_CONFIGS.analytics, [STORE_DAILY, STORE_EVENTS, STORE_SESSIONS], 'readwrite', tx => {
+        tx.objectStore(STORE_DAILY).delete(IDBKeyRange.upperBound(cutoffStr, true))
+        for (const [storeName, indexName] of [[STORE_EVENTS, 'timestamp'], [STORE_SESSIONS, 'startTime']]) {
+          const store = tx.objectStore(storeName)
+          const request = store.index(indexName).openKeyCursor(IDBKeyRange.upperBound(cutoffMs, true))
+          request.onsuccess = () => {
+            const cursor = request.result
+            if (!cursor) return
+            store.delete(cursor.primaryKey)
+            cursor.continue()
+          }
         }
-      }
-
-      const allEvents = await databaseService.getAll<AnalyticsEvent>(DB_CONFIGS.analytics, STORE_EVENTS)
-      for (const event of allEvents) {
-        if (event.timestamp < cutoffMs) {
-          await databaseService.delete(DB_CONFIGS.analytics, STORE_EVENTS, event.id)
-        }
-      }
-
-      const allSessions = await databaseService.getAll<SessionRecord>(DB_CONFIGS.analytics, STORE_SESSIONS)
-      for (const session of allSessions) {
-        if (session.startTime < cutoffMs) {
-          await databaseService.delete(DB_CONFIGS.analytics, STORE_SESSIONS, session.id)
-        }
-      }
+      })
 
       log.log(`pruned analytics data older than ${keepDays} days`)
     } catch (err) {

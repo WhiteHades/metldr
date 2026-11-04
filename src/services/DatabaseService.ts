@@ -155,14 +155,14 @@ class DatabaseServiceClass {
     })
   }
 
-  async getAll<T>(config: DatabaseConfig, storeName: string): Promise<T[]> {
+  async getAll<T>(config: DatabaseConfig, storeName: string, query?: IDBValidKey | IDBKeyRange): Promise<T[]> {
     const db = await this.getDatabase(config)
 
     return new Promise((resolve) => {
       try {
         const tx = db.transaction([storeName], 'readonly')
         const store = tx.objectStore(storeName)
-        const request = store.getAll()
+        const request = store.getAll(query)
 
         request.onsuccess = () => resolve(request.result ?? [])
         request.onerror = () => resolve([])
@@ -189,13 +189,14 @@ class DatabaseServiceClass {
     })
   }
 
-  async getAllKeys<K extends IDBValidKey>(config: DatabaseConfig, storeName: string): Promise<K[]> {
+  async getAllKeys<K extends IDBValidKey>(config: DatabaseConfig, storeName: string, query?: IDBValidKey | IDBKeyRange, indexName?: string): Promise<K[]> {
     const db = await this.getDatabase(config)
 
     return new Promise((resolve) => {
       try {
         const tx = db.transaction([storeName], 'readonly')
-        const request = tx.objectStore(storeName).getAllKeys()
+        const store = tx.objectStore(storeName)
+        const request = (indexName ? store.index(indexName) : store).getAllKeys(query)
         request.onsuccess = () => resolve(request.result as K[])
         request.onerror = () => resolve([])
       } catch {
@@ -277,11 +278,11 @@ export const DB_CONFIGS = {
   },
   analytics: {
     name: 'metldr-analytics',
-    version: 1,
+    version: 2,
     stores: [
-      { name: 'daily_stats', keyPath: 'date' },
-      { name: 'sessions', keyPath: 'id' },
-      { name: 'events', keyPath: 'id' }
+      { name: 'daily_stats', keyPath: 'date', indexes: [{ name: 'timeInPanel', keyPath: 'timeInPanel' }] },
+      { name: 'sessions', keyPath: 'id', indexes: [{ name: 'startTime', keyPath: 'startTime' }] },
+      { name: 'events', keyPath: 'id', indexes: [{ name: 'timestamp', keyPath: 'timestamp' }] }
     ]
   }
 } as const
