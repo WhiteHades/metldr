@@ -1,0 +1,87 @@
+.metldr-chart-wrap {
+  --gutter: 0rem;
+  --content: 42rem;
+  display: grid;
+  grid-template-columns:
+    [full-width-start] minmax(var(--gutter), 1fr)
+    [content-start] min(100% - var(--gutter) * 2, var(--content)) [content-end]
+    minmax(var(--gutter), 1fr) [full-width-end];
+  margin-block: 1.5rem;
+}
+.metldr-chart-wrap[data-kind="pie"] { --content: 32rem; }
+.metldr-chart-wrap > .metldr-chart { grid-column: content; }
+.metldr-chart {
+  position: relative;
+  padding-block: 1.5rem;
+  padding-inline: 1.5rem;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  background: var(--surface);
+  box-shadow: 0 1px 3px oklch(0 0 none / 0.1);
+}
+.metldr-chart-head { margin-block-end: 1rem; }
+.metldr-chart-head h3 { margin-block: 0; font-size: 1.25rem; font-weight: 700; color: var(--ink); }
+.metldr-chart-head p { margin-block: 0.25rem 0; color: var(--ink-2); font-size: 0.875rem; }
+.metldr-chart-plot { inline-size: 100%; min-inline-size: 0; }
+.metldr-chart-empty { margin-block: 0; padding-block: 2rem; color: var(--ink-2); text-align: center; }
+.metldr-chart-legend { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; margin-block-start: 1rem; }
+.metldr-chart-legend > div { grid-column: auto; display: flex; min-inline-size: 0; align-items: center; gap: 0.5rem; color: var(--ink); font-size: 0.875rem; overflow-wrap: break-word; }
+.metldr-chart-legend > div > span:first-child { flex: none; inline-size: 0.75rem; block-size: 0.75rem; border-radius: 0.125rem; }
+.metldr-chart-data { margin-block-start: 0.5rem; color: var(--ink-2); font-size: 0.75rem; }
+.metldr-chart-data summary { min-block-size: 44px; align-content: center; }
+.metldr-chart-data summary:focus-visible { outline: 2px solid var(--ink-2); outline-offset: 2px; }
+.metldr-chart-data summary:active { background: color-mix(in oklch, var(--ink) 12%, var(--surface)); }
+.metldr-chart-data table { inline-size: 100%; margin-block-start: 0.5rem; border-collapse: collapse; text-align: start; }
+.metldr-chart-data th, .metldr-chart-data td { padding-block: 0.25rem; padding-inline: 0.5rem; border-block-end: 1px solid var(--line); text-align: start; }
+.metldr-chart-data tbody th { overflow-wrap: anywhere; }
+.metldr-chart-source { margin-block: 0.75rem 0; color: var(--ink-2); font-size: 0.75rem; }
+.metldr-chart-options { position: absolute; inset-block-start: 0.5rem; inset-inline-end: 0.5rem; z-index: 1; }
+.metldr-chart-options > button {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-inline-size: 2rem;
+  min-block-size: 2rem;
+  padding-block: 0.375rem;
+  padding-inline: 0.375rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  color: var(--ink-2);
+  background: var(--surface);
+  box-shadow: 0 1px 3px oklch(0 0 none / 0.12);
+}
+.metldr-chart-options > button::after { content: ""; position: absolute; inset: min(0px, calc((100% - 44px) / 2)); }
+.metldr-chart-options > button > svg { inline-size: 1.2em; block-size: 1.2em; }
+.metldr-chart-options button:focus-visible, .metldr-chart-retry:focus-visible { outline: 2px solid var(--ink-2); outline-offset: 2px; }
+.metldr-chart-options button:active, .metldr-chart-retry:active { background: color-mix(in oklch, var(--ink) 12%, var(--surface)); transform: scale(0.97); }
+.metldr-chart-menu { position: absolute; inset-block-start: calc(100% + 0.25rem); inset-inline-end: 0; min-inline-size: 11.25rem; padding-block: 0.25rem; border: 1px solid var(--line); border-radius: 0.5rem; background: var(--surface); box-shadow: 0 4px 12px oklch(0 0 none / 0.14); }
+.metldr-chart-menu button {
+  display: block;
+  inline-size: 100%;
+  min-block-size: 44px;
+  padding-block: 0.5rem;
+  padding-inline: 0.75rem;
+  border: 0;
+  color: var(--ink);
+  background: transparent;
+  text-align: start;
+  font-size: 0.75rem;
+}
+.metldr-chart-menu button:focus-visible { outline: 2px solid var(--ink-2); outline-offset: -2px; }
+.metldr-chart-menu button:active { background: color-mix(in oklch, var(--ink) 12%, var(--surface)); transform: scale(0.97); }
+.metldr-chart-retry { min-block-size: 44px; padding-block: 0.5rem; padding-inline: 0.75rem; border: 1px solid var(--line); border-radius: 0.5rem; color: var(--ink); background: var(--surface); }
+.metldr-chart-error { margin-block: 0.5rem 0; color: var(--ink-2); font-size: 0.875rem; }
+@media (hover: hover) and (pointer: fine) {
+  .metldr-chart-options { opacity: 0; pointer-events: none; }
+  .metldr-chart-wrap:hover .metldr-chart-options,
+  .metldr-chart-options:focus-within,
+  .metldr-chart-options[data-open="true"] { opacity: 1; pointer-events: auto; }
+  .metldr-chart-menu button:hover { background: color-mix(in oklch, var(--ink) 6%, var(--surface)); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .metldr-chart-options { transition: opacity 200ms ease-out; }
+  .metldr-chart-options > button, .metldr-chart-menu button, .metldr-chart-retry { transition: transform 150ms ease-out; }
+  @media (hover: hover) and (pointer: fine) {
+    .metldr-chart-options > button:hover { transform: scale(1.05); }
+  }
+}

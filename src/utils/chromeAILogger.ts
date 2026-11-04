@@ -1,3 +1,6 @@
+
+
+const chromeVersionPattern = /Chrome\/(\d+)/
 /**
  * Chrome AI Debug Logger
  * 
@@ -59,7 +62,7 @@ export const chromeAILogger = {
     
     // browser info
     const ua = navigator.userAgent;
-    const chromeMatch = ua.match(/Chrome\/(\d+)/);
+    const chromeMatch = ua.match(chromeVersionPattern);
     const chromeVersion = chromeMatch ? parseInt(chromeMatch[1]) : null;
     
     log('info', 'User Agent:', ua);

@@ -22,31 +22,36 @@ async function doCheck(silent = false): Promise<void> {
   try {
     if (!silent) log.log('checking Chrome AI availability')
     
-    let hasLanguageModel = false
-    let hasSummarizer = false
-    let lmStatus: string | null = null
-    let sumStatus: string | null = null
+    const [lmStatus, sumStatus] = await Promise.all([
+      (async () => {
+        if (typeof LanguageModel !== 'undefined') {
+          try {
+            const avail = await LanguageModel.availability({ languages: ['en', 'es', 'ja'] })
+            const status = typeof avail === 'string' ? avail : avail?.available
+            if (!silent) log.log('LanguageModel.availability', status)
+            return status
+          } catch (e) {
+            if (!silent) log.log('LanguageModel.availability error', (e as Error).message)
+          }
+        }
+        return null
+      })(),
+      (async () => {
+        if (typeof Summarizer !== 'undefined') {
+          try {
+            const status = await Summarizer.availability()
+            if (!silent) log.log('Summarizer.availability', status)
+            return status
+          } catch (e) {
+            if (!silent) log.log('Summarizer.availability error', (e as Error).message)
+          }
+        }
+        return null
+      })()
+    ])
 
-    if (typeof LanguageModel !== 'undefined') {
-      try {
-        const avail = await LanguageModel.availability({ languages: ['en', 'es', 'ja'] })
-        lmStatus = typeof avail === 'string' ? avail : avail?.available
-        hasLanguageModel = lmStatus === 'available' || lmStatus === 'downloadable' || lmStatus === 'downloading' || lmStatus === 'readily'
-        if (!silent) log.log('LanguageModel.availability', lmStatus)
-      } catch (e) {
-        if (!silent) log.log('LanguageModel.availability error', (e as Error).message)
-      }
-    }
-
-    if (typeof Summarizer !== 'undefined') {
-      try {
-        sumStatus = await Summarizer.availability()
-        hasSummarizer = sumStatus === 'available' || sumStatus === 'downloadable' || sumStatus === 'downloading'
-        if (!silent) log.log('Summarizer.availability', sumStatus)
-      } catch (e) {
-        if (!silent) log.log('Summarizer.availability error', (e as Error).message)
-      }
-    }
+    const hasLanguageModel = lmStatus === 'available' || lmStatus === 'downloadable' || lmStatus === 'downloading' || lmStatus === 'readily'
+    const hasSummarizer = sumStatus === 'available' || sumStatus === 'downloadable' || sumStatus === 'downloading'
 
     const bestStatus = lmStatus || sumStatus
     

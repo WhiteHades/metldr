@@ -1,12 +1,12 @@
 use super::{FlowClient, Reply, ReplyKind, Result};
 use crate::{
     history::{
-        Change, Changed, Context, ConversationPage, Cursor, Expected, Response, RunPage,
-        RunReference, Scope, validate_reference,
+        Change, Changed, Context, ConversationPage, Cursor, Expected, GeneratedRead, Response,
+        RunPage, RunReference, Scope, validate_reference,
     },
     model::{FlowError, RunId, RunView},
 };
-use metldr_conversation::{ArtifactId, Table};
+use metldr_conversation::{ArtifactCompletion, ArtifactId, Chart, GeneratedAnswer, Table};
 use metldr_history_pages::{Assembler, Counter, DocumentKind, Identity};
 use serde::Deserialize;
 use serde_json::json;
@@ -145,8 +145,87 @@ impl FlowClient {
             DocumentKind::Artifact,
             id.as_str(),
             Counter(1),
-            |bytes| decode_artifact(bytes, run, id),
+            |bytes| match decode_artifact(bytes, run, id)?.content {
+                ArtifactContent::Table { table } => Ok(table),
+                _ => Err(FlowError::Protocol("Saved result is not a table.".into())),
+            },
         )
+        .await
+    }
+
+    pub(crate) async fn history_chart(
+        &self,
+        context: &Context,
+        run: &RunId,
+        id: &ArtifactId,
+    ) -> Result<Chart> {
+        context
+            .scope
+            .validate()
+            .map_err(|_| FlowError::Protocol("Invalid history scope.".into()))?;
+        validate_artifact_id(id.as_str(), &context.scope.store)?;
+        validate_artifact_id(run.as_str(), &context.scope.store)?;
+        self.history_document(
+            context,
+            DocumentKind::Artifact,
+            id.as_str(),
+            Counter(1),
+            |bytes| match decode_artifact(bytes, run, id)?.content {
+                ArtifactContent::Chart { chart } => Ok(chart),
+                _ => Err(FlowError::Protocol("Saved result is not a chart.".into())),
+            },
+        )
+        .await
+    }
+
+    pub(crate) async fn history_generated(
+        &self,
+        context: &Context,
+        run: &RunId,
+        id: &ArtifactId,
+        revision: Counter,
+    ) -> Result<GeneratedRead> {
+        context
+            .scope
+            .validate()
+            .map_err(|_| FlowError::Protocol("Invalid history scope.".into()))?;
+        validate_artifact_id(id.as_str(), &context.scope.store)?;
+        validate_artifact_id(run.as_str(), &context.scope.store)?;
+        if revision.0 == 0 {
+            return Err(FlowError::Protocol("Invalid generated revision.".into()));
+        }
+        let pin = self
+            .history_pin(context, DocumentKind::Artifact, id.as_str(), revision)
+            .await?;
+        let identity = match pin {
+            Response::Pinned(identity) => identity,
+            response @ Response::Stale(_) => {
+                return Ok(GeneratedRead::Superseded(generated_superseded(
+                    response, revision,
+                )?));
+            }
+            _ => {
+                return Err(FlowError::Protocol(
+                    "Expected a saved result ticket.".into(),
+                ));
+            }
+        };
+        self.read_pinned(identity, |bytes| {
+            match decode_artifact(bytes, run, id)?.content {
+                ArtifactContent::Generated { source, completion } => {
+                    if completion == ArtifactCompletion::Completed {
+                        source.clone().finish().map_err(FlowError::Protocol)?;
+                    }
+                    Ok(GeneratedRead::Ready {
+                        answer: source,
+                        completion,
+                    })
+                }
+                _ => Err(FlowError::Protocol(
+                    "Saved result is not generated content.".into(),
+                )),
+            }
+        })
         .await
     }
 
@@ -158,12 +237,52 @@ impl FlowClient {
         revision: Counter,
         decode: impl FnOnce(&[u8]) -> Result<T>,
     ) -> Result<T> {
-        let pin = self.history_request(json!({"op":"history_pin","scope":context.scope,"generation":context.generation,"kind":kind,"document":document,"revision":revision}), Expected::Pin {context:context.clone(),kind,document:document.to_owned(),revision}).await?;
-        let Response::Pinned(identity) = pin else {
-            return Err(FlowError::Protocol(
-                "Expected a saved result ticket.".into(),
-            ));
+        let pin = self.history_pin(context, kind, document, revision).await?;
+        let identity = match pin {
+            Response::Pinned(identity) => identity,
+            Response::Stale(_) => return Err(FlowError::HistoryStale),
+            _ => {
+                return Err(FlowError::Protocol(
+                    "Expected a saved result ticket.".into(),
+                ));
+            }
         };
+        self.read_pinned(identity, decode).await
+    }
+
+    async fn history_pin(
+        &self,
+        context: &Context,
+        kind: DocumentKind,
+        document: &str,
+        revision: Counter,
+    ) -> Result<Response> {
+        match self
+            .request(
+                json!({"op":"history_pin","scope":context.scope,"generation":context.generation,"kind":kind,"document":document,"revision":revision}),
+                ReplyKind::History(Expected::Pin {
+                    context: context.clone(),
+                    kind,
+                    document: document.to_owned(),
+                    revision,
+                }),
+            )
+            .await?
+        {
+            Reply::History(Response::Busy) => Err(FlowError::HistoryBusy),
+            Reply::History(response @ (Response::Pinned(_) | Response::Stale(_))) => Ok(response),
+            Reply::History(_) => Err(FlowError::Protocol(
+                "Expected a saved result ticket.".into(),
+            )),
+            _ => Err(FlowError::Protocol("Expected a history reply.".into())),
+        }
+    }
+
+    async fn read_pinned<T>(
+        &self,
+        identity: Identity,
+        decode: impl FnOnce(&[u8]) -> Result<T>,
+    ) -> Result<T> {
         let mut guard = Pinned {
             flow: self.clone(),
             identity: Some(identity.clone()),
@@ -218,10 +337,25 @@ struct ArtifactRecord {
     run: String,
     call: String,
     surface_id: String,
-    table: Table,
+    content: ArtifactContent,
 }
 
-fn decode_artifact(bytes: &[u8], run: &RunId, id: &ArtifactId) -> Result<Table> {
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum ArtifactContent {
+    Table {
+        table: Table,
+    },
+    Generated {
+        source: GeneratedAnswer,
+        completion: ArtifactCompletion,
+    },
+    Chart {
+        chart: Chart,
+    },
+}
+
+fn decode_artifact(bytes: &[u8], run: &RunId, id: &ArtifactId) -> Result<ArtifactRecord> {
     let artifact: ArtifactRecord =
         serde_json::from_slice(bytes).map_err(|error| FlowError::Protocol(error.to_string()))?;
     if artifact.id != *id
@@ -235,7 +369,7 @@ fn decode_artifact(bytes: &[u8], run: &RunId, id: &ArtifactId) -> Result<Table> 
     {
         return Err(FlowError::Protocol("Invalid saved artifact.".into()));
     }
-    Ok(artifact.table)
+    Ok(artifact)
 }
 
 fn validate_artifact_id(value: &str, store: &str) -> Result<()> {
@@ -255,9 +389,19 @@ fn validate_artifact_id(value: &str, store: &str) -> Result<()> {
     Ok(())
 }
 
+fn generated_superseded(response: Response, requested: Counter) -> Result<Counter> {
+    match response {
+        Response::Stale(Some(observation)) if observation.revision.0 > requested.0 => {
+            Ok(observation.revision)
+        }
+        _ => Err(FlowError::HistoryStale),
+    }
+}
+
 #[cfg(test)]
 mod checks {
     use super::*;
+    use serde_json::Value;
 
     #[test]
     fn artifact_decode_checks_owner_and_strict_record_shape() {
@@ -269,7 +413,7 @@ mod checks {
             "run": run.as_str(),
             "call": "call-1",
             "surface_id": "surface-1",
-            "table": {"title":"t","columns":["c"],"rows":[],"source":"s"}
+            "content": {"kind":"table","table":{"title":"t","columns":["c"],"rows":[],"source":"s"}}
         });
         assert!(decode_artifact(&serde_json::to_vec(&value).unwrap(), &run, &id).is_ok());
 
@@ -280,6 +424,92 @@ mod checks {
         let mut extra = value;
         extra["extra"] = json!(true);
         assert!(decode_artifact(&serde_json::to_vec(&extra).unwrap(), &run, &id).is_err());
+    }
+
+    #[test]
+    fn only_validated_newer_generated_pin_observations_are_superseded() {
+        let context = crate::history::Context {
+            scope: Scope {
+                store: "0123456789abcdef0123456789abcdef".into(),
+                conversation: "0123456789abcdef0123456789abcdef:1".into(),
+                epoch: Counter(1),
+            },
+            generation: "generation-1".into(),
+        };
+        let expected = Expected::Pin {
+            context: context.clone(),
+            kind: DocumentKind::Artifact,
+            document: "0123456789abcdef0123456789abcdef:2".into(),
+            revision: Counter(2),
+        };
+        let stale_frame =
+            |revision: Option<&str>, document: &str, scope: Value, generation: &str| {
+                json!({
+                    "v": metldr_history_pages::WIRE_VERSION,
+                    "request": "pin",
+                    "kind": "history_stale",
+                    "observation": revision.map(|revision| json!({
+                        "scope": scope,
+                        "generation": generation,
+                        "sequence": "4",
+                        "kind": "artifact",
+                        "document": document,
+                        "revision": revision,
+                        "status": null
+                    }))
+                })
+            };
+        let stale = |revision: &str, document: &str| {
+            expected.decode(stale_frame(
+                Some(revision),
+                document,
+                serde_json::to_value(&context.scope).unwrap(),
+                &context.generation,
+            ))
+        };
+
+        let newer = stale("3", "0123456789abcdef0123456789abcdef:2").unwrap();
+        assert_eq!(generated_superseded(newer, Counter(2)).unwrap(), Counter(3));
+        let equal = stale("2", "0123456789abcdef0123456789abcdef:2").unwrap();
+        assert!(generated_superseded(equal, Counter(2)).is_err());
+        let older = stale("1", "0123456789abcdef0123456789abcdef:2").unwrap();
+        assert!(generated_superseded(older, Counter(2)).is_err());
+        assert!(stale("3", "0123456789abcdef0123456789abcdef:3").is_err());
+        let missing = expected
+            .decode(stale_frame(
+                None,
+                "0123456789abcdef0123456789abcdef:2",
+                serde_json::to_value(&context.scope).unwrap(),
+                &context.generation,
+            ))
+            .unwrap();
+        assert!(generated_superseded(missing, Counter(2)).is_err());
+
+        let foreign_scope = json!({
+            "store": context.scope.store,
+            "conversation": "0123456789abcdef0123456789abcdef:3",
+            "epoch": "1"
+        });
+        assert!(
+            expected
+                .decode(stale_frame(
+                    Some("3"),
+                    "0123456789abcdef0123456789abcdef:2",
+                    foreign_scope,
+                    &context.generation,
+                ))
+                .is_err()
+        );
+        assert!(
+            expected
+                .decode(stale_frame(
+                    Some("3"),
+                    "0123456789abcdef0123456789abcdef:2",
+                    serde_json::to_value(&context.scope).unwrap(),
+                    "generation-2",
+                ))
+                .is_err()
+        );
     }
 }
 

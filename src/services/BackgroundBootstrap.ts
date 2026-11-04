@@ -33,6 +33,10 @@ import type {
 } from '../types'
 
 const log = logger.createScoped('BackgroundBootstrap')
+const OLLAMA_ERROR_PATTERN = /ollama/i
+const SUMMARY_BULLET_PREFIX_PATTERN = /^[•\-*]\s*/
+const SUMMARY_SENTENCE_SEPARATOR_PATTERN = /[.!?]+/
+const WHITESPACE_PATTERN = /\s+/
 
 export class BackgroundBootstrap {
   static isInitialized = false
@@ -257,7 +261,7 @@ export class BackgroundBootstrap {
       } catch (err) {
         log.error('onEmailSummary', (err as Error).message)
         const errMsg = (err as Error)?.message || 'unknown error'
-        const needsOllama = /ollama/i.test(errMsg)
+        const needsOllama = OLLAMA_ERROR_PATTERN.test(errMsg)
         respond({
           error: errMsg,
           needsOllama,
@@ -823,12 +827,12 @@ export class BackgroundBootstrap {
         const bullets = summary
           .split('\n')
           .filter(line => line.trim().startsWith('•') || line.trim().startsWith('-') || line.trim().startsWith('*'))
-          .map(line => line.replace(/^[•\-*]\s*/, '').trim())
+          .map(line => line.replace(SUMMARY_BULLET_PREFIX_PATTERN, '').trim())
           .filter(Boolean)
 
         const finalBullets = bullets.length > 0 
           ? bullets 
-          : summary.split(/[.!?]+/).filter(s => s.trim().length > 20).slice(0, 5)
+          : summary.split(SUMMARY_SENTENCE_SEPARATOR_PATTERN).filter(s => s.trim().length > 20).slice(0, 5)
 
         respond({ success: true, summary: { bullets: finalBullets, raw: summary } })
       } catch (err) {
@@ -850,7 +854,7 @@ export class BackgroundBootstrap {
         log.log('pdf extract text request:', url.slice(0, 80))
 
         const text = await pdfService.extractFromUrl(url)
-        const wordCount = text.split(/\s+/).filter(Boolean).length
+        const wordCount = text.split(WHITESPACE_PATTERN).filter(Boolean).length
 
         respond({ success: true, text, wordCount })
       } catch (err) {
@@ -977,18 +981,18 @@ export class BackgroundBootstrap {
           const bullets = result.summary
             .split('\n')
             .filter(line => line.trim().startsWith('•') || line.trim().startsWith('-') || line.trim().startsWith('*'))
-            .map(line => line.replace(/^[•\-*]\s*/, '').trim())
+            .map(line => line.replace(SUMMARY_BULLET_PREFIX_PATTERN, '').trim())
             .filter(Boolean)
           
           const finalBullets = bullets.length > 0 
             ? bullets 
-            : result.summary.split(/[.!?]+/).filter(s => s.trim().length > 20).slice(0, 5)
+            : result.summary.split(SUMMARY_SENTENCE_SEPARATOR_PATTERN).filter(s => s.trim().length > 20).slice(0, 5)
           
           respond({ success: true, summary: { bullets: finalBullets }, text: result.fullText })
           
           ;(async () => {
             try {
-              const wordCount = result.fullText.split(/\s+/).length
+              const wordCount = result.fullText.split(WHITESPACE_PATTERN).length
               const readTimeMin = Math.max(1, Math.round(wordCount / 200))
               const summaryData = {
                 title: filename.replace('.pdf', ''),
@@ -1029,7 +1033,7 @@ export class BackgroundBootstrap {
           
         } else {
           const text = await pdfService.extractFromArrayBuffer(arrayBuffer)
-          const wordCount = text.split(/\s+/).filter(Boolean).length
+          const wordCount = text.split(WHITESPACE_PATTERN).filter(Boolean).length
           respond({ success: true, text, wordCount })
         }
       } catch (err) {

@@ -6,6 +6,11 @@ import type { ExtractedData, SummaryTiming, PageSummary, ChatMessage, PageContex
 
 import { ragService } from './rag/RagService'
 
+const WHITESPACE_PATTERN = /\s+/
+const SUMMARY_BULLET_PATTERN = /^[-•*]|^\d+\./
+const BULLET_PREFIX_PATTERN = /^[-•*]\s*/
+const NUMBERED_PREFIX_PATTERN = /^\d+\.\s*/
+
 export class PageService {
 
   static async summarize(extractedData: ExtractedData, force = false): Promise<PageSummary> {
@@ -103,7 +108,7 @@ export class PageService {
       cached: false,
       responseTimeMs: timing.llm || 0,
       wordsIn: wordCount || 0,
-      wordsOut: bullets.join(' ').split(/\s+/).length,
+      wordsOut: bullets.join(' ').split(WHITESPACE_PATTERN).length,
       tokensOut: Math.round(summaryText.length / 4),
       model: timing.model,
       url
@@ -116,8 +121,8 @@ export class PageService {
     const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0)
     
     const bullets = lines
-      .filter(l => /^[-•*]|^\d+\./.test(l))
-      .map(l => l.replace(/^[-•*]\s*/, '').replace(/^\d+\.\s*/, '').trim())
+      .filter(l => SUMMARY_BULLET_PATTERN.test(l))
+      .map(l => l.replace(BULLET_PREFIX_PATTERN, '').replace(NUMBERED_PREFIX_PATTERN, '').trim())
       .filter(l => l.length > 10)
       .slice(0, 5)
 
@@ -133,36 +138,37 @@ export class PageService {
     sources: Array<{ index: number; url: string; type: string }>
   ): Promise<string> {
     const summaryParts: string[] = []
-    
-    for (const source of sources) {
-      if (!source.url) continue
-      
-      try {
-        let summary: string | null = null
-        
-        if (source.type === 'email') {
-          const emailId = source.url.replace('email://', '').split('/').pop()
-          if (emailId) {
-            const cached = await cacheService.getEmailSummary(emailId) as { bullets?: string[]; keyPoints?: string[] } | null
+
+    for (let i = 0; i < sources.length; i += 8) {
+      const summaries = await Promise.all(sources.slice(i, i + 8).map(async source => {
+        if (!source.url) return null
+
+        try {
+          let summary: string | null = null
+
+          if (source.type === 'email') {
+            const emailId = source.url.replace('email://', '').split('/').pop()
+            if (emailId) {
+              const cached = await cacheService.getEmailSummary(emailId) as { bullets?: string[]; keyPoints?: string[] } | null
+              if (cached?.bullets?.length) {
+                summary = cached.bullets.join('. ')
+              } else if (cached?.keyPoints?.length) {
+                summary = cached.keyPoints.join('. ')
+              }
+            }
+          } else {
+            const cached = await cacheService.getPageSummary(source.url) as { bullets?: string[] } | null
             if (cached?.bullets?.length) {
               summary = cached.bullets.join('. ')
-            } else if (cached?.keyPoints?.length) {
-              summary = cached.keyPoints.join('. ')
             }
           }
-        } else {
-          const cached = await cacheService.getPageSummary(source.url) as { bullets?: string[] } | null
-          if (cached?.bullets?.length) {
-            summary = cached.bullets.join('. ')
-          }
+
+          return summary ? `[${source.index}] SUMMARY: ${summary}` : null
+        } catch {
+          return null
         }
-        
-        if (summary) {
-          summaryParts.push(`[${source.index}] SUMMARY: ${summary}`)
-        }
-      } catch {
-        // skip if fetch fails
-      }
+      }))
+      summaryParts.push(...summaries.filter((summary): summary is string => summary !== null))
     }
     
     if (summaryParts.length === 0) return context

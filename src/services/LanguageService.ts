@@ -90,7 +90,8 @@ class LanguageServiceClass {
   }
 
   async detectForPage(url: string, content: string): Promise<SupportedLanguage> {
-    const urlKey = new URL(url).hostname + new URL(url).pathname
+    const parsed = new URL(url)
+    const urlKey = parsed.hostname + parsed.pathname
     return this.detect(content, `page:${urlKey}`)
   }
 

@@ -1,0 +1,30 @@
+[package]
+name = "metldr-answer-codec"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT"
+publish = false
+
+[workspace]
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+
+[features]
+default = []
+guest = []
+
+[dependencies]
+metldr-conversation = { path = "../metldr-conversation" }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+wasm-bindgen = "=0.2.128"
+
+[lints.rust]
+unsafe_code = "forbid"

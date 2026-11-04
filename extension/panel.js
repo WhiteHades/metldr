@@ -1,4 +1,9 @@
 function capturePage() {
+  // Chrome serializes this function without its module scope; cache per isolated document.
+  const whitespaceSource = "\\s+";
+  const whitespaceFlags = "gu";
+  const whitespaceKey = Symbol.for(`metldr.capture.regex.${whitespaceFlags}.${whitespaceSource}`);
+  const whitespacePattern = globalThis[whitespaceKey] ??= new RegExp(whitespaceSource, whitespaceFlags);
   const omitted = (element) => {
     if (element.matches("script,style,noscript,template,h1,h2,h3,form,input,textarea,select,button,nav,[hidden],[inert],[aria-hidden='true'],[role='textbox']") || element.isContentEditable) return true;
     const style = getComputedStyle(element);
@@ -29,7 +34,7 @@ function capturePage() {
   let size = 0;
   let previousBlock;
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    const text = node.data.replace(/\s+/gu, " ");
+    const text = node.data.replace(whitespacePattern, " ");
     if (!text) continue;
     const range = document.createRange();
     range.selectNodeContents(node);
@@ -45,7 +50,7 @@ function capturePage() {
   return {
     url: location.href,
     title: document.title,
-    text: parts.join("").trim().replace(/\s+/gu, " "),
+    text: parts.join("").trim().replace(whitespacePattern, " "),
   };
 }
 

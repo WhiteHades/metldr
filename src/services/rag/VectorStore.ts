@@ -2,6 +2,9 @@ import { databaseService, DB_CONFIGS } from '../DatabaseService'
 import { localModels } from '../ai/LocalModelProvider'
 import type { VectorEntry, SearchResult } from '../../types'
 
+const TOKEN_PUNCTUATION_PATTERN = /[^\w\s]/g
+const WHITESPACE_PATTERN = /\s+/
+
 class InvertedIndex {
   private index: Map<string, Set<string>> = new Map()
   private docs: Map<string, VectorEntry> = new Map()
@@ -62,8 +65,8 @@ class InvertedIndex {
 
   private tokenize(text: string): string[] {
     return text.toLowerCase()
-      .replace(/[^\w\s]/g, ' ')
-      .split(/\s+/)
+      .replace(TOKEN_PUNCTUATION_PATTERN, ' ')
+      .split(WHITESPACE_PATTERN)
       .filter(t => t.length > 2)
   }
 }

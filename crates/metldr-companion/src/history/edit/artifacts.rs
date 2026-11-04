@@ -1,4 +1,7 @@
-use super::super::artifacts::{artifact_refs, eligible, valid_call, valid_id, valid_surface};
+use super::super::artifacts::{
+    ArtifactContent, artifact_refs, eligible, projected_presentation, valid_call, valid_id,
+    valid_surface,
+};
 use super::super::schema::{ARTIFACTS, LAUNCHES, RUNS, Record, decode, encode};
 use super::super::{Artifact, Observed};
 use super::{Edit, Selection, record, storage};
@@ -7,7 +10,9 @@ use crate::{
     agent_model::Launch,
     model::{Run, Status},
 };
-use metldr_conversation::{ArtifactId, Change, Table};
+use metldr_conversation::{
+    ArtifactCompletion, ArtifactId, Change, Chart, CompleteSource, GeneratedAnswer, Table,
+};
 use metldr_history_pages::Counter;
 use redb::ReadableTable;
 
@@ -20,17 +25,41 @@ impl Edit<'_> {
         surface_id: &str,
         table: Table,
     ) -> Result<ArtifactId> {
-        let result = self.accept_table_inner(scope, run_id, call, surface_id, table);
+        let result = self.accept_static_inner(
+            scope,
+            run_id,
+            call,
+            surface_id,
+            ArtifactContent::Table { table },
+        );
         self.checked(result)
     }
 
-    fn accept_table_inner(
+    pub(crate) fn accept_chart(
         &mut self,
         scope: &Selection,
         run_id: &str,
         call: &str,
         surface_id: &str,
-        table: Table,
+        chart: Chart,
+    ) -> Result<ArtifactId> {
+        let result = self.accept_static_inner(
+            scope,
+            run_id,
+            call,
+            surface_id,
+            ArtifactContent::Chart { chart },
+        );
+        self.checked(result)
+    }
+
+    fn accept_static_inner(
+        &mut self,
+        scope: &Selection,
+        run_id: &str,
+        call: &str,
+        surface_id: &str,
+        content: ArtifactContent,
     ) -> Result<ArtifactId> {
         self.require_selection(scope)?;
         valid_call(call)?;
@@ -43,7 +72,7 @@ impl Edit<'_> {
         let launch: Record<Launch> =
             record(self.write, LAUNCHES, run_id)?.ok_or("run has no launch")?;
         if launch.conversation != scope.conversation || !eligible(&launch.value) {
-            return Err("table artifacts require a Responses text run".into());
+            return Err("static artifacts require a Responses text run".into());
         }
         let refs = artifact_refs(&before.value);
         if refs.len() > 4 {
@@ -59,14 +88,13 @@ impl Edit<'_> {
             if saved.conversation != scope.conversation
                 || saved.value.id != *id
                 || saved.value.run != run_id
-                || saved.revision != 1
                 || calls.contains(&saved.value.call)
             {
                 return Err("run artifact ownership differs".into());
             }
             calls.push(saved.value.call.clone());
             if saved.value.call == call {
-                if saved.value.surface_id == surface_id && saved.value.table == table {
+                if saved.value.surface_id == surface_id && saved.value.content == content {
                     return Ok(id.clone());
                 }
                 return Err("artifact call identity already has different content".into());
@@ -80,12 +108,19 @@ impl Edit<'_> {
         }
 
         let id = ArtifactId::new(self.id()?)?;
+        let change = match &content {
+            ArtifactContent::Table { .. } => Change::Artifact(id.clone()),
+            ArtifactContent::Chart { .. } => Change::Chart(id.clone()),
+            ArtifactContent::Generated { .. } => {
+                return Err("generated content requires a streaming artifact".into());
+            }
+        };
         let artifact = Artifact {
             id: id.clone(),
             run: run_id.to_owned(),
             call: call.to_owned(),
             surface_id: surface_id.to_owned(),
-            table,
+            content,
         };
         storage(|| {
             let value = Record {
@@ -104,7 +139,179 @@ impl Edit<'_> {
             Ok(())
         })?;
         let mut next = before.value;
-        next.output.change(Change::Artifact(id.clone()))?;
+        next.output.change(change)?;
+        self.put_run(scope, next)?;
+        Ok(id)
+    }
+
+    pub(crate) fn preview_generated(
+        &mut self,
+        scope: &Selection,
+        run_id: &str,
+        call: &str,
+        surface_id: &str,
+        source: GeneratedAnswer,
+    ) -> Result<ArtifactId> {
+        let result = self.generated_inner(scope, run_id, call, surface_id, source, false);
+        self.checked(result)
+    }
+
+    pub(crate) fn complete_generated(
+        &mut self,
+        scope: &Selection,
+        run_id: &str,
+        call: &str,
+        surface_id: &str,
+        source: CompleteSource,
+    ) -> Result<ArtifactId> {
+        let result =
+            self.generated_inner(scope, run_id, call, surface_id, source.into_answer(), true);
+        self.checked(result)
+    }
+
+    fn generated_inner(
+        &mut self,
+        scope: &Selection,
+        run_id: &str,
+        call: &str,
+        surface_id: &str,
+        source: GeneratedAnswer,
+        complete: bool,
+    ) -> Result<ArtifactId> {
+        self.require_selection(scope)?;
+        valid_call(call)?;
+        valid_surface(surface_id)?;
+        let before = self.saved_run(run_id)?.ok_or("unknown history run")?;
+        if before.conversation != scope.conversation || before.value.id != run_id {
+            return Err("run belongs to a different conversation".into());
+        }
+        self.validate_artifacts(scope, &before.value)?;
+        let launch: Record<Launch> =
+            record(self.write, LAUNCHES, run_id)?.ok_or("run has no launch")?;
+        if launch.conversation != scope.conversation || !eligible(&launch.value) {
+            return Err("generated artifacts require a Responses text run".into());
+        }
+        let refs = artifact_refs(&before.value);
+        if refs.len() > 4 {
+            return Err("run exceeds artifact reference limit".into());
+        }
+        for id in &refs {
+            let mut saved: Record<Artifact> = record(self.write, ARTIFACTS, id.as_str())?
+                .ok_or("run artifact reference is absent")?;
+            valid_id(&self.profile, id.as_str())?;
+            if saved.conversation != scope.conversation
+                || saved.value.id != *id
+                || saved.value.run != run_id
+            {
+                return Err("run artifact ownership differs".into());
+            }
+            if saved.value.call != call {
+                continue;
+            }
+            if saved.value.surface_id != surface_id {
+                return Err("artifact call identity already has different content".into());
+            }
+            let ArtifactContent::Generated {
+                source: old,
+                completion,
+            } = &saved.value.content
+            else {
+                return Err("artifact call identity already has different content".into());
+            };
+            if complete && *completion == ArtifactCompletion::Completed && *old == source {
+                return Ok(id.clone());
+            }
+            if !complete && *completion == ArtifactCompletion::Completed && *old == source {
+                return Ok(id.clone());
+            }
+            if *completion != ArtifactCompletion::Streaming {
+                return Err("generated artifact is already complete".into());
+            }
+            if !source.extends(old) {
+                return Err("generated artifact source regressed".into());
+            }
+            if old == &source && !complete {
+                return Ok(id.clone());
+            }
+            if before.value.status != Status::Running {
+                return Err("generated artifact updates require a running response".into());
+            }
+            saved.value.content = ArtifactContent::Generated {
+                source: source.clone(),
+                completion: if complete {
+                    ArtifactCompletion::Completed
+                } else {
+                    ArtifactCompletion::Streaming
+                },
+            };
+            saved.revision = saved
+                .revision
+                .checked_add(1)
+                .ok_or("artifact revision capacity reached")?;
+            let presentation = saved.value.presentation(saved.revision)?;
+            let mut next = before.value;
+            next.output.change(Change::Generated {
+                id: id.clone(),
+                revision: saved.revision,
+                completion: match presentation {
+                    metldr_conversation::ArtifactPresentation::Generated { completion, .. } => {
+                        completion
+                    }
+                    metldr_conversation::ArtifactPresentation::Table
+                    | metldr_conversation::ArtifactPresentation::Chart => unreachable!(),
+                },
+            })?;
+            storage(|| {
+                self.write
+                    .open_table(ARTIFACTS)?
+                    .insert(id.as_str(), encode(&saved)?.as_slice())?;
+                Ok(())
+            })?;
+            self.put_run(scope, next)?;
+            return Ok(id.clone());
+        }
+        if complete {
+            return Err("generated artifact has no preview".into());
+        }
+        if before.value.status != Status::Running {
+            return Err("new artifacts require a running response".into());
+        }
+        if refs.len() == 4 {
+            return Err("run artifact reference limit reached".into());
+        }
+        let id = ArtifactId::new(self.id()?)?;
+        let artifact = Artifact {
+            id: id.clone(),
+            run: run_id.to_owned(),
+            call: call.to_owned(),
+            surface_id: surface_id.to_owned(),
+            content: ArtifactContent::Generated {
+                source,
+                completion: ArtifactCompletion::Streaming,
+            },
+        };
+        let mut next = before.value;
+        next.output.change(Change::Generated {
+            id: id.clone(),
+            revision: 1,
+            completion: ArtifactCompletion::Streaming,
+        })?;
+        storage(|| {
+            let value = Record {
+                conversation: scope.conversation.clone(),
+                revision: 1,
+                value: artifact,
+            };
+            if self
+                .write
+                .open_table(ARTIFACTS)?
+                .insert(id.as_str(), encode(&value)?.as_slice())?
+                .is_some()
+            {
+                return Err("artifact identity already exists".into());
+            }
+            Ok(())
+        })?;
         self.put_run(scope, next)?;
         Ok(id)
     }
@@ -119,10 +326,7 @@ impl Edit<'_> {
             let saved: Record<Artifact> =
                 record(self.write, ARTIFACTS, id)?.ok_or("unknown history artifact")?;
             valid_id(&self.profile, id)?;
-            if saved.value.id.as_str() != id
-                || saved.revision != 1
-                || saved.conversation != scope.conversation
-            {
+            if saved.value.id.as_str() != id || saved.conversation != scope.conversation {
                 return Err("artifact belongs to a different conversation".into());
             }
             let run = self
@@ -145,6 +349,15 @@ impl Edit<'_> {
             }
             valid_call(&saved.value.call)?;
             valid_surface(&saved.value.surface_id)?;
+            if projected_presentation(&run.value, id)
+                != Some(
+                    saved
+                        .value
+                        .presentation_for_run(saved.revision, run.value.status)?,
+                )
+            {
+                return Err("artifact projection differs from stored revision".into());
+            }
             Ok(Observed {
                 revision: Counter(saved.revision),
                 value: saved.value,
@@ -187,7 +400,11 @@ impl Edit<'_> {
                 if artifact.value.id != id
                     || artifact.value.run != run.id
                     || artifact.conversation != scope.conversation
-                    || artifact.revision != 1
+                    || artifact
+                        .value
+                        .presentation_for_run(artifact.revision, run.status)?
+                        != projected_presentation(run, id.as_str())
+                            .ok_or("run artifact projection is absent")?
                     || calls.contains(&artifact.value.call)
                 {
                     return Err("run artifact ownership or call identity differs".into());

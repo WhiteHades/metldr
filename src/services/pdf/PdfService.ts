@@ -3,6 +3,10 @@ import { RecursiveSummaryStrategy } from './RecursiveSummaryStrategy'
 import { pdfOutlineExtractor, type PdfTocEntry, type PdfMetadata } from './PdfOutlineExtractor'
 import { ragService } from '../rag/RagService'
 
+const BULLET_PREFIX_PATTERN = /^[-•*]\s*/
+const MULTILINE_BULLET_PREFIX_PATTERN = /^[-•*]\s*/gm
+const WHITESPACE_PATTERN = /\s+/
+
 export interface PdfPageText {
   pageNum: number
   text: string
@@ -227,7 +231,7 @@ export class PdfService {
         const sectionSummary = await this.strategy.execute(sectionText, { maxBullets: 2 })
         
         bullets.push({
-          text: `**${entry.title}**: ${sectionSummary.replace(/^[-•*]\s*/gm, '').trim()}`,
+          text: `**${entry.title}**: ${sectionSummary.replace(MULTILINE_BULLET_PREFIX_PATTERN, '').trim()}`,
           pageRef: { start: startPage, end: endPage }
         })
       }
@@ -250,7 +254,7 @@ export class PdfService {
     const bullets: PdfSummaryBullet[] = []
     
     for (const line of lines) {
-      const cleanLine = line.replace(/^[-•*]\s*/, '').trim()
+      const cleanLine = line.replace(BULLET_PREFIX_PATTERN, '').trim()
       if (!cleanLine) continue
       
       const pageRef = this.findPageRef(cleanLine, pageTexts)
@@ -274,7 +278,7 @@ export class PdfService {
     const bullets: PdfSummaryBullet[] = []
     
     for (const line of lines) {
-      const cleanLine = line.replace(/^[-•*]\s*/, '').trim()
+      const cleanLine = line.replace(BULLET_PREFIX_PATTERN, '').trim()
       if (!cleanLine) continue
       
       // try to find which pages contain this content
@@ -291,7 +295,7 @@ export class PdfService {
 
   // find page range where content appears
   private findPageRef(content: string, pageTexts: string[]): { start: number; end: number } | undefined {
-    const keywords = content.toLowerCase().split(/\s+/).filter(w => w.length > 4).slice(0, 5)
+    const keywords = content.toLowerCase().split(WHITESPACE_PATTERN).filter(w => w.length > 4).slice(0, 5)
     
     if (keywords.length === 0) return undefined
     
@@ -373,7 +377,7 @@ export class PdfService {
     console.log('[PdfService] Extracting and indexing PDF...')
     
     const text = await this.extractFromUrl(url)
-    const words = text.split(/\s+/)
+    const words = text.split(WHITESPACE_PATTERN)
     
     // chunk the text
     for (let i = 0; i < words.length; i += this.WORDS_PER_CHUNK - this.WORD_OVERLAP) {
@@ -406,7 +410,7 @@ export class PdfService {
   }
 
   private countWords(text: string): number {
-    return text.trim().split(/\s+/).filter(w => w.length > 0).length
+    return text.trim().split(WHITESPACE_PATTERN).filter(w => w.length > 0).length
   }
 }
 

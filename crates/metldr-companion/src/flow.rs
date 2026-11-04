@@ -41,9 +41,9 @@ pub(super) enum Event {
         run: String,
         change: Change,
     },
-    Table {
+    Presentation {
         run: String,
-        invocation: metldr_responses::PresentationInvocation,
+        update: crate::presentation::Update,
         ack: SyncSender<std::result::Result<metldr_conversation::ArtifactId, String>>,
     },
     ToolProgress {

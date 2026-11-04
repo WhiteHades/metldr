@@ -119,12 +119,16 @@ impl Running {
     }
 
     fn send(&mut self, request: &str, command: Value) -> Result<()> {
+        self.send_version(crate::WIRE_VERSION, request, command)
+    }
+
+    fn send_version(&mut self, version: u8, request: &str, command: Value) -> Result<()> {
         crate::wire::write_frame(
             self.child()
                 .stdin
                 .as_mut()
                 .ok_or("companion stdin is absent")?,
-            &json!({"v":crate::WIRE_VERSION,"request":request,"command":command}),
+            &json!({"v":version,"request":request,"command":command}),
         )?;
         Ok(())
     }

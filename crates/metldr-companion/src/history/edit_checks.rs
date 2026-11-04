@@ -4,7 +4,7 @@ use crate::{
     agent_model::Launch,
     model::{Run, Status},
 };
-use redb::{ReadableDatabase, ReadableTableMetadata};
+use redb::{ReadableDatabase, ReadableTable, ReadableTableMetadata};
 use std::{
     fs,
     path::PathBuf,
@@ -60,6 +60,43 @@ fn run(id: String) -> Run {
     }
 }
 
+fn response_run(
+    history: &mut History,
+    scope: &super::edit::Selection,
+    request: &str,
+    seed: char,
+) -> Result<String> {
+    use metldr_conversation::{Change, MessageKey};
+
+    history.edit(|edit| {
+        let id = edit.id()?;
+        let mut record = run(id.clone());
+        record.output = metldr_conversation::Content::native();
+        edit.admit(
+            scope,
+            request,
+            record,
+            Launch::Text {
+                input_digest: seed.to_string().repeat(64),
+                protocol: crate::provider_settings::Protocol::Responses,
+                binding: crate::https_profile::Binding {
+                    endpoint: "https://example.test/v1/responses".into(),
+                    model: "model".into(),
+                    revision: 1,
+                    fingerprint: seed.to_string().repeat(64),
+                },
+            },
+        )?;
+        let mut record = edit.run(scope, &id)?;
+        record.output.change(Change::Final {
+            key: MessageKey::observed(1)?,
+            text: "Before".into(),
+        })?;
+        edit.put_run(scope, record)?;
+        Ok(id)
+    })
+}
+
 fn profile(history: &History) -> Result<Profile> {
     let read = history.db.begin_read()?;
     let table = read.open_table(META)?;
@@ -75,6 +112,93 @@ fn counts(history: &History) -> Result<(u64, u64, u64, u64, u64)> {
         read.open_table(RUN_ORDER)?.len()?,
         read.open_table(ACTIVE_RUNS)?.len()?,
     ))
+}
+
+#[test]
+fn chart_records_keep_order_scope_and_identity_after_restart() -> Result<()> {
+    use metldr_conversation::{
+        ArtifactPresentation, Change, Chart, ChartDatum, ChartKind, EntryRef, MessageKey,
+    };
+    let directory = Directory::new();
+    let disk = crate::store::Disk::lock(directory.0.clone())?;
+    let path = directory.0.join("history.redb");
+    let mut history = History::import_new(&path, &empty_snapshot()?, disk.lease())?;
+    let scope = history.selection()?;
+    let run = response_run(&mut history, &scope, "chart:start", 'd')?;
+    let chart = Chart::new(
+        ChartKind::Bar,
+        "Report".into(),
+        "".into(),
+        vec![
+            ChartDatum {
+                label: "North".into(),
+                value: 12.into(),
+            },
+            ChartDatum {
+                label: "South".into(),
+                value: (-3).into(),
+            },
+        ],
+    )?;
+    let before = serde_json::to_value(profile(&history)?)?;
+    let aborted: Result<()> = history.edit(|edit| {
+        edit.accept_chart(&scope, &run, "aborted", "root", chart.clone())?;
+        Err("synthetic rollback".into())
+    });
+    assert!(aborted.is_err());
+    assert_eq!(serde_json::to_value(profile(&history)?)?, before);
+    assert_eq!(history.db.begin_read()?.open_table(ARTIFACTS)?.len()?, 0);
+    let id =
+        history.edit(|edit| edit.accept_chart(&scope, &run, "chart:1", "root", chart.clone()))?;
+    assert_eq!(
+        id,
+        history.edit(|edit| edit.accept_chart(&scope, &run, "chart:1", "root", chart.clone()))?
+    );
+    assert!(
+        history
+            .edit(|edit| edit.accept_chart(&scope, &run, "chart:1", "different", chart.clone()))
+            .is_err()
+    );
+    let mut foreign = scope.clone();
+    foreign.epoch += 1;
+    assert!(
+        history
+            .edit(|edit| edit.artifact_detail(&foreign, id.as_str()))
+            .is_err()
+    );
+    history.edit(|edit| {
+        let mut value = edit.run(&scope, &run)?;
+        assert!(value.output.change(Change::Artifact(id.clone())).is_err());
+        value.output.change(Change::Final {
+            key: MessageKey::observed(2)?,
+            text: "After".into(),
+        })?;
+        value.status = Status::Interrupted;
+        edit.put_run(&scope, value)
+    })?;
+    drop(history);
+    let mut history = History::open(&path, disk.lease())?;
+    let saved = history.edit(|edit| edit.artifact_detail(&scope, id.as_str()))?;
+    assert_eq!(saved.revision.0, 1);
+    assert_eq!(
+        saved.value.content,
+        super::artifacts::ArtifactContent::Chart {
+            chart: chart.clone()
+        }
+    );
+    assert!(
+        history
+            .edit(|edit| edit.accept_chart(&scope, &run, "chart:2", "root", chart.clone()))
+            .is_err()
+    );
+    let output = history.edit(|edit| Ok(edit.run(&scope, &run)?.output))?;
+    let display = metldr_conversation::Display::new(output.projection())?;
+    assert!(matches!(&display.entries().collect::<Vec<_>>()[..], [
+        EntryRef::Message { text: "Before", .. },
+        EntryRef::Artifact { id: found, presentation: ArtifactPresentation::Chart },
+        EntryRef::Message { text: "After", .. },
+    ] if *found == &id));
+    Ok(())
 }
 
 #[test]
@@ -188,7 +312,10 @@ fn table_records_are_atomic_scoped_idempotent_and_survive_reopen() -> Result<()>
     let mut history = History::open(&path, disk.lease())?;
     let saved = history.edit(|edit| edit.artifact_detail(&scope, id.as_str()))?;
     assert_eq!(saved.revision.0, 1);
-    assert_eq!(saved.value.table, table()?);
+    assert!(matches!(
+        &saved.value.content,
+        super::artifacts::ArtifactContent::Table { table: saved_table } if *saved_table == table()?
+    ));
     let identity = Identity {
         store: scope.store.clone(),
         conversation: scope.conversation.clone(),
@@ -221,7 +348,7 @@ fn table_records_are_atomic_scoped_idempotent_and_survive_reopen() -> Result<()>
     let content = history.edit(|edit| Ok(edit.run(&scope, &run_id)?.output))?;
     let display = metldr_conversation::Display::new(content.projection())?;
     assert!(
-        matches!(&display.entries().collect::<Vec<_>>()[..], [metldr_conversation::EntryRef::Message {text:"Before",..}, metldr_conversation::EntryRef::Artifact { id: observed }, metldr_conversation::EntryRef::Message {text:"After",..}] if *observed == &id)
+        matches!(&display.entries().collect::<Vec<_>>()[..], [metldr_conversation::EntryRef::Message {text:"Before",..}, metldr_conversation::EntryRef::Artifact { id: observed, .. }, metldr_conversation::EntryRef::Message {text:"After",..}] if *observed == &id)
     );
     let orphan_id = history.edit(|edit| edit.id())?;
     let mut orphan = saved.value;
@@ -240,6 +367,229 @@ fn table_records_are_atomic_scoped_idempotent_and_survive_reopen() -> Result<()>
     write.commit()?;
     drop(history);
     assert!(History::open(&path, disk.lease()).is_err());
+    Ok(())
+}
+
+#[test]
+fn generated_artifacts_revise_complete_interrupt_and_reopen() -> Result<()> {
+    use metldr_conversation::{
+        ArtifactCompletion, ArtifactPresentation, GeneratedAnswer, GeneratedUpdate,
+    };
+    let directory = Directory::new();
+    let disk = crate::store::Disk::lock(directory.0.clone())?;
+    let path = directory.0.join("history.redb");
+    let mut history = History::import_new(&path, &empty_snapshot()?, disk.lease())?;
+    let scope = history.selection()?;
+    let run_id = response_run(&mut history, &scope, "generated:start", 'c')?;
+    let partial = GeneratedAnswer::default().updated(GeneratedUpdate::Html("<p>A".into()))?;
+    let id = history.edit(|edit| {
+        edit.preview_generated(
+            &scope,
+            &run_id,
+            "call:generated",
+            "surface",
+            partial.clone(),
+        )
+    })?;
+    assert_eq!(
+        history
+            .edit(|edit| edit.artifact_detail(&scope, id.as_str()))?
+            .revision
+            .0,
+        1
+    );
+    history.edit(|edit| {
+        edit.preview_generated(
+            &scope,
+            &run_id,
+            "call:generated",
+            "surface",
+            partial.clone(),
+        )
+    })?;
+    let extended = partial.updated(GeneratedUpdate::Html("B</p>".into()))?;
+    assert_eq!(
+        id,
+        history.edit(|edit| {
+            edit.preview_generated(
+                &scope,
+                &run_id,
+                "call:generated",
+                "surface",
+                extended.clone(),
+            )
+        })?
+    );
+    let saved = history.edit(|edit| edit.artifact_detail(&scope, id.as_str()))?;
+    assert_eq!(saved.revision.0, 2);
+    assert_eq!(
+        saved.value.presentation(saved.revision.0)?,
+        ArtifactPresentation::Generated {
+            revision: 2,
+            completion: ArtifactCompletion::Streaming,
+        }
+    );
+    let complete = extended.updated(GeneratedUpdate::HtmlComplete)?.finish()?;
+    history.edit(|edit| {
+        edit.complete_generated(
+            &scope,
+            &run_id,
+            "call:generated",
+            "surface",
+            complete.clone(),
+        )
+    })?;
+    history.edit(|edit| {
+        edit.complete_generated(
+            &scope,
+            &run_id,
+            "call:generated",
+            "surface",
+            complete.clone(),
+        )
+    })?;
+    assert_eq!(
+        history
+            .edit(|edit| edit.artifact_detail(&scope, id.as_str()))?
+            .revision
+            .0,
+        3
+    );
+    let mut record = history.edit(|edit| edit.run(&scope, &run_id))?;
+    record.status = Status::Complete;
+    history.edit(|edit| edit.put_run(&scope, record))?;
+
+    let interrupted_run = response_run(&mut history, &scope, "generated:interrupt", 'f')?;
+    let draft = GeneratedAnswer::default().updated(GeneratedUpdate::Html("<p>draft".into()))?;
+    let interrupted_id = history.edit(|edit| {
+        edit.preview_generated(&scope, &interrupted_run, "call:draft", "surface", draft)
+    })?;
+    drop(history);
+    let mut history = History::open(&path, disk.lease())?;
+    history.edit(|edit| edit.recover(&scope))?;
+    let interrupted = history.edit(|edit| edit.artifact_detail(&scope, interrupted_id.as_str()))?;
+    assert_eq!(interrupted.revision.0, 2);
+    assert_eq!(
+        interrupted.value.presentation(interrupted.revision.0)?,
+        ArtifactPresentation::Generated {
+            revision: 2,
+            completion: ArtifactCompletion::Interrupted,
+        }
+    );
+    let mut corrupt = interrupted.value.clone();
+    if let super::artifacts::ArtifactContent::Generated { completion, .. } = &mut corrupt.content {
+        *completion = ArtifactCompletion::Streaming;
+    }
+    assert!(
+        corrupt
+            .presentation_for_run(interrupted.revision.0, Status::Interrupted)
+            .is_err()
+    );
+    drop(history);
+    let mut history = History::open(&path, disk.lease())?;
+    assert_eq!(
+        history
+            .edit(|edit| edit.artifact_detail(&scope, id.as_str()))?
+            .revision
+            .0,
+        3
+    );
+    assert_eq!(
+        history
+            .edit(|edit| edit.artifact_detail(&scope, interrupted_id.as_str()))?
+            .value
+            .presentation(2)?,
+        ArtifactPresentation::Generated {
+            revision: 2,
+            completion: ArtifactCompletion::Interrupted,
+        }
+    );
+    Ok(())
+}
+
+#[test]
+fn format_sixteen_migrates_tables_and_refuses_generated_records() -> Result<()> {
+    use metldr_conversation::Table;
+    use serde::Serialize;
+
+    #[derive(Serialize)]
+    struct LegacyArtifact {
+        id: metldr_conversation::ArtifactId,
+        run: String,
+        call: String,
+        surface_id: String,
+        table: Table,
+    }
+
+    fn mark_format_sixteen(path: &std::path::Path) -> Result<()> {
+        let db = redb::Database::open(path)?;
+        let write = db.begin_write()?;
+        let mut meta = write.open_table(META)?;
+        let mut profile: Profile = decode(meta.get("profile")?.unwrap().value())?;
+        profile.format = 16;
+        meta.insert("profile", encode(&profile)?.as_slice())?;
+        drop(meta);
+        write.commit()?;
+        Ok(())
+    }
+
+    let directory = Directory::new();
+    let disk = crate::store::Disk::lock(directory.0.clone())?;
+    let path = directory.0.join("history.redb");
+    let mut history = History::import_new(&path, &empty_snapshot()?, disk.lease())?;
+    let scope = history.selection()?;
+    let run_id = response_run(&mut history, &scope, "migrate:table", 'd')?;
+    let table = Table::new(
+        "Saved".into(),
+        vec!["A".into()],
+        vec![vec!["B".into()]],
+        "source".into(),
+    )?;
+    let id = history
+        .edit(|edit| edit.accept_table(&scope, &run_id, "call:table", "surface", table.clone()))?;
+    let saved = history.edit(|edit| edit.artifact_detail(&scope, id.as_str()))?;
+    drop(history);
+    {
+        let db = redb::Database::open(&path)?;
+        let write = db.begin_write()?;
+        write.open_table(ARTIFACTS)?.insert(
+            id.as_str(),
+            encode(&Record {
+                conversation: scope.conversation.clone(),
+                revision: 1,
+                value: LegacyArtifact {
+                    id: id.clone(),
+                    run: run_id.clone(),
+                    call: "call:table".into(),
+                    surface_id: "surface".into(),
+                    table,
+                },
+            })?
+            .as_slice(),
+        )?;
+        write.commit()?;
+    }
+    mark_format_sixteen(&path)?;
+    let mut history = History::open(&path, disk.lease())?;
+    let migrated = history.edit(|edit| edit.artifact_detail(&scope, id.as_str()))?;
+    assert_eq!(migrated.value, saved.value);
+    assert_eq!(migrated.revision, saved.revision);
+    assert_eq!(profile(&history)?.format, FORMAT);
+    drop(history);
+
+    let generated_path = directory.0.join("generated.redb");
+    let mut history = History::import_new(&generated_path, &empty_snapshot()?, disk.lease())?;
+    let scope = history.selection()?;
+    let run_id = response_run(&mut history, &scope, "migrate:generated", 'e')?;
+    let source = metldr_conversation::GeneratedAnswer::default().updated(
+        metldr_conversation::GeneratedUpdate::Html("<p>generated".into()),
+    )?;
+    history.edit(|edit| {
+        edit.preview_generated(&scope, &run_id, "call:generated", "surface", source)
+    })?;
+    drop(history);
+    mark_format_sixteen(&generated_path)?;
+    assert!(History::open(&generated_path, disk.lease()).is_err());
     Ok(())
 }
 

@@ -1,5 +1,7 @@
 import { getDocumentProxy } from 'unpdf'
 
+const PDF_HEADING_ROLE_PATTERN = /^H[1-6]$/
+
 export interface PdfTocEntry {
   title: string
   pageNumber: number
@@ -155,7 +157,7 @@ export class PdfOutlineExtractor {
     const headings: Array<{ level: number; role: string }> = []
     
     const traverse = (node: PdfStructureNode) => {
-      if (node.role.match(/^H[1-6]$/)) {
+      if (node.role.match(PDF_HEADING_ROLE_PATTERN)) {
         headings.push({
           level: parseInt(node.role[1]),
           role: node.role

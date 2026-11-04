@@ -1,0 +1,19 @@
+:root {
+  color-scheme: light dark;
+  overflow-wrap: break-word;
+  font: 14px/1.5 system-ui, sans-serif;
+  color: light-dark(oklch(0.2 0 none), oklch(0.94 0 none));
+  background: transparent;
+}
+*, *::before, *::after { box-sizing: border-box; min-inline-size: 0; }
+body { margin: 0; padding-block: 0.5rem; padding-inline: 0.5rem; }
+img, svg, video { max-inline-size: 100%; block-size: auto; }
+input, textarea, select { font: inherit; font-size: max(16px, 1rem); }
+button, input, select, textarea { color: inherit; }
+button, a, [role="button"] { touch-action: manipulation; }
+button, [role="button"] { user-select: none; }
+:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+button:active, [role="button"]:active { scale: 0.97; }
+@media (prefers-reduced-motion: no-preference) {
+  button, [role="button"] { transition: scale 120ms var(--ease-out, ease-out); }
+}

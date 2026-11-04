@@ -30,6 +30,7 @@ impl RunDetailsReference {
         run.id.as_str().hash(&mut hasher);
         run.route.hash(&mut hasher);
         run.status.hash(&mut hasher);
+        run.corrections.hash(&mut hasher);
         reports.hash(&mut hasher);
         Self {
             run_id: run.id.clone(),
@@ -95,6 +96,25 @@ mod tests {
         let changed = RunDetailsReference::new(&run, RunOrigin::Live);
         assert_eq!(changed.message_id(), first.message_id());
         assert_ne!(changed.revision, first.revision);
+        run.corrections
+            .entries
+            .push(crate::model::CorrectionReceipt {
+                ordinal: 1,
+                request: "correction-request".into(),
+                text: crate::history::Preview {
+                    text: "Keep the source".into(),
+                    truncated: false,
+                },
+                state: crate::model::CorrectionState::Pending,
+            });
+        run.corrections.total = 1;
+        let correction = RunDetailsReference::new(&run, RunOrigin::Live);
+        assert_ne!(correction.revision, changed.revision);
+        run.corrections.entries[0].state = crate::model::CorrectionState::CodexAccepted;
+        assert_ne!(
+            RunDetailsReference::new(&run, RunOrigin::Live).revision,
+            correction.revision
+        );
         let value = serde_json::to_value(&changed).unwrap();
         assert!(value.get("reports").is_none());
         assert_eq!(value["revision"].as_str().unwrap().len(), 16);

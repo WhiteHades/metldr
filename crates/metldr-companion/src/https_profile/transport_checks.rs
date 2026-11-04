@@ -43,6 +43,109 @@ fn scripted_responses(
     scripted_protocol(replies, key, Protocol::Responses)
 }
 
+#[test]
+fn generated_answers_stream_over_tls_and_close_on_callback_or_terminal_failure() {
+    let partial = r#"{"surfaceId":"answer","initialHeight":null,"css":"","html":["<button>Count</button>"],"jsFunctions":"function init(){"#;
+    let arguments = format!(r#"{partial}}}","jsExpressions":["init()"]}}"#);
+    let initial = json!({"type":"function_call","id":"fc_answer","call_id":"call_answer",
+        "name":"generateSandboxedUi","arguments":"","status":"in_progress"});
+    let mut final_call = initial.clone();
+    final_call["arguments"] = json!(arguments);
+    final_call["status"] = json!("completed");
+    let events = vec![
+        json!({"type":"response.created","response":{"id":"resp_answer","object":"response","model":"model","store":false}}),
+        json!({"type":"response.output_item.added","output_index":0,"item":initial}),
+        json!({"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc_answer","delta":partial}),
+        json!({"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc_answer","delta":&arguments[partial.len()..]}),
+        json!({"type":"response.function_call_arguments.done","output_index":0,"item_id":"fc_answer","arguments":arguments}),
+        json!({"type":"response.output_item.done","output_index":0,"item":final_call}),
+        json!({"type":"response.completed","response":{"id":"resp_answer","object":"response","model":"model","store":false,"status":"completed","error":null,"incomplete_details":null,"output":[final_call]}}),
+    ];
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    for (complete, reject_callback) in [(true, false), (false, false), (true, true)] {
+        let count = events.len() - usize::from(!complete);
+        let body: String = events[..count]
+            .iter()
+            .enumerate()
+            .map(|(sequence, event)| {
+                let mut event = event.clone();
+                event["sequence_number"] = json!(sequence);
+                format!(
+                    "event: {}\ndata: {}\n\n",
+                    event["type"].as_str().unwrap(),
+                    event
+                )
+            })
+            .collect();
+        let (endpoint, server) =
+            scripted_responses(vec![("200 OK".into(), body)], "dummy-owned-browser-fixture");
+        let client = metldr_responses::Client::new(
+            &endpoint,
+            "model",
+            "dummy-owned-browser-fixture",
+            Some(include_bytes!("../../test-tls/ca.pem")),
+        )
+        .unwrap();
+        let mut conversation = client
+            .start_presentation("present", "show an interactive answer")
+            .unwrap();
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        let mut updates = Vec::new();
+        let result = runtime.block_on(conversation.next(
+            &stop,
+            |_| Err("unexpected text".into()),
+            |progress| {
+                assert_eq!(progress.call_id, "call_answer");
+                assert_eq!(progress.surface_id, "answer");
+                updates.push(serde_json::to_value(progress.content.view()).unwrap());
+                if reject_callback {
+                    Err("owned reader stopped".into())
+                } else {
+                    Ok(())
+                }
+            },
+        ));
+        assert!(!updates.is_empty());
+        assert!(updates[0].get("jsFunctions").is_none());
+        assert!(updates.iter().all(|source| source["generating"] == true));
+        if complete && !reject_callback {
+            let invocation = result.unwrap().unwrap();
+            let metldr_responses::PresentationContent::Generated(source) =
+                invocation.presentation.content
+            else {
+                panic!("expected generated source")
+            };
+            assert_eq!(
+                serde_json::to_value(source.view()).unwrap()["generating"],
+                false
+            );
+            assert_eq!(updates.len(), 2);
+        } else {
+            assert!(result.is_err());
+        }
+        assert!(
+            runtime
+                .block_on(conversation.next(&stop, |_| Ok(()), |_| Ok(())))
+                .is_err()
+        );
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0]["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|tool| tool["name"] == "generateSandboxedUi")
+                .count(),
+            1
+        );
+        assert_eq!(requests[0]["store"], false);
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Protocol {
     Messages,
@@ -349,28 +452,33 @@ fn public_responses_presentation_preserves_text_and_opaque_tool_continuation_ove
         .unwrap();
     runtime.block_on(async {
         let invocation = conversation
-            .next(&stop, |event| {
-                if let metldr_conversation::TextEvent::Delta(text) = event {
-                    rendered.push_str(&text);
-                }
-                Ok(())
-            })
+            .next(
+                &stop,
+                |event| {
+                    if let metldr_conversation::TextEvent::Delta(text) = event {
+                        rendered.push_str(&text);
+                    }
+                    Ok(())
+                },
+                |_| Err("unexpected generated answer".into()),
+            )
             .await
             .unwrap()
             .unwrap();
         assert_eq!(rendered, "Before the table.");
         assert_eq!(invocation.id, "call_owned");
         assert_eq!(invocation.presentation.surface_id, "surface-owned");
-        assert_eq!(invocation.presentation.table.title(), "Quarterly sales");
-        assert_eq!(
-            invocation.presentation.table.columns(),
-            ["Quarter", "Sales"]
-        );
-        assert_eq!(invocation.presentation.table.rows()[1], ["Q2", "$250"]);
-        assert_eq!(invocation.presentation.table.source(), "User-provided data");
+        let metldr_responses::PresentationContent::Table(table) = invocation.presentation.content
+        else {
+            panic!("expected table")
+        };
+        assert_eq!(table.title(), "Quarterly sales");
+        assert_eq!(table.columns(), ["Quarter", "Sales"]);
+        assert_eq!(table.rows()[1], ["Q2", "$250"]);
+        assert_eq!(table.source(), "User-provided data");
         assert_eq!(
             conversation
-                .next(&stop, |_| Ok(()))
+                .next(&stop, |_| Ok(()), |_| Ok(()))
                 .await
                 .err()
                 .unwrap()
@@ -391,12 +499,16 @@ fn public_responses_presentation_preserves_text_and_opaque_tool_continuation_ove
         assert_eq!(rendered, "Before the table. After the table.");
         assert!(
             conversation
-                .next(&stop, |event| {
-                    if let metldr_conversation::TextEvent::Delta(text) = event {
-                        rendered.push_str(&text);
-                    }
-                    Ok(())
-                })
+                .next(
+                    &stop,
+                    |event| {
+                        if let metldr_conversation::TextEvent::Delta(text) = event {
+                            rendered.push_str(&text);
+                        }
+                        Ok(())
+                    },
+                    |_| Err("unexpected generated answer".into())
+                )
                 .await
                 .unwrap()
                 .is_none()
@@ -432,18 +544,26 @@ fn public_responses_presentation_preserves_text_and_opaque_tool_continuation_ove
     let mut conversation = client.start_presentation("present", "show sales").unwrap();
     let stop = std::sync::atomic::AtomicBool::new(false);
     let error = runtime
-        .block_on(conversation.next(&stop, |event| {
-            if matches!(event, metldr_conversation::TextEvent::Delta(_)) {
-                stop.store(true, std::sync::atomic::Ordering::Release);
-            }
-            Ok(())
-        }))
+        .block_on(conversation.next(
+            &stop,
+            |event| {
+                if matches!(event, metldr_conversation::TextEvent::Delta(_)) {
+                    stop.store(true, std::sync::atomic::Ordering::Release);
+                }
+                Ok(())
+            },
+            |_| Err("unexpected generated answer".into()),
+        ))
         .err()
         .unwrap();
     assert_eq!(error.to_string(), "Responses request cancelled");
     assert_eq!(
         runtime
-            .block_on(conversation.next(&std::sync::atomic::AtomicBool::new(false), |_| Ok(()),))
+            .block_on(conversation.next(
+                &std::sync::atomic::AtomicBool::new(false),
+                |_| Ok(()),
+                |_| Ok(())
+            ))
             .err()
             .unwrap()
             .to_string(),
@@ -494,7 +614,11 @@ fn public_responses_presentation_preserves_text_and_opaque_tool_continuation_ove
                 change: metldr_conversation::Change::Final { .. },
                 ..
             } => (),
-            crate::flow::Event::Table { ack, .. } => {
+            crate::flow::Event::Presentation {
+                ack,
+                update: crate::presentation::Update::Complete(_),
+                ..
+            } => {
                 stop.store(true, std::sync::atomic::Ordering::Release);
                 let _ = ack.try_send(Ok(metldr_conversation::ArtifactId::new(
                     "owned-artifact".into(),
@@ -507,7 +631,7 @@ fn public_responses_presentation_preserves_text_and_opaque_tool_continuation_ove
     }
     assert_eq!(
         worker.join().unwrap().unwrap_err(),
-        "table response cancelled"
+        "presentation cancelled"
     );
     assert_eq!(prefix, "Before the table.");
     assert!(rx.try_iter().next().is_none());

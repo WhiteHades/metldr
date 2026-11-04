@@ -4,7 +4,7 @@ use crate::{
     flow::{Event, Owner},
 };
 use metldr_conversation::ArtifactId;
-use metldr_responses::{Client, PresentationInvocation};
+use metldr_responses::{Client, PresentationContent, PresentationInvocation, PresentationProgress};
 use serde_json::json;
 use std::{
     sync::{
@@ -15,6 +15,11 @@ use std::{
 };
 
 const MAX_PRESENTATION_STEPS: usize = 4;
+
+pub(super) enum Update {
+    Preview(PresentationProgress),
+    Complete(PresentationInvocation),
+}
 
 pub(super) async fn run(
     client: Client,
@@ -29,45 +34,31 @@ pub(super) async fn run(
     let mut calls = 0;
     loop {
         let Some(invocation) = conversation
-            .next(stop, |event| output.accept(event))
+            .next(
+                stop,
+                |event| output.accept(event),
+                |progress| {
+                    if calls >= MAX_PRESENTATION_STEPS {
+                        return Err("presentation step limit reached".into());
+                    }
+                    save(run, tx, stop, Update::Preview(progress)).map(|_| ())
+                },
+            )
             .await?
         else {
             return Ok(());
         };
         if calls >= MAX_PRESENTATION_STEPS {
-            return Err("table response step limit reached".into());
+            return Err("presentation step limit reached".into());
         }
         calls += 1;
         let surface = invocation.presentation.surface_id.clone();
-        let (ack, receipt) = mpsc::sync_channel(1);
-        tx.try_send(Event::Table {
-            run: run.into(),
-            invocation,
-            ack,
-        })
-        .map_err(|_| "table owner channel unavailable")?;
-        let deadline = Instant::now() + Duration::from_secs(30);
-        let id = loop {
-            if stop.load(Ordering::Acquire) {
-                return Err("table response cancelled".into());
-            }
-            match receipt.recv_timeout(Duration::from_millis(20)) {
-                Ok(Ok(id)) => break id,
-                Ok(Err(error)) => return Err(error.into()),
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    return Err("table owner receipt unavailable".into());
-                }
-                Err(mpsc::RecvTimeoutError::Timeout) if Instant::now() < deadline => (),
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    return Err("table owner receipt timed out".into());
-                }
-            }
-        };
+        let id = save(run, tx, stop, Update::Complete(invocation))?;
         conversation.submit_tool_result(
             &json!({"status":"saved","surfaceId":surface,"artifactId":id.as_str()}),
             |event| {
                 if stop.load(Ordering::Acquire) {
-                    return Err("table response cancelled".into());
+                    return Err("presentation cancelled".into());
                 }
                 output.accept(event)
             },
@@ -75,11 +66,46 @@ pub(super) async fn run(
     }
 }
 
+fn save(
+    run: &str,
+    tx: &SyncSender<Event>,
+    stop: &AtomicBool,
+    update: Update,
+) -> Result<ArtifactId> {
+    if stop.load(Ordering::Acquire) {
+        return Err("presentation cancelled".into());
+    }
+    let (ack, receipt) = mpsc::sync_channel(1);
+    tx.try_send(Event::Presentation {
+        run: run.into(),
+        update,
+        ack,
+    })
+    .map_err(|_| "presentation owner channel unavailable")?;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if stop.load(Ordering::Acquire) {
+            return Err("presentation cancelled".into());
+        }
+        match receipt.recv_timeout(Duration::from_millis(20)) {
+            Ok(Ok(id)) => return Ok(id),
+            Ok(Err(error)) => return Err(error.into()),
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err("presentation owner receipt unavailable".into());
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) if Instant::now() < deadline => (),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                return Err("presentation owner receipt timed out".into());
+            }
+        }
+    }
+}
+
 impl Owner {
-    pub(super) fn table(
+    pub(super) fn presentation(
         &mut self,
         run: &str,
-        invocation: PresentationInvocation,
+        update: Update,
         ack: SyncSender<std::result::Result<ArtifactId, String>>,
     ) -> Result<()> {
         let result = (|| {
@@ -87,18 +113,43 @@ impl Owner {
                 || self
                     .operation
                     .as_ref()
-                    .is_none_or(|active| active.run != run)
+                    .is_none_or(|active| active.run != run || active.stop.load(Ordering::Acquire))
             {
-                return Err("table response has no active history owner".into());
+                return Err("presentation has no active history owner".into());
             }
             self.record_change(|edit, scope| {
-                let id = edit.accept_table(
-                    scope,
-                    run,
-                    &invocation.id,
-                    &invocation.presentation.surface_id,
-                    invocation.presentation.table,
-                )?;
+                let id = match update {
+                    Update::Preview(progress) => edit.preview_generated(
+                        scope,
+                        run,
+                        &progress.call_id,
+                        &progress.surface_id,
+                        progress.content,
+                    )?,
+                    Update::Complete(invocation) => match invocation.presentation.content {
+                        PresentationContent::Table(table) => edit.accept_table(
+                            scope,
+                            run,
+                            &invocation.id,
+                            &invocation.presentation.surface_id,
+                            table,
+                        )?,
+                        PresentationContent::Chart(chart) => edit.accept_chart(
+                            scope,
+                            run,
+                            &invocation.id,
+                            &invocation.presentation.surface_id,
+                            chart,
+                        )?,
+                        PresentationContent::Generated(source) => edit.complete_generated(
+                            scope,
+                            run,
+                            &invocation.id,
+                            &invocation.presentation.surface_id,
+                            source,
+                        )?,
+                    },
+                };
                 Ok((id, Some(edit.project(scope, Some(run))?)))
             })
         })();

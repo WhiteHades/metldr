@@ -483,7 +483,9 @@ class AnalyticsServiceClass {
 
     // domain tracking
     if (opts.url) {
-      const domain = extractDomain(opts.url)
+      const domain = this.currentSession?.url === opts.url
+        ? this.currentSession.domain ?? extractDomain(opts.url)
+        : extractDomain(opts.url)
       stats.topDomains[domain] = (stats.topDomains[domain] || 0) + 1
     }
 
@@ -631,9 +633,11 @@ class AnalyticsServiceClass {
 
   async getAnalyticsSummary(days = 30): Promise<AnalyticsSummary> {
     try {
-      const allDaily = await databaseService.getAll<DailyStats>(DB_CONFIGS.analytics, STORE_DAILY)
-      const allSessions = await databaseService.getAll<SessionRecord>(DB_CONFIGS.analytics, STORE_SESSIONS)
-      const allEvents = await databaseService.getAll<AnalyticsEvent>(DB_CONFIGS.analytics, STORE_EVENTS)
+      const [allDaily, allSessions, allEvents] = await Promise.all([
+        databaseService.getAll<DailyStats>(DB_CONFIGS.analytics, STORE_DAILY),
+        databaseService.getAll<SessionRecord>(DB_CONFIGS.analytics, STORE_SESSIONS),
+        databaseService.getAll<AnalyticsEvent>(DB_CONFIGS.analytics, STORE_EVENTS)
+      ])
 
       // filter to requested days
       const cutoff = new Date()
@@ -952,10 +956,10 @@ class AnalyticsServiceClass {
       const cutoffMs = cutoff.getTime()
       const cutoffStr = cutoff.toISOString().split('T')[0]
 
-      const allDaily = await databaseService.getAll<DailyStats>(DB_CONFIGS.analytics, STORE_DAILY)
-      for (const day of allDaily) {
-        if (day.date < cutoffStr) {
-          await databaseService.delete(DB_CONFIGS.analytics, STORE_DAILY, day.date)
+      const dailyDates = await databaseService.getAllKeys<string>(DB_CONFIGS.analytics, STORE_DAILY)
+      for (const date of dailyDates) {
+        if (date < cutoffStr) {
+          await databaseService.delete(DB_CONFIGS.analytics, STORE_DAILY, date)
         }
       }
 

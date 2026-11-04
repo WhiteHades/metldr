@@ -1,5 +1,7 @@
 import type { SummaryPrefsType } from '../types'
 
+const LIST_INPUT_SEPARATOR_PATTERN = /[\n,]/
+
 export class SummaryPrefs {
   static ALLOWLIST: string[] = [
     'nytimes.com', 'theguardian.com', 'bbc.com', 'cnn.com', 'reuters.com', 'apnews.com', 'npr.org', 'wsj.com',
@@ -34,7 +36,7 @@ export class SummaryPrefs {
   static parseListInput(text: string | null | undefined, fallback: string[]): string[] {
     if (!text) return [...fallback]
     const parts = text
-      .split(/[\n,]/)
+      .split(LIST_INPUT_SEPARATOR_PATTERN)
       .map(item => item.trim())
       .filter(Boolean)
     return parts.length > 0 ? parts : [...fallback]

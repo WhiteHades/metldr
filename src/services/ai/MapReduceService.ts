@@ -10,6 +10,7 @@ const log = logger.createScoped('MapReduce')
 const MAX_DIRECT_CHARS = 12000   // ~3k tokens - skip map-reduce below this
 const CHUNK_TARGET_CHARS = 2500  // ~625 tokens per chunk - safe for context
 const MAX_SUMMARY_WORDS = 150    // target words per chunk summary
+const PARAGRAPH_SEPARATOR_PATTERN = /\n\s*\n/
 
 interface MapReduceResult {
   summary: string
@@ -82,7 +83,7 @@ export class MapReduceService {
   // chunk content into segments optimized for LLM context
   private chunkContent(content: string): string[] {
     const chunks: string[] = []
-    const paragraphs = content.split(/\n\s*\n/).filter(p => p.trim().length > 0)
+    const paragraphs = content.split(PARAGRAPH_SEPARATOR_PATTERN).filter(p => p.trim().length > 0)
     
     let currentChunk = ''
     for (const para of paragraphs) {

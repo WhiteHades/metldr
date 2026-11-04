@@ -174,6 +174,21 @@ class DatabaseServiceClass {
     })
   }
 
+  async getAllKeys<K extends IDBValidKey>(config: DatabaseConfig, storeName: string): Promise<K[]> {
+    const db = await this.getDatabase(config)
+
+    return new Promise((resolve) => {
+      try {
+        const tx = db.transaction([storeName], 'readonly')
+        const request = tx.objectStore(storeName).getAllKeys()
+        request.onsuccess = () => resolve(request.result as K[])
+        request.onerror = () => resolve([])
+      } catch {
+        resolve([])
+      }
+    })
+  }
+
   async count(config: DatabaseConfig, storeName: string): Promise<number> {
     const db = await this.getDatabase(config)
 

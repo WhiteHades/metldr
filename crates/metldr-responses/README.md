@@ -1,9 +1,9 @@
 # metldr Responses client
 
-This Rust client streams plain text, browser tool calls, or a single validated
-table presentation through the OpenAI Responses protocol. Browser conversations
-keep request history and finalized reasoning. Presentation conversations expose
-only the source table catalog and keep their tool continuation in the client.
+This Rust client streams text, browser tool calls, tables and generated answer
+source through the OpenAI Responses protocol. Browser conversations keep request
+history and finalized reasoning. Presentation conversations keep their tool
+continuation in the client.
 The application owns browser permissions, approvals and actions.
 
 ```no_run
@@ -77,17 +77,23 @@ header. Endpoint user information, query strings and fragments are rejected.
 The caller owns credential storage and must trust its configured endpoint.
 
 Requests use `store: false`, encrypted reasoning, strict tool schemas and one
-tool call at a time. Presentation mode offers only `render_a2ui` for
-`copilotkit://open-generative-ui-tables`, with one root `Table` component.
-It validates the surface id and converts table fields through the shared
-validated table type. The client validates event ordering, identifiers, output
+tool call at a time. Presentation mode offers `render_a2ui` for
+`copilotkit://open-generative-ui-tables`, with one root `Table` component,
+and `generateSandboxedUi` for HTML, CSS and JavaScript answer source.
+Its `next` method accepts separate text and presentation progress callbacks.
+Progress includes only complete JSON values and remains provisional until the
+request completes. The caller must save each accepted update and isolate any
+generated code from application permissions. A callback error closes the
+conversation. Completed source is returned as `PresentationContent::Generated`.
+The client validates event ordering, identifiers, output
 items and terminal output, then requires clean HTTP completion before returning
 a tool call. It retains finalized opaque reasoning for the next request.
 Browser and text requests remain limited to 128 KiB, 16 KiB per tool argument,
 128 KiB per SSE line/event, and 512 KiB per stream. Presentation requests are
 limited to 2 MiB, tool arguments to 384 KiB, SSE lines/events to 1 MiB, and
 streams to 8 MiB. Text is limited to 8 KiB per response. The application must
-also bound complete runs.
+also bound complete runs. Generated source has a combined 256 KiB limit and
+at most 1024 fragments in each ordered section.
 
 Browser and text responses allow at most 4096 events. Presentation responses
 allow at most 65536 events.

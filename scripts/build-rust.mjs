@@ -2,12 +2,14 @@ import { spawnSync } from 'node:child_process';
 import { copyFileSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { recordReceipt, sourceDigest } from './answer-contract.mjs';
 
 const repoRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const crates = [
   { name: 'metldr-core', module: 'metldr_core', pkg: 'crates/metldr-core/pkg' },
   { name: 'metldr-welcome', module: 'welcome_runtime', pkg: 'public/welcome/pkg' },
   { name: 'metldr-panel', module: 'metldr_panel', pkg: 'crates/metldr-panel/pkg' },
+  { name: 'metldr-answer-codec', artifact: 'metldr_answer_codec', module: 'answer_codec', pkg: 'crates/metldr-answer-codec/pkg', features: 'guest' },
 ];
 const isCheck = process.argv.includes('--check');
 const isWindows = process.platform === 'win32';
@@ -51,20 +53,25 @@ if (!isCheck) {
 
 }
 
+const answerSourceHash = isCheck ? undefined : sourceDigest();
+
 for (const crate of crates) {
   const crateDir = join('crates', crate.name);
   const targetDir = process.env.CARGO_TARGET_DIR || join(crateDir, 'target');
   const cargoArgs = ['--locked', '--manifest-path', join(crateDir, 'Cargo.toml'), '--lib', '--target', 'wasm32-unknown-unknown'];
+  if (crate.features) cargoArgs.push('--features', crate.features);
   if (isCheck) {
     run('cargo', ['check', ...cargoArgs], 'Cargo');
   } else {
     run('cargo', ['build', '--release', ...cargoArgs, '--target-dir', targetDir], 'Cargo');
     run('wasm-bindgen', [
-      join(targetDir, 'wasm32-unknown-unknown', 'release', `${crate.module}.wasm`),
+      join(targetDir, 'wasm32-unknown-unknown', 'release', `${crate.artifact ?? crate.module}.wasm`),
       '--target', 'web', '--typescript', '--out-dir', crate.pkg, '--out-name', crate.module,
     ], 'wasm-bindgen');
   }
 }
+
+if (answerSourceHash) recordReceipt(answerSourceHash);
 
 if (!isCheck) {
   const destination = join(repoRoot, 'public/chat/wasm');

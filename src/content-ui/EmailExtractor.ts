@@ -11,6 +11,9 @@ import type {
   EmailProcessCallback 
 } from '../types'
 
+const gmailThreadPattern = /#[^/]+\/(?:[^/]+\/)?([A-Za-z0-9_-]{16,})$/
+
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type InboxSDK = any
 
@@ -739,7 +742,7 @@ export class EmailExtractor {
 
   getThreadIdFromUrl(): string | null {
     const hash = window.location.hash
-    const hashMatch = hash.match(/#[^/]+\/(?:[^/]+\/)?([A-Za-z0-9_-]{16,})$/)
+    const hashMatch = hash.match(gmailThreadPattern)
     if (hashMatch) return hashMatch[1]
 
     const url = new URL(window.location.href)

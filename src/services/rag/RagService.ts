@@ -34,9 +34,27 @@ const EMBEDDING_CONCURRENCY = 8
 const STORE_RAG_METADATA = 'rag_metadata'
 const QUERY_CACHE_MAX = 100
 const QUERY_CACHE_TTL = 5 * 60 * 1000
+const WHITESPACE_PATTERN = /\s+/
+const COLLAPSED_WHITESPACE_PATTERN = /\s+/g
+const LLM_TERM_QUOTES_PATTERN = /[\"\'\n]/g
+const LLM_TERM_SEPARATOR_PATTERN = /[,;]/
+const TRAILING_SLASH_PATTERN = /\/$/
+const MEMORY_PHRASE_PATTERNS = [
+  /\bwhat was (the|that|a)?\s*/gi,
+  /\bwhere did i (read|see|find)\s*(about)?\s*/gi,
+  /\bi (read|saw|found|remember|recall|forgot)\s*(about|that)?\s*/gi,
+  /\bcan you (find|remind|tell me)\s*(about)?\s*/gi,
+  /\bdo you (remember|know)\s*(about)?\s*/gi,
+  /\bthat i (read|saw|found)\s*(about)?\s*/gi,
+  /\bi forgot (about|what)?\s*/gi,
+  /\bremind me (about|of|what)?\s*/gi,
+  /\bwhat did i\s*/gi,
+  /\bshow me (the|that|a)?\s*/gi,
+  /\bfind (the|that|a|my)?\s*/gi
+]
 
 function simHash(text: string): bigint {
-  const tokens = text.toLowerCase().split(/\s+/).filter(t => t.length > 2)
+  const tokens = text.toLowerCase().split(WHITESPACE_PATTERN).filter(t => t.length > 2)
   const v = new Int32Array(64).fill(0)
   
   for (const token of tokens) {
@@ -387,7 +405,7 @@ export class RagService {
         'article': ['post', 'blog', 'news', 'story'],
         'articles': ['posts', 'blogs', 'news', 'stories']
       }
-      const words = q.toLowerCase().split(/\s+/)
+      const words = q.toLowerCase().split(WHITESPACE_PATTERN)
       const extras: string[] = []
       for (const w of words) {
         if (synonyms[w]) extras.push(...synonyms[w])
@@ -409,8 +427,8 @@ Example: "what was the pdf i read about islam and ummah" → "islam, ummah, musl
       
       if (response.ok && response.content) {
         const expanded = response.content
-          .replace(/[\"\'\n]/g, '')
-          .split(/[,;]/)
+          .replace(LLM_TERM_QUOTES_PATTERN, '')
+          .split(LLM_TERM_SEPARATOR_PATTERN)
           .map((t: string) => t.trim().toLowerCase())
           .filter((t: string) => t.length > 2 && t.length < 40 && !t.includes(':'))
           .slice(0, 12)
@@ -520,7 +538,7 @@ Example: "what was the pdf i read about islam and ummah" → "islam, ummah, musl
       const seenUrls = new Set<string>()
       const deduped = scored.filter(r => {
         const url = (r.entry.metadata?.sourceUrl as string) || r.entry.id
-        const baseUrl = url.split(':chunk:')[0].split('?')[0].replace(/\/$/, '')
+        const baseUrl = url.split(':chunk:')[0].split('?')[0].replace(TRAILING_SLASH_PATTERN, '')
         if (seenUrls.has(baseUrl)) return false
         seenUrls.add(baseUrl)
         return true
@@ -581,26 +599,12 @@ Example: "what was the pdf i read about islam and ummah" → "islam, ummah, musl
     let q = query.toLowerCase().trim()
     
     // strip personal/memory phrases that don't help search
-    const memoryPhrases = [
-      /\bwhat was (the|that|a)?\s*/gi,
-      /\bwhere did i (read|see|find)\s*(about)?\s*/gi,
-      /\bi (read|saw|found|remember|recall|forgot)\s*(about|that)?\s*/gi,
-      /\bcan you (find|remind|tell me)\s*(about)?\s*/gi,
-      /\bdo you (remember|know)\s*(about)?\s*/gi,
-      /\bthat i (read|saw|found)\s*(about)?\s*/gi,
-      /\bi forgot (about|what)?\s*/gi,
-      /\bremind me (about|of|what)?\s*/gi,
-      /\bwhat did i\s*/gi,
-      /\bshow me (the|that|a)?\s*/gi,
-      /\bfind (the|that|a|my)?\s*/gi
-    ]
-    
-    for (const phrase of memoryPhrases) {
+    for (const phrase of MEMORY_PHRASE_PATTERNS) {
       q = q.replace(phrase, ' ')
     }
     
     // collapse multiple spaces
-    q = q.replace(/\s+/g, ' ').trim()
+    q = q.replace(COLLAPSED_WHITESPACE_PATTERN, ' ').trim()
     
     return q
   }
@@ -624,7 +628,7 @@ Example: "what was the pdf i read about islam and ummah" → "islam, ummah, musl
     ])
     
     return query.toLowerCase()
-      .split(/\s+/)
+      .split(WHITESPACE_PATTERN)
       .filter(t => t.length > 2 && !stopwords.has(t))
   }
 
@@ -741,14 +745,14 @@ Example: "what was the pdf i read about islam and ummah" → "islam, ummah, musl
   }
   
   private classifyQueryType(query: string): 'semantic' | 'keyword' | 'hybrid' {
-    const words = query.split(/\s+/).length
+    const words = query.split(WHITESPACE_PATTERN).length
     if (words <= 2) return 'keyword'
     if (words >= 8) return 'semantic'
     return 'hybrid'
   }
 
   private rerankByOverlap(query: string, results: SearchResult[]): SearchResult[] {
-    const queryTerms = new Set(query.toLowerCase().split(/\s+/).filter(t => t.length > 2))
+    const queryTerms = new Set(query.toLowerCase().split(WHITESPACE_PATTERN).filter(t => t.length > 2))
     if (queryTerms.size === 0) return results
     
     const reranked = results.map(r => {

@@ -267,15 +267,16 @@ function setupSidePanelMessageListener() {
 onMounted(async () => {
   await themeStore.loadSavedTheme()
   
-  await loadWordPopupSetting()
-  await loadSummaryPrefs()
-  await loadProviderPreference()
-  await loadFontSize()
+  await Promise.all([
+    loadWordPopupSetting(),
+    loadSummaryPrefs(),
+    loadProviderPreference(),
+    loadFontSize()
+  ])
   await loadDictionarySettings()
   await initSelectedLanguages()
   
-  await checkOllama()
-  await checkChromeAI()
+  await Promise.all([checkOllama(), checkChromeAI()])
   
   setupSettingsWatcher()
   setupStorageListener(

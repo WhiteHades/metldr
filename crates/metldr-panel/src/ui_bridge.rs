@@ -23,10 +23,12 @@ use crate::{
 mod activation;
 mod active;
 mod agents;
+mod answer_frame;
 mod browser_actions;
 mod codex_input;
 mod connection;
 mod conversations;
+mod corrections;
 mod destinations;
 mod history;
 mod native_permissions;
@@ -42,6 +44,7 @@ mod settings_updates;
 mod source_updates;
 pub use active::UiActiveRun;
 pub use agents::{UiAgentConfiguration, UiAgentProfile, UiAgentSettings};
+pub use answer_frame::UiAnswerFrame;
 pub use browser_actions::{
     UiBrowserAction, UiBrowserActionDetail, UiBrowserActionSnapshot, UiBrowserActionSubscription,
     UiBrowserActions,
@@ -52,6 +55,10 @@ pub use codex_input::{
     UiCodexSubscription,
 };
 pub use connection::{UiConnection, UiConnectionSnapshot, UiConnectionSubscription};
+pub use corrections::{
+    UiCorrectionReceipt, UiCorrectionStatus, UiNativeCorrectionSnapshot,
+    UiNativeCorrectionSubscription, UiNativeCorrections,
+};
 pub use destinations::UiDestination;
 pub use native_permissions::{
     UiNativePermission, UiNativePermissionOption, UiNativePermissionSnapshot,
@@ -128,6 +135,8 @@ struct Core {
     pi_subscriptions: RefCell<Vec<std::rc::Weak<pi_ui::Observer>>>,
     codex_operation: RefCell<codex_input::Operation>,
     codex_subscriptions: RefCell<Vec<std::rc::Weak<codex_input::Observer>>>,
+    correction_operation: RefCell<corrections::Operation>,
+    correction_subscriptions: RefCell<Vec<std::rc::Weak<corrections::Observer>>>,
 }
 
 struct PageSession {
@@ -172,17 +181,21 @@ impl PageSession {
             || view.provider_settings.busy
             || view.provider_settings.pending.is_some()
             || view.agent_settings.busy
+            || self
+                .current
+                .borrow()
+                .upgrade()
+                .is_some_and(|core| core.correction_operation.borrow().blocked())
     }
 
     fn controls_ready(&self) -> bool {
         !self.invalidated.get()
             && !self.recovery.borrow().active()
             && !self.navigating.get()
-            && self
-                .current
-                .borrow()
-                .upgrade()
-                .is_none_or(|core| core.owner.borrow().settings_ready())
+            && self.current.borrow().upgrade().is_none_or(|core| {
+                core.owner.borrow().settings_ready()
+                    && !core.correction_operation.borrow().blocked()
+            })
     }
 }
 
@@ -252,6 +265,8 @@ impl UiBridge {
                 pi_subscriptions: RefCell::new(Vec::new()),
                 codex_operation: RefCell::new(codex_input::Operation::default()),
                 codex_subscriptions: RefCell::new(Vec::new()),
+                correction_operation: RefCell::new(corrections::Operation::default()),
+                correction_subscriptions: RefCell::new(Vec::new()),
             }),
         };
         page.current.replace(Rc::downgrade(&bridge.core));
@@ -264,6 +279,11 @@ impl UiBridge {
     #[wasm_bindgen(getter)]
     pub fn thread_id(&self) -> String {
         self.core.scope.conversation.clone()
+    }
+
+    pub fn answer_frame(&self, run: String, answer: String) -> Result<UiAnswerFrame, JsValue> {
+        self.core.ensure_current().map_err(js_error)?;
+        UiAnswerFrame::new(Rc::clone(&self.core), self.thread_id(), run, answer)
     }
 
     #[wasm_bindgen(getter)]
@@ -363,6 +383,51 @@ impl UiBridge {
             .map_err(js_error)?;
         self.core.owner.borrow().readable().map_err(js_error)?;
         serde_json::to_string(&table).map_err(|error| crate::err(&error.to_string()))
+    }
+
+    pub async fn chart(&self, run: String, artifact: String) -> Result<String, JsValue> {
+        let _read = self.core.begin_read().map_err(js_error)?;
+        let run: RunId = serde_json::from_value(serde_json::Value::String(run))
+            .map_err(|_| crate::err("Invalid chart run."))?;
+        let artifact = metldr_conversation::ArtifactId::new(artifact)
+            .map_err(|_| crate::err("Invalid chart identity."))?;
+        let flow = self.core.flow();
+        let context = flow.history_current().await.map_err(js_error)?;
+        if context.scope != self.core.scope {
+            return Err(js_error(FlowError::HistoryStale));
+        }
+        let chart = flow
+            .history_chart(&context, &run, &artifact)
+            .await
+            .map_err(js_error)?;
+        self.core.owner.borrow().readable().map_err(js_error)?;
+        let source = chart.source();
+        serde_json::to_string(&ChartResponse { chart, source })
+            .map_err(|error| crate::err(&error.to_string()))
+    }
+
+    pub async fn chart_export(&self, run: String, artifact: String) -> Result<String, JsValue> {
+        let _read = self.core.begin_read().map_err(js_error)?;
+        let run: RunId = serde_json::from_value(serde_json::Value::String(run))
+            .map_err(|_| crate::err("Invalid chart run."))?;
+        let artifact = metldr_conversation::ArtifactId::new(artifact)
+            .map_err(|_| crate::err("Invalid chart identity."))?;
+        let flow = self.core.flow();
+        let context = flow.history_current().await.map_err(js_error)?;
+        if context.scope != self.core.scope {
+            return Err(js_error(FlowError::HistoryStale));
+        }
+        let chart = flow
+            .history_chart(&context, &run, &artifact)
+            .await
+            .map_err(js_error)?;
+        self.core.owner.borrow().readable().map_err(js_error)?;
+        let html = chart.html().map_err(|error| crate::err(&error))?;
+        serde_json::to_string(&ChartExport {
+            filename: chart.filename(),
+            html,
+        })
+        .map_err(|error| crate::err(&error.to_string()))
     }
 
     pub async fn native_tools(&self, reference: String) -> Result<UiNativeTools, JsValue> {
@@ -562,6 +627,18 @@ impl UiBridge {
             }
         }
     }
+}
+
+#[derive(Serialize)]
+struct ChartResponse {
+    chart: metldr_conversation::Chart,
+    source: &'static str,
+}
+
+#[derive(Serialize)]
+struct ChartExport {
+    filename: String,
+    html: String,
 }
 
 impl Core {

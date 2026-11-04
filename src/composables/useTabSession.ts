@@ -5,33 +5,31 @@ import { logger } from '@/services/LoggerService'
 import { concurrencyManager } from '@/services/ConcurrencyManager'
 
 const log = logger.createScoped('TabSession')
+const gmailThreadPattern = /#[^/]+\/(?:[^/]+\/)?([A-Za-z0-9_-]{16,})$/
 
-function extractGmailThreadId(url: string | null): string | null {
-  if (!url) return null
+type SessionKey = { kind: 'email' | 'page'; value: string }
+
+function sessionKey(url: string): SessionKey {
   try {
-    const u = new URL(url)
-    if (u.hostname === 'mail.google.com' && u.hash) {
-      const threadMatch = u.hash.match(/#[^/]+\/(?:[^/]+\/)?([A-Za-z0-9_-]{16,})$/)
-      if (threadMatch) return threadMatch[1]
+    const parsed = new URL(url)
+    if (parsed.hostname === 'mail.google.com' && parsed.hash) {
+      const threadMatch = parsed.hash.match(gmailThreadPattern)
+      if (threadMatch) return { kind: 'email', value: threadMatch[1] }
     }
-    return null
+    // file:// URLs have origin='null' (literal string), handle specially
+    if (parsed.protocol === 'file:') {
+      return { kind: 'page', value: url.split('#')[0].split('?')[0] }
+    }
+    return { kind: 'page', value: `${parsed.origin}${parsed.pathname}` }
   } catch {
-    return null
+    return { kind: 'page', value: url }
   }
 }
 
-function normalizeUrl(url: string | null): string | null {
+function extractGmailThreadId(url: string | null): string | null {
   if (!url) return null
-  try {
-    const u = new URL(url)
-    // file:// URLs have origin='null' (literal string), handle specially
-    if (u.protocol === 'file:') {
-      return url.split('#')[0].split('?')[0] // strip hash and query, keep full path
-    }
-    return `${u.origin}${u.pathname}`
-  } catch {
-    return url
-  }
+  const key = sessionKey(url)
+  return key.kind === 'email' ? key.value : null
 }
 
 function isGmail(url: string | null): boolean {
@@ -58,13 +56,14 @@ export function useTabSession() {
       return
     }
     
-    const emailId = extractGmailThreadId(url)
+    const key = sessionKey(url)
     
-    if (emailId) {
+    if (key.kind === 'email') {
+      const emailId = key.value
       await cacheService.setEmailChat(emailId, chatMessages.value)
       log.log('saved gmail chat', { emailId: emailId.slice(0, 20), msgs: chatMessages.value.length })
     } else {
-      const normalizedUrl = normalizeUrl(url)
+      const normalizedUrl = key.value
       if (!normalizedUrl) return
       await cacheService.setTabSession(normalizedUrl, chatMessages.value, pageSummary.value, summaryCollapsed.value)
       log.log('saved tab session', { url: normalizedUrl.slice(0, 50), msgs: chatMessages.value.length })
@@ -78,9 +77,10 @@ export function useTabSession() {
     summaryCollapsed: Ref<boolean>,
     setUrlMessages?: (url: string, messages: AppChatMessage[]) => void
   ): Promise<boolean> {
-    const emailId = extractGmailThreadId(url)
+    const key = sessionKey(url)
     
-    if (emailId) {
+    if (key.kind === 'email') {
+      const emailId = key.value
       const session = await cacheService.getEmailSession(emailId)
       if (session) {
         const msgs = Array.isArray(session.chatMessages) ? session.chatMessages : []
@@ -93,7 +93,7 @@ export function useTabSession() {
       return false
     }
     
-    const normalizedUrl = normalizeUrl(url)
+    const normalizedUrl = key.value
     if (!normalizedUrl) return false
     
     const session = await cacheService.getTabSession(normalizedUrl)
@@ -147,11 +147,16 @@ export function useTabSession() {
   ): () => void {
     let urlPollInterval: ReturnType<typeof setInterval> | null = null
     let previousUrl: string | null = null
+    const cachedKeys: Array<{ url: string; key: string }> = []
     
     function getCacheKey(url: string | null): string | null {
       if (!url) return null
-      const emailId = extractGmailThreadId(url)
-      return emailId || normalizeUrl(url)
+      const cached = cachedKeys.find(entry => entry.url === url)
+      if (cached) return cached.key
+      const key = sessionKey(url).value
+      cachedKeys.push({ url, key })
+      if (cachedKeys.length > 2) cachedKeys.shift()
+      return key
     }
     
     async function refreshTabUrl(): Promise<void> {
@@ -167,7 +172,7 @@ export function useTabSession() {
     }
 
     async function handleTabChange(newUrl: string): Promise<void> {
-      if (!aiReady.value) return
+      if (!aiReady.value || newUrl === previousUrl) return
       
       const newKey = getCacheKey(newUrl)
       const prevKey = getCacheKey(previousUrl)
@@ -232,7 +237,7 @@ export function useTabSession() {
     if (urlPollInterval) clearInterval(urlPollInterval)
     urlPollInterval = setInterval(async () => {
       await refreshTabUrl()
-      if (currentTabUrl.value && getCacheKey(currentTabUrl.value) !== getCacheKey(previousUrl)) {
+      if (currentTabUrl.value && currentTabUrl.value !== previousUrl && getCacheKey(currentTabUrl.value) !== getCacheKey(previousUrl)) {
         await handleTabChange(currentTabUrl.value)
       }
     }, 500)

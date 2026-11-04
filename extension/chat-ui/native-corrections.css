@@ -1,0 +1,8 @@
+[data-native-corrections] {
+  min-inline-size: 0;
+  overflow-wrap: break-word;
+}
+
+[data-native-corrections] .native-correction-text {
+  white-space: pre-wrap;
+}

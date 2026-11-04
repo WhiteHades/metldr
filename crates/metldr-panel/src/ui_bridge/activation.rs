@@ -28,6 +28,10 @@ impl Activation {
     }
 
     pub(super) fn require(&self, event: &JsValue) -> Result<(), FlowError> {
+        self.require_kind(event, "click")
+    }
+
+    fn require_kind(&self, event: &JsValue, kind: &str) -> Result<(), FlowError> {
         // Invoke platform getters directly so a plain object or overridden field cannot supply trust.
         if self.trusted.call0(event).ok().and_then(|v| v.as_bool()) != Some(true)
             || self
@@ -36,7 +40,7 @@ impl Activation {
                 .ok()
                 .and_then(|v| v.as_string())
                 .as_deref()
-                != Some("click")
+                != Some(kind)
             || !self
                 .phase
                 .call0(event)
@@ -59,6 +63,57 @@ impl Activation {
         if !target
             .owner_document()
             .is_some_and(|owner| owner == document)
+        {
+            return Err(rejected());
+        }
+        Ok(())
+    }
+}
+
+pub(super) struct SubmissionActivation {
+    click: Activation,
+    key: Function,
+    shift: Function,
+    composing: Function,
+    repeat: Function,
+}
+
+impl SubmissionActivation {
+    pub(super) fn new() -> Result<Self, FlowError> {
+        let event = web_sys::KeyboardEvent::new("keydown").map_err(|_| rejected())?;
+        let prototype = Object::get_prototype_of(event.as_ref());
+        Ok(Self {
+            click: Activation::new()?,
+            key: getter(&prototype, "key")?,
+            shift: getter(&prototype, "shiftKey")?,
+            composing: getter(&prototype, "isComposing")?,
+            repeat: getter(&prototype, "repeat")?,
+        })
+    }
+
+    pub(super) fn require(&self, event: &JsValue) -> Result<(), FlowError> {
+        if self
+            .click
+            .kind
+            .call0(event)
+            .ok()
+            .and_then(|v| v.as_string())
+            .as_deref()
+            == Some("click")
+        {
+            return self.click.require(event);
+        }
+        self.click.require_kind(event, "keydown")?;
+        if self
+            .key
+            .call0(event)
+            .ok()
+            .and_then(|v| v.as_string())
+            .as_deref()
+            != Some("Enter")
+            || [&self.shift, &self.composing, &self.repeat]
+                .iter()
+                .any(|getter| getter.call0(event).ok().and_then(|v| v.as_bool()) != Some(false))
         {
             return Err(rejected());
         }

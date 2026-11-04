@@ -3,6 +3,9 @@ import { marked } from 'marked'
 import { formatTime, stripThinking } from '../utils/text'
 import type { Theme, ThemeName, ThemeListener, Summary, IntentStyle } from '../types'
 
+const hexColorPattern = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i
+
+
 marked.setOptions({
   breaks: true,
   gfm: true
@@ -191,7 +194,7 @@ export class UIService {
   }
 
   static hexToRgb(hex: string): string {
-    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex)
+    const result = hexColorPattern.exec(hex)
     return result 
       ? `${parseInt(result[1], 16)}, ${parseInt(result[2], 16)}, ${parseInt(result[3], 16)}`
       : hex

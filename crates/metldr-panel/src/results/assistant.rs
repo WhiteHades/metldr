@@ -40,7 +40,7 @@ fn parts(display: &Display) -> Vec<Part<'_>> {
                 Some(Part::Message { tools, .. } | Part::Leading(tools)) => tools.push(id.as_str()),
                 _ => parts.push(Part::Leading(vec![id.as_str()])),
             },
-            EntryRef::Artifact { id } => parts.push(Part::Artifact(id.as_str())),
+            EntryRef::Artifact { id, .. } => parts.push(Part::Artifact(id.as_str())),
         }
     }
     if parts.is_empty() {
