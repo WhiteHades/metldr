@@ -117,6 +117,31 @@ impl Content {
     }
 
     pub fn change(&mut self, change: Change) -> Result<bool, String> {
+        if let (ContentKind::Native(entries), Change::Append { key, text }) = (&self.0, &change)
+            && let Some(index) = find_message(entries, key)
+        {
+            key.validate()?;
+            let remaining = MAX_TEXT_BYTES - self.len();
+            let ContentKind::Native(entries) = &mut self.0 else {
+                unreachable!()
+            };
+            let Entry::Message {
+                text: current,
+                completion,
+                ..
+            } = &mut entries[index]
+            else {
+                unreachable!()
+            };
+            if *completion != Completion::Streaming {
+                return Err("cannot append to a completed message".into());
+            }
+            if text.len() > remaining {
+                return Err("content exceeds 8192 UTF-8 bytes".into());
+            }
+            current.push_str(text);
+            return Ok(!text.is_empty());
+        }
         let mut next = self.clone();
         let changed = next.apply(change)?;
         if changed {
