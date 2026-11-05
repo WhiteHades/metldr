@@ -43,6 +43,7 @@ mod presentation;
 mod provider;
 mod provider_settings;
 mod public_view;
+#[cfg(test)]
 mod recovery;
 mod settings_records;
 mod start_replay;
