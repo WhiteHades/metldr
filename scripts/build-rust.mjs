@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import { copyFileSync, mkdirSync, readFileSync, statSync } from 'node:fs';
+import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { recordReceipt, sourceDigest } from './answer-contract.mjs';
 
@@ -13,6 +14,21 @@ const crates = [
 ];
 const isCheck = process.argv.includes('--check');
 const isWindows = process.platform === 'win32';
+const panelAssetFields = ['name', 'url', 'sha256', 'bytes'];
+
+for (const asset of JSON.parse(readFileSync(join(repoRoot, 'scripts/panel-assets.json'), 'utf8'))) {
+  if (Object.keys(asset).length !== panelAssetFields.length
+      || !panelAssetFields.every(field => Object.hasOwn(asset, field))
+      || typeof asset.url !== 'string') {
+    throw new Error('Panel asset entries must contain name, url, sha256 and bytes.');
+  }
+  const { name, bytes, sha256 } = asset;
+  const file = join(repoRoot, 'public/rust-panel/assets', name);
+  if (basename(name) !== name || bytes > 256 * 1024 || statSync(file).size !== bytes
+      || createHash('sha256').update(readFileSync(file)).digest('hex') !== sha256) {
+    throw new Error(`Panel asset verification failed: ${name}`);
+  }
+}
 
 function run(command, args, label) {
   const executable = isWindows ? `${command}.exe` : command;
@@ -87,8 +103,3 @@ run('cargo', [
   '--target-dir', process.env.CARGO_TARGET_DIR || 'crates/metldr-welcome/target',
 ], 'welcome generator');
 
-run('cargo', [
-  isCheck ? 'check' : 'run', '--locked', '--release',
-  '--manifest-path', 'crates/metldr-extension-assets/Cargo.toml',
-  '--target-dir', process.env.CARGO_TARGET_DIR || 'crates/metldr-extension-assets/target',
-], 'panel assets');
