@@ -651,7 +651,7 @@ fn actual_records_commit_update_retry_abort_and_reopen() -> Result<()> {
             .unwrap())
     })?;
     assert_eq!(duplicate.run, id);
-    assert_eq!(duplicate.current, selection);
+    assert_eq!(history.selection()?, selection);
     assert_eq!(
         (profile(&history)?.sequence, profile(&history)?.next),
         (43, 62)
@@ -877,7 +877,7 @@ fn actual_records_commit_update_retry_abort_and_reopen() -> Result<()> {
     let receipt =
         imported.edit(|tx| Ok(tx.duplicate(&old_selection, "legacy:1", &digest)?.unwrap()))?;
     assert_eq!(receipt.run, legacy_run);
-    assert_eq!(receipt.current, current);
+    assert_eq!(imported.selection()?, current);
     assert_ne!(current, old_selection);
     assert!(
         imported

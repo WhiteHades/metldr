@@ -64,7 +64,6 @@ fn storage<T>(operation: impl FnOnce() -> Result<T>) -> Result<T> {
 
 pub(crate) struct Started {
     pub run: String,
-    pub current: Selection,
 }
 
 pub(crate) struct Edit<'a> {
@@ -253,10 +252,7 @@ impl Edit<'_> {
         if !same_scope || !same_input {
             return Err("request identity already names a different input route or scope".into());
         }
-        Ok(Some(Started {
-            run: start.run,
-            current: selection(&self.profile),
-        }))
+        Ok(Some(Started { run: start.run }))
     }
 
     pub(crate) fn request_launch(

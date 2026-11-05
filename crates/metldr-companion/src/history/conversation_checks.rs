@@ -197,14 +197,14 @@ fn actual_conversations_keep_receipts_scopes_settings_and_native_history() -> Re
     );
     assert!(
         history
-            .edit(|tx| tx.native_request(&current, "new-b"))
+            .edit(|tx| tx.native_request_workflow(&current, "new-b"))
             .is_err()
     );
     let retried_run = history
         .edit(|tx| tx.duplicate(&b, "b-task", &digest))?
         .unwrap();
     assert_eq!(retried_run.run, run.id);
-    assert_eq!(retried_run.current, current);
+    assert_eq!(history.selection()?, current);
     assert_eq!(profile(&history)?, after_switch);
 
     let mut ids = BTreeSet::from([original.conversation.clone(), b.conversation.clone()]);

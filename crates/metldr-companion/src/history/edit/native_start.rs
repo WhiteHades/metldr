@@ -1,6 +1,5 @@
-use super::{Edit, NativeTask, NativeWorkflow, Selection, storage};
-use crate::{Result, history::schema::*, model::valid_request_id};
-use redb::ReadableTable;
+use super::{Edit, NativeWorkflow, Selection, storage};
+use crate::Result;
 
 impl Edit<'_> {
     pub(crate) fn native_request_workflow(
@@ -24,45 +23,6 @@ impl Edit<'_> {
                 }
                 Ok(Some(workflow.value))
             })
-        })();
-        self.checked(result)
-    }
-
-    pub(crate) fn native_request(
-        &self,
-        scope: &Selection,
-        request: &str,
-    ) -> Result<Option<NativeTask>> {
-        let result = (|| {
-            self.require_selection(scope)?;
-            if !valid_request_id(request) {
-                return Err("invalid request identity".into());
-            }
-            self.require_run_request(request)?;
-            let saved = storage(|| {
-                self.write
-                    .open_table(STARTS)?
-                    .get(request)?
-                    .map(|bytes| decode::<Start>(bytes.value()))
-                    .transpose()
-            })?;
-            let Some(saved) = saved else { return Ok(None) };
-            storage(|| {
-                if let ReceiptFormat::Scoped { epoch, digest } = &saved.format
-                    && (*epoch == 0
-                        || digest.len() != 64
-                        || !digest.bytes().all(|b| b.is_ascii_hexdigit()))
-                {
-                    return Err("invalid saved scoped receipt".into());
-                }
-                Ok(())
-            })?;
-            if saved.conversation != scope.conversation
-                || matches!(saved.format, ReceiptFormat::Scoped { epoch, .. } if epoch != scope.epoch)
-            {
-                return Err("request identity already names a different scope".into());
-            }
-            Ok(Some(self.native_task(scope, &saved.run)?))
         })();
         self.checked(result)
     }
