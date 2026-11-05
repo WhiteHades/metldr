@@ -34,6 +34,8 @@ mod edit_checks;
 #[cfg(test)]
 mod fixture;
 #[cfg(test)]
+mod load_checks;
+#[cfg(test)]
 mod native_callback_checks;
 #[cfg(test)]
 mod native_edit_checks;
