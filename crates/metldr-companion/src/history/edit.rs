@@ -29,13 +29,11 @@ mod recovery;
 mod settings;
 mod view;
 
-pub(crate) use conversations::{
-    ConversationBusy, ConversationChange, ConversationChanged, ConversationPage,
-};
+pub(crate) use conversations::{ConversationBusy, ConversationChange};
 pub(crate) use native_choices::NativeChoices;
 pub(crate) use native_task::NativeTask;
 pub(crate) use native_workflow::NativeWorkflow;
-pub(crate) use read::{Cursor, Observed, RunPage, RunSummary};
+pub(crate) use read::{Cursor, Observed};
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -66,7 +64,6 @@ fn storage<T>(operation: impl FnOnce() -> Result<T>) -> Result<T> {
 
 pub(crate) struct Started {
     pub run: String,
-    pub current: Selection,
 }
 
 pub(crate) struct Edit<'a> {
@@ -255,10 +252,7 @@ impl Edit<'_> {
         if !same_scope || !same_input {
             return Err("request identity already names a different input route or scope".into());
         }
-        Ok(Some(Started {
-            run: start.run,
-            current: selection(&self.profile),
-        }))
+        Ok(Some(Started { run: start.run }))
     }
 
     pub(crate) fn request_launch(
