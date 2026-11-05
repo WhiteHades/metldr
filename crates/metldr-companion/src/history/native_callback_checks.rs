@@ -288,11 +288,10 @@ fn actual_owner_native_callbacks_bind_persist_and_fail_closed() -> Result<()> {
             assert!(result.is_err());
             assert!(ack.is_err());
             assert!(frames.lock().unwrap().is_empty());
-            let saved = owner
-                .record_history
-                .as_mut()
-                .unwrap()
-                .edit(|edit| edit.native_task(&selection, &run))?;
+            let saved = owner.record_history.as_mut().unwrap().edit(|edit| {
+                edit.current_execution(&selection, &run)
+                    .and_then(|execution| edit.native_task(&execution, &run))
+            })?;
             assert!(matches!(
                 saved.workflow,
                 NativeWorkflow::Codex(crate::codex_model::Workflow {
@@ -311,7 +310,10 @@ fn actual_owner_native_callbacks_bind_persist_and_fail_closed() -> Result<()> {
                 .expect("owned callback worker");
             drop(owner.record_history.take());
             let mut reopened = History::open(&path, owner.disk.lease())?;
-            let durable = reopened.edit(|edit| edit.native_task(&selection, &run))?;
+            let durable = reopened.edit(|edit| {
+                edit.current_execution(&selection, &run)
+                    .and_then(|execution| edit.native_task(&execution, &run))
+            })?;
             assert!(matches!(
                 durable.launch,
                 Launch::Codex {
@@ -370,11 +372,10 @@ fn actual_owner_native_callbacks_bind_persist_and_fail_closed() -> Result<()> {
         owner.tool_progress(&run, progress.clone())?;
         owner.tool_progress("stale-run", progress.clone())?;
         assert_eq!(frames.lock().unwrap().len(), published);
-        let saved = owner
-            .record_history
-            .as_mut()
-            .unwrap()
-            .edit(|edit| edit.native_task(&selection, &run))?;
+        let saved = owner.record_history.as_mut().unwrap().edit(|edit| {
+            edit.current_execution(&selection, &run)
+                .and_then(|execution| edit.native_task(&execution, &run))
+        })?;
         assert!(serde_json::to_string(&saved.run.output)?.contains("callback-tool-1"));
         let activities = match &saved.launch {
             Launch::Pi { activity, .. }
@@ -387,7 +388,9 @@ fn actual_owner_native_callbacks_bind_persist_and_fail_closed() -> Result<()> {
         assert_eq!(activities[0].call.as_ref(), Some(&progress));
         for invalid in ["tool", "phase", "identity", "clear"] {
             let result = owner.record_history.as_mut().unwrap().edit(|edit| {
-                let mut task = edit.native_task(&selection, &run)?;
+                let mut task = edit
+                    .current_execution(&selection, &run)
+                    .and_then(|execution| edit.native_task(&execution, &run))?;
                 let events = match &mut task.launch {
                     Launch::Pi { activity, .. }
                     | Launch::Codex { activity, .. }
@@ -400,7 +403,8 @@ fn actual_owner_native_callbacks_bind_persist_and_fail_closed() -> Result<()> {
                     "identity" => events[0].call.as_mut().unwrap().id = "different-call".into(),
                     _ => events[0].call.as_mut().unwrap().title = None,
                 }
-                edit.put_native(&selection, task)
+                edit.current_execution(&selection, &task.run.id)
+                    .and_then(|execution| edit.put_native(&execution, task))
             });
             assert!(
                 result.is_err(),
@@ -426,9 +430,12 @@ fn actual_owner_native_callbacks_bind_persist_and_fail_closed() -> Result<()> {
         owner.tool_progress(&run, late)?;
         assert_eq!(frames.lock().unwrap().len(), count);
         owner.record_history.as_mut().unwrap().edit(|edit| {
-            let mut record = edit.run(&selection, &run)?;
+            let mut record = edit
+                .current_execution(&selection, &run)
+                .and_then(|execution| edit.run(&execution, &run))?;
             record.status = Status::StopRequested;
-            edit.put_run(&selection, record)
+            edit.current_execution(&selection, &record.id)
+                .and_then(|execution| edit.put_run(&execution, record))
         })?;
         match engine {
             "pi" => owner.pi_activity(&run, activity("ignored-after-stop"))?,
@@ -443,7 +450,10 @@ fn actual_owner_native_callbacks_bind_persist_and_fail_closed() -> Result<()> {
         assert_eq!(frames.lock().unwrap().len(), count);
         drop(owner.record_history.take());
         let mut reopened = History::open(&path, owner.disk.lease())?;
-        let reopened_task = reopened.edit(|edit| edit.native_task(&selection, &run))?;
+        let reopened_task = reopened.edit(|edit| {
+            edit.current_execution(&selection, &run)
+                .and_then(|execution| edit.native_task(&execution, &run))
+        })?;
         let revision = match &reopened_task.workflow {
             NativeWorkflow::Pi(w) => w.revision,
             NativeWorkflow::Codex(w) => w.revision,

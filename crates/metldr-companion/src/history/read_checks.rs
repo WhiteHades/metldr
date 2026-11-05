@@ -82,7 +82,9 @@ fn saved_reads_page_details_and_fail_closed() -> Result<()> {
                     input_digest: format!("{number:064x}"),
                 },
             )?;
-            let mut completed = edit.run(&selection, &id)?;
+            let mut completed = edit
+                .current_execution(&selection, &id)
+                .and_then(|execution| edit.run(&execution, &id))?;
             completed
                 .output
                 .change(metldr_conversation::Change::FlatAppend(format!(
@@ -90,7 +92,8 @@ fn saved_reads_page_details_and_fail_closed() -> Result<()> {
                     "x".repeat(7_450)
                 )))?;
             completed.status = Status::Complete;
-            edit.put_run(&selection, completed)?;
+            edit.current_execution(&selection, &completed.id)
+                .and_then(|execution| edit.put_run(&execution, completed))?;
             Ok(id)
         })?;
         assert_eq!(id, run_id(&selection.store, number));
@@ -102,12 +105,9 @@ fn saved_reads_page_details_and_fail_closed() -> Result<()> {
     let before_reads = fs::read(directory.0.join("history.redb"))?;
     let retained_bytes = history.edit(|edit| {
         (61..=80).try_fold(0usize, |total, number| {
-            Ok(total
-                + edit
-                    .run(&selection, &run_id(&selection.store, number))?
-                    .output
-                    .text()
-                    .len())
+            let id = run_id(&selection.store, number);
+            let execution = edit.current_execution(&selection, &id)?;
+            Ok(total + edit.run(&execution, &id)?.output.text().len())
         })
     })?;
     assert!(retained_bytes > 49_152);
@@ -171,12 +171,15 @@ fn saved_reads_page_details_and_fail_closed() -> Result<()> {
                 input_digest: "f".repeat(64),
             },
         )?;
-        let mut complete = edit.run(&selection, &id)?;
+        let mut complete = edit
+            .current_execution(&selection, &id)
+            .and_then(|execution| edit.run(&execution, &id))?;
         complete
             .output
             .change(metldr_conversation::Change::FlatAppend("new run".into()))?;
         complete.status = Status::Complete;
-        edit.put_run(&selection, complete)
+        edit.current_execution(&selection, &complete.id)
+            .and_then(|execution| edit.put_run(&execution, complete))
     })?;
     let page_profile = serde_json::to_value(profile(&history)?)?;
     let second = history.edit(|edit| edit.runs_page(&selection, Some(&cursor)))?;
@@ -372,11 +375,14 @@ fn escaped_pages(history: &mut History, selection: &super::Selection) -> Result<
                     input_digest: "e".repeat(64),
                 },
             )?;
-            let mut run = edit.run(selection, &id)?;
+            let mut run = edit
+                .current_execution(selection, &id)
+                .and_then(|execution| edit.run(&execution, &id))?;
             run.output
                 .change(metldr_conversation::Change::FlatAppend("\0".repeat(7_000)))?;
             run.status = Status::Complete;
-            edit.put_run(selection, run)
+            edit.current_execution(selection, &run.id)
+                .and_then(|execution| edit.put_run(&execution, run))
         })?;
     }
     let before = serde_json::to_value(profile(history)?)?;

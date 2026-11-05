@@ -16,7 +16,7 @@ impl Edit<'_> {
             }
             let mut chosen = BTreeMap::new();
             for run in runs {
-                self.run(scope, run)?;
+                let execution = self.current_execution(scope, run)?;
                 let ids = storage(|| {
                     self.write
                         .open_table(ACTION_ORDER)?
@@ -34,7 +34,7 @@ impl Edit<'_> {
                         .collect::<Result<Vec<_>>>()
                 })?;
                 for (number, key, id) in ids {
-                    let action = self.browser_action(scope, &id)?;
+                    let action = self.browser_action(&execution, &id)?;
                     if key != id
                         || action.proposal.run != *run
                         || id.rsplit(':').next().unwrap().parse::<u64>()? != number
@@ -48,7 +48,8 @@ impl Edit<'_> {
                 chosen.pop_first();
             }
             for run in runs {
-                if let Some(action) = self.browser_open(scope, run)? {
+                let execution = self.current_execution(scope, run)?;
+                if let Some(action) = self.browser_open(&execution, run)? {
                     let number = action.id.rsplit(':').next().unwrap().parse::<u64>()?;
                     if !chosen.contains_key(&(number, action.id.clone())) {
                         if chosen.len() == 16 {

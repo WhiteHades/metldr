@@ -49,8 +49,10 @@ impl PendingApproval {
 impl Owner {
     pub(super) fn saved_browser_action(&mut self, id: &str) -> Result<Action> {
         if let Some(history) = self.record_history.as_mut() {
-            let scope = history.selection()?;
-            return history.edit(|edit| edit.browser_action(&scope, id));
+            return history.edit(|edit| {
+                let execution = edit.action_execution(id)?;
+                edit.browser_action(&execution, id)
+            });
         }
         self.state
             .browser_actions
@@ -61,8 +63,10 @@ impl Owner {
 
     fn saved_browser_tool(&mut self, run: &str, tool: &str) -> Result<Option<Action>> {
         if let Some(history) = self.record_history.as_mut() {
-            let scope = history.selection()?;
-            return history.edit(|edit| edit.browser_by_tool(&scope, run, tool));
+            return history.edit(|edit| {
+                let execution = edit.execution(run)?;
+                edit.browser_by_tool(&execution, run, tool)
+            });
         }
         Ok(self
             .state
@@ -110,14 +114,9 @@ impl Owner {
                     }
                     if self.record_history.is_some() {
                         let run = proposal.run.clone();
-                        return self.record_change(|edit, scope| {
-                            let (action, created) = edit.propose_browser(scope, proposal)?;
-                            let projected = if created {
-                                Some(edit.project(scope, Some(&run))?)
-                            } else {
-                                None
-                            };
-                            Ok(((action, created), projected))
+                        return self.record_execution(&run, |edit, execution| {
+                            let (action, created) = edit.propose_browser(execution, proposal)?;
+                            Ok((action, created))
                         });
                     }
                     let mut next = self.state.clone();
@@ -156,9 +155,8 @@ impl Owner {
                     self.browser_operation(&record.proposal.run)?;
                     if self.record_history.is_some() {
                         let run = record.proposal.run.clone();
-                        return self.record_change(|edit, scope| {
-                            let record = edit.dispatch_browser(scope, &action, revision)?;
-                            Ok((record, Some(edit.project(scope, Some(&run))?)))
+                        return self.record_execution(&run, |edit, execution| {
+                            edit.dispatch_browser(execution, &action, revision)
                         });
                     }
                     let mut next = self.state.clone();
@@ -186,9 +184,8 @@ impl Owner {
                     }
                     if self.record_history.is_some() {
                         let run = record.proposal.run.clone();
-                        return self.record_change(|edit, scope| {
-                            let record = edit.settle_browser(scope, &action, revision, outcome)?;
-                            Ok((record, Some(edit.project(scope, Some(&run))?)))
+                        return self.record_execution(&run, |edit, execution| {
+                            edit.settle_browser(execution, &action, revision, outcome)
                         });
                     }
                     let mut next = self.state.clone();
@@ -215,9 +212,8 @@ impl Owner {
         self.browser_operation(&pending.run)?;
         let record = if self.record_history.is_some() {
             let run = pending.run.clone();
-            self.record_change(|edit, scope| {
-                let record = edit.decide_browser(scope, action, revision, approve)?;
-                Ok((record, Some(edit.project(scope, Some(&run))?)))
+            self.record_execution(&run, |edit, execution| {
+                edit.decide_browser(execution, action, revision, approve)
             })?
         } else {
             let mut next = self.state.clone();

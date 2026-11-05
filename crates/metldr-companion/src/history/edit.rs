@@ -43,6 +43,27 @@ pub(crate) struct Selection {
     pub epoch: u64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Execution {
+    store: String,
+    conversation: String,
+    run: String,
+}
+
+impl Execution {
+    pub(crate) fn store(&self) -> &str {
+        &self.store
+    }
+
+    pub(crate) fn run(&self) -> &str {
+        &self.run
+    }
+
+    pub(crate) fn conversation(&self) -> &str {
+        &self.conversation
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct Failure(Box<dyn std::error::Error + Send + Sync>);
 
@@ -181,6 +202,43 @@ fn record<T: DeserializeOwned>(
 }
 
 impl Edit<'_> {
+    pub(crate) fn execution(&self, run: &str) -> Result<Execution> {
+        self.checked((|| {
+            let header = self.saved_run_header(run)?.ok_or("unknown history run")?;
+            self.saved_conversation(&header.conversation)?;
+            Ok(Execution {
+                store: self.profile.store.clone(),
+                conversation: header.conversation,
+                run: run.into(),
+            })
+        })())
+    }
+
+    pub(crate) fn current_execution(&self, scope: &Selection, run: &str) -> Result<Execution> {
+        self.checked((|| {
+            self.require_selection(scope)?;
+            let execution = self.execution(run)?;
+            if execution.conversation != scope.conversation {
+                return Err("run belongs to a different conversation".into());
+            }
+            Ok(execution)
+        })())
+    }
+
+    fn require_execution(&self, execution: &Execution, run: &str) -> Result<()> {
+        self.checked((|| {
+            if execution.store != self.profile.store || execution.run != run {
+                return Err("history execution ownership differs".into());
+            }
+            let header = self.saved_run_header(run)?.ok_or("unknown history run")?;
+            if header.conversation != execution.conversation {
+                return Err("history execution conversation differs".into());
+            }
+            self.saved_conversation(&execution.conversation)?;
+            Ok(())
+        })())
+    }
+
     pub(crate) fn selection(&self) -> Selection {
         selection(&self.profile)
     }
@@ -199,6 +257,10 @@ impl Edit<'_> {
     pub(crate) fn id(&mut self) -> Result<String> {
         let result = self.id_inner();
         self.checked(result)
+    }
+
+    pub(crate) fn next_counter(&self) -> u64 {
+        self.profile.next
     }
 
     fn id_inner(&mut self) -> Result<String> {
@@ -322,12 +384,12 @@ impl Edit<'_> {
         Ok(Some((start, launch.value)))
     }
 
-    pub(crate) fn run(&self, expected: &Selection, id: &str) -> Result<Run> {
+    pub(crate) fn run(&self, expected: &Execution, id: &str) -> Result<Run> {
         self.checked(self.run_inner(expected, id))
     }
 
-    fn run_inner(&self, expected: &Selection, id: &str) -> Result<Run> {
-        self.require_selection(expected)?;
+    fn run_inner(&self, expected: &Execution, id: &str) -> Result<Run> {
+        self.require_execution(expected, id)?;
         let run = self.saved_run(id)?.ok_or("unknown history run")?;
         if run.conversation != expected.conversation {
             return Err("run belongs to a different conversation".into());
@@ -440,13 +502,13 @@ impl Edit<'_> {
         Ok(())
     }
 
-    pub(crate) fn put_run(&mut self, expected: &Selection, run: Run) -> Result<()> {
+    pub(crate) fn put_run(&mut self, expected: &Execution, run: Run) -> Result<()> {
         let result = self.put_run_inner(expected, run);
         self.checked(result)
     }
 
-    fn put_run_inner(&mut self, expected: &Selection, mut run: Run) -> Result<()> {
-        self.require_selection(expected)?;
+    fn put_run_inner(&mut self, expected: &Execution, mut run: Run) -> Result<()> {
+        self.require_execution(expected, &run.id)?;
         self.require_browser_finalized(expected, &run)?;
         let before = self.saved_run(&run.id)?.ok_or("unknown history run")?;
         if before.conversation != expected.conversation
@@ -474,7 +536,7 @@ impl Edit<'_> {
             task.run = run;
             return self.put_native(expected, task);
         }
-        let source = self.source(&run.source)?;
+        let source = self.source_in(&expected.conversation, &run.source)?;
         storage(|| self.validate_flat(&before.value, &launch.value, source.clone()))?;
         let previous = super::artifacts::artifact_refs(&before.value);
         let current = super::artifacts::artifact_refs(&run);
@@ -537,7 +599,7 @@ impl Edit<'_> {
         Ok(())
     }
 
-    fn interrupt_generated_artifacts(&mut self, expected: &Selection, run: &mut Run) -> Result<()> {
+    fn interrupt_generated_artifacts(&mut self, expected: &Execution, run: &mut Run) -> Result<()> {
         for id in super::artifacts::artifact_refs(run) {
             let mut artifact: Record<super::Artifact> = record(self.write, ARTIFACTS, id.as_str())?
                 .ok_or("run artifact reference is absent")?;

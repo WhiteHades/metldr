@@ -2,9 +2,14 @@ use crate::{
     Result,
     agent_model::{Launch, digest},
     flow::{Event, Operation, Owner},
-    history::{Edit, Selection},
+    history::{Edit, Execution, Selection},
     model::{ConversationAction, Run, Source, Status, Store, check_page_fields},
 };
+
+enum RecordProjection {
+    View(Option<Store>),
+    Execution(Execution),
+}
 use serde_json::{Value, json};
 use std::{
     io,
@@ -31,6 +36,40 @@ impl Owner {
         &mut self,
         change: impl FnOnce(&mut Edit<'_>, &Selection) -> Result<(T, Option<Store>)>,
     ) -> Result<(T, bool)> {
+        self.persist_record_change(|edit, selection| {
+            let (result, projection) = change(edit, selection)?;
+            Ok((result, RecordProjection::View(projection)))
+        })
+    }
+
+    pub(super) fn record_execution<T>(
+        &mut self,
+        run: &str,
+        change: impl FnOnce(&mut Edit<'_>, &Execution) -> Result<T>,
+    ) -> Result<T> {
+        let (result, publish) = self.persist_execution(run, change)?;
+        if publish {
+            self.publish()?;
+        }
+        Ok(result)
+    }
+
+    pub(super) fn persist_execution<T>(
+        &mut self,
+        run: &str,
+        change: impl FnOnce(&mut Edit<'_>, &Execution) -> Result<T>,
+    ) -> Result<(T, bool)> {
+        self.persist_record_change(|edit, _| {
+            let execution = edit.execution(run)?;
+            let result = change(edit, &execution)?;
+            Ok((result, RecordProjection::Execution(execution)))
+        })
+    }
+
+    fn persist_record_change<T>(
+        &mut self,
+        change: impl FnOnce(&mut Edit<'_>, &Selection) -> Result<(T, RecordProjection)>,
+    ) -> Result<(T, bool)> {
         let mut history = self
             .record_history
             .take()
@@ -38,13 +77,27 @@ impl Owner {
         let result = (|| {
             let selection = history.selection()?;
             history.edit(|edit| {
-                let (result, projection) = change(edit, &selection)?;
+                let (result, request) = change(edit, &selection)?;
                 let current = edit.selection();
-                if edit.changed() && projection.is_none() {
-                    return Err(
-                        io::Error::other("record change has no publication projection").into(),
-                    );
-                }
+                let projection = match request {
+                    RecordProjection::View(projection) => {
+                        if edit.changed() && projection.is_none() {
+                            return Err(io::Error::other(
+                                "record change has no publication projection",
+                            )
+                            .into());
+                        }
+                        projection
+                    }
+                    RecordProjection::Execution(execution) => {
+                        if edit.changed() && execution.conversation() == current.conversation {
+                            Some(edit.project(&current, Some(execution.run()))?)
+                        } else {
+                            None
+                        }
+                    }
+                };
+                let publish = edit.changed() && projection.is_some();
                 let projection = projection
                     .map(|state| -> Result<_> {
                         let run_ids: Vec<_> =
@@ -59,7 +112,7 @@ impl Owner {
                         Ok((state, browser_view))
                     })
                     .transpose()?;
-                Ok((result, projection, edit.changed(), current != selection))
+                Ok((result, projection, publish, current != selection))
             })
         })();
         self.record_history = Some(history);
@@ -216,17 +269,20 @@ impl Owner {
     }
 
     pub(super) fn stop_record(&mut self, id: &str, run: &str) -> Result<()> {
-        let terminal =
-            self.record_change(|edit, scope| Ok((edit.run(scope, run)?.status.terminal(), None)))?;
+        let terminal = self.record_change(|edit, scope| {
+            let execution = edit.current_execution(scope, run)?;
+            Ok((edit.run(&execution, run)?.status.terminal(), None))
+        })?;
         if terminal {
             return self.reply_stop(id, "already_terminal", run);
         }
         let pending = self.detach_inputs(run);
         let saved = self.record_change(|edit, scope| {
-            edit.prevent_browser(scope, run, "user stopped before dispatch")?;
-            let mut record = edit.run(scope, run)?;
+            let execution = edit.current_execution(scope, run)?;
+            edit.prevent_browser(&execution, run, "user stopped before dispatch")?;
+            let mut record = edit.run(&execution, run)?;
             record.status = Status::StopRequested;
-            edit.put_run(scope, record)?;
+            edit.put_run(&execution, record)?;
             Ok(((), Some(edit.project(scope, Some(run))?)))
         });
         if let Some(operation) = &self.operation

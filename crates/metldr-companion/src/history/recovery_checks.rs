@@ -210,11 +210,17 @@ fn interrupted_pending_or_bound_head(
     let mut history = History::import_new(&path, &serde_json::to_vec(&state)?, disk.lease())?;
     let scope = history.selection()?;
     let id = "0123456789abcdef0123456789abcdef:09";
-    let before_run = history.edit(|edit| edit.run(&scope, id))?;
+    let before_run = history.edit(|edit| {
+        edit.current_execution(&scope, id)
+            .and_then(|execution| edit.run(&execution, id))
+    })?;
     let before_records = run_launch_records(&history, id)?;
     history.edit(|edit| edit.recover(&scope))?;
     assert_eq!(
-        serde_json::to_value(history.edit(|edit| edit.run(&scope, id))?)?,
+        serde_json::to_value(history.edit(|edit| {
+            edit.current_execution(&scope, id)
+                .and_then(|execution| edit.run(&execution, id))
+        })?)?,
         serde_json::to_value(before_run)?
     );
     assert_eq!(run_launch_records(&history, id)?, before_records);
@@ -264,17 +270,24 @@ fn snapshot(history: &mut History, scope: &Selection) -> Result<serde_json::Valu
     history.edit(|edit| {
         let runs = [9, 10, 11, 12, 13]
             .into_iter()
-            .map(|n| edit.run(scope, &run_id(&scope.store, n)))
+            .map(|n| {
+                let id = run_id(&scope.store, n);
+                edit.execution(&id)
+                    .and_then(|execution| edit.run(&execution, &id))
+            })
             .collect::<Result<Vec<_>>>()?;
         let workflows = ["030", "031", "032"]
             .into_iter()
             .map(|id| edit.native_workflow(scope, &format!("{}:{id}", scope.store)))
             .collect::<Result<Vec<_>>>()?;
+        let action = format!("{}:051", scope.store);
+        let execution = edit.action_execution(&action)?;
+        let dispatch = edit.browser_action(&execution, &action)?;
         Ok(serde_json::json!({
             "profile": saved_profile,
             "runs": runs,
             "workflows": workflows,
-            "dispatch": edit.browser_action(scope, &format!("{}:051", scope.store))?,
+            "dispatch": dispatch,
             "counts": saved_counts,
             "exact_records": exact_records,
         }))
@@ -338,7 +351,11 @@ fn saved_recovery_is_atomic_idempotent_and_preserves_workflow_heads() -> Result<
         )
     );
     for number in 9..=13 {
-        let actual = history.edit(|edit| edit.run(&scope, &run_id(&scope.store, number)))?;
+        let actual = history.edit(|edit| {
+            let id = run_id(&scope.store, number);
+            let execution = edit.execution(&id)?;
+            edit.run(&execution, &id)
+        })?;
         assert_eq!(actual.status, Status::Interrupted);
         assert_eq!(
             serde_json::to_value(actual)?,
@@ -355,9 +372,11 @@ fn saved_recovery_is_atomic_idempotent_and_preserves_workflow_heads() -> Result<
     }
     for number in 1..=8 {
         assert_eq!(
-            serde_json::to_value(
-                history.edit(|edit| edit.run(&scope, &run_id(&scope.store, number)))?
-            )?,
+            serde_json::to_value(history.edit(|edit| {
+                let id = run_id(&scope.store, number);
+                let execution = edit.execution(&id)?;
+                edit.run(&execution, &id)
+            })?)?,
             serde_json::to_value(
                 oracle
                     .view
@@ -371,12 +390,19 @@ fn saved_recovery_is_atomic_idempotent_and_preserves_workflow_heads() -> Result<
     }
     assert_eq!(
         history
-            .edit(|edit| edit.run(&scope, &run_id(&scope.store, 2)))?
+            .edit(|edit| {
+                let id = run_id(&scope.store, 2);
+                let execution = edit.execution(&id)?;
+                edit.run(&execution, &id)
+            })?
             .source,
         "0123456789abcdef0123456789abcdef:017"
     );
-    let dispatch =
-        history.edit(|edit| edit.browser_action(&scope, &format!("{}:051", scope.store)))?;
+    let dispatch = history.edit(|edit| {
+        let id = format!("{}:051", scope.store);
+        let execution = edit.action_execution(&id)?;
+        edit.browser_action(&execution, &id)
+    })?;
     assert!(matches!(
         dispatch.state,
         crate::browser_action::Phase::Settled {
@@ -391,7 +417,11 @@ fn saved_recovery_is_atomic_idempotent_and_preserves_workflow_heads() -> Result<
     drop(history);
     let mut history = History::open(&path, disk.lease())?;
     assert_eq!(profile(&history)?.sequence, after_first.sequence);
-    let recovered = history.edit(|edit| Ok(edit.run(&scope, &run_id(&scope.store, 9))?))?;
+    let recovered = history.edit(|edit| {
+        let id = run_id(&scope.store, 9);
+        let execution = edit.execution(&id)?;
+        edit.run(&execution, &id)
+    })?;
     assert_eq!(recovered.status, Status::Interrupted);
     assert!(matches!(
         history.edit(|edit| edit.native_workflow(&scope, &format!("{}:031", scope.store)))?,
@@ -432,8 +462,11 @@ fn saved_recovery_is_atomic_idempotent_and_preserves_workflow_heads() -> Result<
         History::import_new(&pre_path, &serde_json::to_vec(&predispatch)?, disk.lease())?;
     let pre_scope = pre_history.selection()?;
     pre_history.edit(|edit| edit.recover(&pre_scope))?;
-    let prevented = pre_history
-        .edit(|edit| edit.browser_action(&pre_scope, "0123456789abcdef0123456789abcdef:051"))?;
+    let prevented = pre_history.edit(|edit| {
+        let id = "0123456789abcdef0123456789abcdef:051";
+        let execution = edit.action_execution(id)?;
+        edit.browser_action(&execution, id)
+    })?;
     assert!(matches!(
         prevented.state,
         crate::browser_action::Phase::Settled {
@@ -494,7 +527,9 @@ fn saved_recovery_is_atomic_idempotent_and_preserves_workflow_heads() -> Result<
     head_history.edit(|edit| edit.recover(&head_scope))?;
     assert_eq!(
         head_history
-            .edit(|edit| edit.run(&head_scope, latest))?
+            .edit(|edit| edit
+                .current_execution(&head_scope, latest)
+                .and_then(|execution| edit.run(&execution, latest)))?
             .status,
         Status::Complete
     );

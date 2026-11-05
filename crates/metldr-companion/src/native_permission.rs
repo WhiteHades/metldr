@@ -81,7 +81,7 @@ impl Owner {
             );
         }
 
-        let mut next = self.state.clone();
+        let mut next = self.native_input_state(run)?;
         let request = match next.id() {
             Ok(request) => request,
             Err(error) => return self.reject_native_permission(run, &error.to_string(), ack),
@@ -182,14 +182,15 @@ impl Owner {
         } else {
             None
         };
+        let next = self.native_input_state(run)?;
         let pending = self
             .native_permissions
             .remove(&request)
             .ok_or("resolved native permission disappeared")?;
         let result = if let Some(kind) = kind {
-            self.commit_native_input(run, kind, self.state.clone())
+            self.commit_native_input(run, kind, next)
         } else {
-            self.commit(self.state.clone())
+            self.commit(next)
         };
         if let Err(error) = result {
             if self.record_history.is_some() && crate::native_input_records::fatal(error.as_ref()) {
@@ -238,14 +239,15 @@ impl Owner {
                 return Err("native permission choice was not offered".into());
             }
         }
+        let next = self.native_input_state(run)?;
         let pending = self
             .native_permissions
             .remove(&index)
             .ok_or("stale native permission request")?;
         let result = if self.record_history.is_some() {
-            self.commit_native_input(run, kind, self.state.clone())
+            self.commit_native_input(run, kind, next)
         } else {
-            self.commit(self.state.clone())
+            self.commit(next)
         };
         if let Err(error) = result {
             if self.record_history.is_none() || !crate::native_input_records::fatal(error.as_ref())
@@ -287,7 +289,16 @@ impl Owner {
         ack: mpsc::SyncSender<Option<String>>,
     ) -> Result<()> {
         if self.record_history.is_some() {
-            let kind = match self.state.launches.get(run) {
+            if self
+                .operation
+                .as_ref()
+                .is_none_or(|operation| operation.run != run)
+            {
+                let _ = ack.try_send(None);
+                return Ok(());
+            }
+            let state = self.native_input_state(run)?;
+            let kind = match state.launches.get(run) {
                 Some(crate::agent_model::Launch::Pi { .. }) => crate::agent_settings::Kind::Pi,
                 Some(crate::agent_model::Launch::Codex { .. }) => {
                     crate::agent_settings::Kind::Codex

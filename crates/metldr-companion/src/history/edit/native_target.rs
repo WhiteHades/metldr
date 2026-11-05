@@ -1,13 +1,13 @@
-use super::{Edit, Selection, record, storage};
+use super::{Edit, Execution, Selection, record, storage};
 use crate::{
     Result, agent_model::Launch, browser_action::Target, history::schema::*, model::Source,
 };
 use redb::ReadableTable;
 
 impl Edit<'_> {
-    pub(crate) fn native_initial_target(&self, expected: &Selection, run: &str) -> Result<Target> {
+    pub(crate) fn native_initial_target(&self, expected: &Execution, run: &str) -> Result<Target> {
         let result = (|| {
-            self.require_selection(expected)?;
+            self.require_execution(expected, run)?;
             if self.run(expected, run)?.kind != "agent" {
                 return Err("browser target requires a native agent run".into());
             }
@@ -31,7 +31,11 @@ impl Edit<'_> {
                 };
                 let initial = match prior {
                     Some((number, prior)) => {
-                        let (previous, _) = self.native_target_record(expected, &prior)?;
+                        let prior_execution = self.execution(&prior)?;
+                        if prior_execution.conversation != expected.conversation {
+                            return Err("preceding native workflow ownership differs".into());
+                        }
+                        let (previous, _) = self.native_target_record(&prior_execution, &prior)?;
                         if previous.value.workflow != saved.value.workflow
                             || prior.rsplit(':').next().unwrap().parse::<u64>()? != number
                         {
@@ -88,8 +92,9 @@ impl Edit<'_> {
                 if id.rsplit(':').next().unwrap().parse::<u64>()? != number {
                     return Err("latest native run order differs".into());
                 }
-                self.native_initial_target(expected, &id)?;
-                let (saved, _) = self.native_target_record(expected, &id)?;
+                let execution = self.current_execution(expected, &id)?;
+                self.native_initial_target(&execution, &id)?;
+                let (saved, _) = self.native_target_record(&execution, &id)?;
                 if saved.value.workflow != workflow {
                     return Err("native workflow index differs".into());
                 }
@@ -101,7 +106,7 @@ impl Edit<'_> {
 
     fn native_target_record(
         &self,
-        expected: &Selection,
+        expected: &Execution,
         id: &str,
     ) -> Result<(Record<NativeTarget>, Source)> {
         let run = self.saved_run(id)?.ok_or("native target run is absent")?;

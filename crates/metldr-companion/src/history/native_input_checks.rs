@@ -84,7 +84,10 @@ fn make_owner_with_binding(
     let path = directory.0.join("history.redb");
     let mut history = History::import_new(&path, &serde_json::to_vec(&original)?, disk.lease())?;
     let scope = history.selection()?;
-    let seeded = history.edit(|edit| edit.native_task(&scope, &run))?;
+    let seeded = history.edit(|edit| {
+        edit.current_execution(&scope, &run)
+            .and_then(|execution| edit.native_task(&execution, &run))
+    })?;
     assert_eq!(seeded.run.status, Status::Running);
     assert_eq!(seeded.workflow.source().id, seeded.run.source);
     let state = history.edit(|edit| edit.project(&scope, Some(&run)))?;
@@ -154,11 +157,10 @@ fn native_corrections_fence_duplicates_stop_and_uncertain_session_reuse() -> Res
         owner.correct_native("correction-1", &scope, &run, "Keep the exact correction.")?;
         assert_eq!(sequence(&owner)?, admitted);
         assert!(receiver.take()?.is_none());
-        let admitted_task = owner
-            .record_history
-            .as_mut()
-            .unwrap()
-            .edit(|edit| edit.native_task(&scope, &run))?;
+        let admitted_task = owner.record_history.as_mut().unwrap().edit(|edit| {
+            edit.current_execution(&scope, &run)
+                .and_then(|execution| edit.native_task(&execution, &run))
+        })?;
         let super::NativeWorkflow::Pi(workflow) = admitted_task.workflow else {
             panic!("Pi fixture")
         };
@@ -194,11 +196,10 @@ fn native_corrections_fence_duplicates_stop_and_uncertain_session_reuse() -> Res
             assert!(!reply.recv()?);
             owner.agent_settled(&run, crate::agent::Outcome::Cancelled, false, true)?;
         }
-        let saved = owner
-            .record_history
-            .as_mut()
-            .unwrap()
-            .edit(|edit| edit.native_task(&scope, &run))?;
+        let saved = owner.record_history.as_mut().unwrap().edit(|edit| {
+            edit.current_execution(&scope, &run)
+                .and_then(|execution| edit.native_task(&execution, &run))
+        })?;
         assert_eq!(saved.run.corrections.len(), 1);
         assert_eq!(saved.run.corrections[0].text, "Keep the exact correction.");
         assert!(matches!(
@@ -359,11 +360,10 @@ fn native_input_records_reserve_publish_cancel_and_keep_payloads_volatile() -> R
     );
     assert_eq!(sequence(&owner)?, first_sequence + 34);
     let scope = owner.record_history.as_ref().unwrap().selection()?;
-    let saved = owner
-        .record_history
-        .as_mut()
-        .unwrap()
-        .edit(|edit| edit.native_task(&scope, &run))?;
+    let saved = owner.record_history.as_mut().unwrap().edit(|edit| {
+        edit.current_execution(&scope, &run)
+            .and_then(|execution| edit.native_task(&execution, &run))
+    })?;
     assert!(serde_json::to_string(&saved.run)?.find("yes").is_none());
     assert!(!frames.lock().unwrap().is_empty());
     owner.pi_ui_change(
@@ -391,11 +391,10 @@ fn native_input_records_reserve_publish_cancel_and_keep_payloads_volatile() -> R
             .stop
             .load(std::sync::atomic::Ordering::Acquire)
     );
-    let stopped = owner
-        .record_history
-        .as_mut()
-        .unwrap()
-        .edit(|edit| edit.native_task(&scope, &run))?;
+    let stopped = owner.record_history.as_mut().unwrap().edit(|edit| {
+        edit.current_execution(&scope, &run)
+            .and_then(|execution| edit.native_task(&execution, &run))
+    })?;
     assert_eq!(stopped.run.status, Status::StopRequested);
     let before_display = sequence(&owner)?;
     owner.pi_ui_change(
@@ -412,9 +411,12 @@ fn native_input_records_reserve_publish_cancel_and_keep_payloads_volatile() -> R
     let (_directory, mut stale, _, run) = make_owner("pi")?;
     let scope = stale.record_history.as_ref().unwrap().selection()?;
     stale.record_history.as_mut().unwrap().edit(|edit| {
-        let mut task = edit.native_task(&scope, &run)?;
+        let mut task = edit
+            .current_execution(&scope, &run)
+            .and_then(|execution| edit.native_task(&execution, &run))?;
         task.run.status = Status::StopRequested;
-        edit.put_native(&scope, task)
+        edit.current_execution(&scope, &task.run.id)
+            .and_then(|execution| edit.put_native(&execution, task))
     })?;
     let stopped_sequence = sequence(&stale)?;
     stale.pi_ui_change(
@@ -467,7 +469,9 @@ fn native_input_records_reserve_publish_cancel_and_keep_payloads_volatile() -> R
     let scope = reopened.selection()?;
     assert_eq!(
         reopened
-            .edit(|edit| edit.native_task(&scope, &run))?
+            .edit(|edit| edit
+                .current_execution(&scope, &run)
+                .and_then(|execution| edit.native_task(&execution, &run)))?
             .run
             .status,
         Status::Running
@@ -620,11 +624,204 @@ fn native_input_records_reserve_publish_cancel_and_keep_payloads_volatile() -> R
             .record_history
             .as_mut()
             .unwrap()
-            .edit(|edit| edit.native_task(&scope, &run))?
+            .edit(|edit| edit
+                .current_execution(&scope, &run)
+                .and_then(|execution| edit.native_task(&execution, &run)))?
             .run
             .status,
         Status::StopRequested
     );
     stop_owner(&mut duplicate);
+    Ok(())
+}
+
+fn select_other_fixture(history: &mut History) -> Result<super::Selection> {
+    // Seed a different selected conversation without relaxing production admission.
+    let write = history.db.begin_write()?;
+    let mut profile: Profile = {
+        let metadata = write.open_table(META)?;
+        decode(metadata.get("profile")?.unwrap().value())?
+    };
+    let number = profile.next;
+    let other = format!("{}:{number}", profile.store);
+    profile.next += 1;
+    profile.sequence += 1;
+    profile.epoch += 1;
+    profile.selected = other.clone();
+    write.open_table(CONVERSATIONS)?.insert(
+        other.as_str(),
+        encode(&Conversation {
+            id: other.clone(),
+            title: "Other conversation".into(),
+            source: None,
+        })?
+        .as_slice(),
+    )?;
+    write
+        .open_table(CONVERSATION_ORDER)?
+        .insert(number, other.as_str())?;
+    write
+        .open_table(META)?
+        .insert("profile", encode(&profile)?.as_slice())?;
+    write.commit()?;
+    history.selection()
+}
+
+#[test]
+fn offscreen_native_input_keeps_selected_state_and_recovers_its_owner() -> Result<()> {
+    let (directory, mut owner, frames, run) = make_owner("codex")?;
+    let history = owner.record_history.as_mut().unwrap();
+    let original = history.selection()?;
+    let execution = history.edit(|edit| edit.current_execution(&original, &run))?;
+    assert!(
+        history
+            .edit(|edit| {
+                edit.change_conversation(&original, "still-busy", super::ConversationChange::Create)
+            })
+            .is_err()
+    );
+
+    let selected = select_other_fixture(history)?;
+    owner.state = history.edit(|edit| edit.project_latest(&selected))?;
+    assert!(
+        history
+            .edit(|edit| edit.current_execution(&selected, &run))
+            .is_err()
+    );
+    assert!(
+        history
+            .edit(|edit| edit.run(&execution, &format!("{}:01", execution.store())))
+            .is_err()
+    );
+    assert_eq!(
+        history
+            .edit(|edit| edit.native_task(&execution, &run))?
+            .run
+            .id,
+        run
+    );
+    let visible = serde_json::to_vec(&owner.state)?;
+    let actions = serde_json::to_vec(&owner.browser_view)?;
+    let counter = owner.state.next;
+    let mut replies = Vec::new();
+    for key in 1..=2 {
+        let (ack, reply) = mpsc::sync_channel(1);
+        owner.native_permission(
+            &run,
+            key,
+            serde_json::json!({
+                "agent":"codex", "tool":"fixture", "title":"Owned permission",
+                "input":"fixture", "options":[{"id":"allow","name":"Allow"}]
+            }),
+            ack,
+        )?;
+        replies.push(reply);
+    }
+    assert_eq!(owner.native_permissions.len(), 2);
+    assert_eq!(owner.native_input_state(&run)?.next, counter + 2);
+    assert_eq!(serde_json::to_vec(&owner.state)?, visible);
+    assert_eq!(serde_json::to_vec(&owner.browser_view)?, actions);
+    assert!(frames.lock().unwrap().is_empty());
+    owner.command("view-other", Command::View)?;
+    let mut cursor = std::io::Cursor::new(frames.lock().unwrap().clone());
+    let reply: serde_json::Value = serde_json::from_slice(
+        &crate::wire::read_raw(&mut cursor, crate::FRAME_MAX)?.ok_or("missing view frame")?,
+    )?;
+    assert_eq!(reply["view"]["native_permissions"], serde_json::json!([]));
+    assert_eq!(
+        reply["view"]["selection"]["conversation"],
+        selected.conversation
+    );
+    let request = owner.native_permissions.keys().next().unwrap().clone();
+    assert!(
+        owner
+            .command(
+                "wrong-conversation",
+                Command::Conversation {
+                    scope: crate::history_io::Scope::from(&selected),
+                    action: crate::model::ConversationAction::NativePermission {
+                        run: run.clone(),
+                        request,
+                        option: Some("allow".into()),
+                    },
+                }
+            )
+            .is_err()
+    );
+    assert!(
+        replies
+            .iter()
+            .all(|reply| matches!(reply.try_recv(), Err(mpsc::TryRecvError::Empty)))
+    );
+    let history = owner.record_history.as_mut().unwrap();
+    let write = history.db.begin_write()?;
+    let conversation = write
+        .open_table(CONVERSATIONS)?
+        .remove(execution.conversation())?
+        .ok_or("missing fixture conversation")?
+        .value()
+        .to_vec();
+    write.commit()?;
+    assert!(
+        history
+            .edit(|edit| edit.refresh_execution(&execution))
+            .is_err()
+    );
+    let write = history.db.begin_write()?;
+    write
+        .open_table(CONVERSATIONS)?
+        .insert(execution.conversation(), conversation.as_slice())?;
+    write.commit()?;
+    stop_owner(&mut owner);
+    drop(owner.record_history.take());
+    let mut history = History::open(&directory.0.join("history.redb"), owner.disk.lease())?;
+    history.edit(|edit| edit.recover(&selected))?;
+    let task = history.edit(|edit| edit.native_task(&execution, &run))?;
+    assert_eq!(task.run.status, Status::Interrupted);
+    let super::NativeWorkflow::Codex(workflow) = task.workflow else {
+        return Err("native recovery changed workflow kind".into());
+    };
+    assert!(matches!(
+        workflow.binding,
+        crate::codex_model::Binding::ReleaseUnknown { .. }
+    ));
+    assert_eq!(history.selection()?, selected);
+    let view = history.edit(|edit| edit.project_latest(&selected))?;
+    assert!(view.view.runs.is_empty() && view.view.source.is_none());
+    assert!(view.view.sequence > owner.state.view.sequence);
+    Ok(())
+}
+
+#[test]
+fn offscreen_pi_disconnect_stops_and_cancels_its_own_input() -> Result<()> {
+    let (_directory, mut owner, frames, run) = make_owner("pi")?;
+    let history = owner.record_history.as_mut().unwrap();
+    let execution = history.edit(|edit| edit.execution(&run))?;
+    let selected = select_other_fixture(history)?;
+    owner.state = history.edit(|edit| edit.project_latest(&selected))?;
+    let visible = serde_json::to_vec(&owner.state)?;
+    let pending = pi_offer(&mut owner, &run, 7)?;
+    owner.disconnect_pi_ui()?;
+    assert!(
+        owner
+            .operation
+            .as_ref()
+            .unwrap()
+            .stop
+            .load(std::sync::atomic::Ordering::Acquire)
+    );
+    let task = owner
+        .record_history
+        .as_mut()
+        .unwrap()
+        .edit(|edit| edit.native_task(&execution, &run))?;
+    assert_eq!(task.run.status, Status::StopRequested);
+    assert!(matches!(
+        pending.try_recv(),
+        Err(mpsc::TryRecvError::Disconnected)
+    ));
+    assert_eq!(serde_json::to_vec(&owner.state)?, visible);
+    assert!(frames.lock().unwrap().is_empty());
+    stop_owner(&mut owner);
     Ok(())
 }

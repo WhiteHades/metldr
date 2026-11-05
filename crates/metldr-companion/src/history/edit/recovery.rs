@@ -17,14 +17,15 @@ impl Edit<'_> {
                         .map(|(id, _)| id.value().to_owned()))
                 })?;
                 let Some(id) = next else { break };
-                let mut run = self.run(scope, &id)?;
-                if let Some(action) = self.browser_open(scope, &id)?
+                let execution = self.execution(&id)?;
+                let mut run = self.run(&execution, &id)?;
+                if let Some(action) = self.browser_open(&execution, &id)?
                     && let Some(next) = action.finish(
                         "native host restarted before dispatch",
                         "native host restarted after dispatch",
                     )?
                 {
-                    self.put_browser(scope, next)?;
+                    self.put_browser(&execution, next)?;
                 }
                 let launch: Record<Launch> = storage(|| {
                     record(self.write, LAUNCHES, &id)?.ok_or("recovery launch is absent".into())
@@ -33,7 +34,7 @@ impl Edit<'_> {
                     launch.value,
                     Launch::Pi { .. } | Launch::Codex { .. } | Launch::OpenCode { .. }
                 ) {
-                    let mut task = self.native_task(scope, &id)?;
+                    let mut task = self.native_task(&execution, &id)?;
                     crate::native_correction::finish(
                         &mut task.run,
                         "The host restarted before the correction was sent.",
@@ -43,11 +44,11 @@ impl Edit<'_> {
                     task.run.error =
                         Some("native host restarted; native session ownership is unknown".into());
                     block(&mut task.workflow);
-                    self.put_native(scope, task)?;
+                    self.put_native(&execution, task)?;
                 } else {
                     run.status = Status::Interrupted;
                     run.error = Some("native host restarted".into());
-                    self.put_run(scope, run)?;
+                    self.put_run(&execution, run)?;
                 }
             }
             storage(|| {
@@ -82,12 +83,29 @@ impl Edit<'_> {
                         self.saved_conversation(&saved.conversation)?;
                         Ok(saved.conversation)
                     })?;
-                    if owner != scope.conversation {
-                        cursor = Some(id);
-                        continue;
+                    let latest = storage(|| {
+                        let index = self.write.open_table(WORKFLOW_RUNS)?;
+                        let (number, latest) = index
+                            .range((id.as_str(), 0)..=(id.as_str(), u64::MAX))?
+                            .next_back()
+                            .transpose()?
+                            .map(|(key, run)| (key.value().1, run.value().to_owned()))
+                            .ok_or("recovery workflow order is absent")?;
+                        if latest
+                            .rsplit(':')
+                            .next()
+                            .and_then(|id| id.parse::<u64>().ok())
+                            != Some(number)
+                        {
+                            return Err("recovery workflow order differs".into());
+                        }
+                        Ok(latest)
+                    })?;
+                    let execution = self.execution(&latest)?;
+                    if execution.conversation != owner {
+                        return Err("recovery workflow owner and head differ".into());
                     }
-                    let (latest, _) = self.native_latest(scope, &id)?;
-                    let mut task = self.native_task(scope, &latest)?;
+                    let mut task = self.native_task(&execution, &latest)?;
                     storage(|| {
                         if workflow_id(&task.launch)? != id
                             || task.workflow.last_run() != latest
@@ -106,7 +124,7 @@ impl Edit<'_> {
                         && (task.workflow.pending() || task.workflow.bound())
                     {
                         block(&mut task.workflow);
-                        self.put_native(scope, task)?;
+                        self.put_native(&execution, task)?;
                     }
                     cursor = Some(id);
                 }

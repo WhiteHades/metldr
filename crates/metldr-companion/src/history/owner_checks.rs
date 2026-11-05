@@ -565,7 +565,9 @@ fn actual_owner_commit_failure_and_restart_before_dispatch() -> Result<()> {
             crate::recovery::interrupt(&mut recovered)?;
             assert_eq!(recovered.view.runs[0].status, Status::Interrupted);
             owner.persist_records(|edit, selection| {
-                edit.put_run(selection, recovered.view.runs[0].clone())?;
+                let record = recovered.view.runs[0].clone();
+                let execution = edit.current_execution(selection, &record.id)?;
+                edit.put_run(&execution, record)?;
                 Ok(((), Some(edit.project(selection, Some(&run))?)))
             })?;
             assert_eq!(saved(&owner, &run)?.value.status, Status::Interrupted);

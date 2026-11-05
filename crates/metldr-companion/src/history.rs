@@ -11,8 +11,8 @@ mod context;
 pub(crate) use artifacts::Artifact;
 mod edit;
 pub(crate) use edit::{
-    ConversationBusy, ConversationChange, Cursor, Edit, NativeChoices, NativeWorkflow, Observed,
-    Selection,
+    ConversationBusy, ConversationChange, Cursor, Edit, Execution, NativeChoices, NativeWorkflow,
+    Observed, Selection,
 };
 mod import;
 #[cfg(target_os = "linux")]

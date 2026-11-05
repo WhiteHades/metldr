@@ -218,7 +218,8 @@ impl Owner {
                 let (value, record, launch) =
                     records(value, &workflow, &run, input.text, input_digest)?;
                 edit.admit_native(scope, request, record, launch, value.clone())?;
-                let target = edit.native_initial_target(scope, &run)?;
+                let execution = edit.current_execution(scope, &run)?;
+                let target = edit.native_initial_target(&execution, &run)?;
                 let projection = edit.project(scope, Some(&run))?;
                 Ok((
                     Some(Admission {

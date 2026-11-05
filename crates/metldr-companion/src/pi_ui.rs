@@ -103,20 +103,18 @@ impl Owner {
     pub(super) fn pi_ui_change(&mut self, run: &str, change: Change) -> Result<()> {
         if self.record_history.is_some() {
             let status = self.native_input_status(run, crate::agent_settings::Kind::Pi)?;
-            if status.is_none_or(|status| {
-                !self
-                    .state
-                    .view
-                    .runs
-                    .iter()
-                    .any(|record| record.id == run && record.status == status)
-            }) {
+            if status.is_none()
+                || (status == Some(Status::StopRequested)
+                    && self.operation.as_ref().is_none_or(|operation| {
+                        !operation.stop.load(std::sync::atomic::Ordering::Acquire)
+                    }))
+            {
                 return Ok(());
             }
         }
+        let mut next = self.native_input_state(run)?;
         let active = self.operation.as_ref().is_some_and(|op| op.run == run)
-            && self
-                .state
+            && next
                 .launches
                 .get(run)
                 .is_some_and(|launch| matches!(launch, crate::agent_model::Launch::Pi { .. }));
@@ -128,7 +126,6 @@ impl Owner {
             if self.pi_ui.as_ref().is_none_or(|ui| ui.run != run) {
                 self.pi_ui = Some(State::new(run));
             }
-            let mut next = self.state.clone();
             match change {
                 Change::Offer {
                     key,
@@ -223,6 +220,7 @@ impl Owner {
         {
             return Err("Pi UI reply is too long".into());
         }
+        let next = self.native_input_state(run)?;
         let pending = self
             .pi_ui
             .as_mut()
@@ -230,9 +228,7 @@ impl Owner {
             .pending
             .remove(request)
             .ok_or("stale Pi UI request")?;
-        if let Err(error) =
-            self.commit_native_input(run, crate::agent_settings::Kind::Pi, self.state.clone())
-        {
+        if let Err(error) = self.commit_native_input(run, crate::agent_settings::Kind::Pi, next) {
             if !crate::native_input_records::fatal(error.as_ref()) {
                 self.pi_ui
                     .as_mut()
@@ -259,6 +255,24 @@ impl Owner {
     }
 
     pub(super) fn disconnect_pi_ui(&mut self) -> Result<()> {
+        if self.record_history.is_some() {
+            let Some(run) = self
+                .operation
+                .as_ref()
+                .map(|operation| operation.run.clone())
+            else {
+                return Ok(());
+            };
+            let state = self.native_input_state(&run)?;
+            return if matches!(
+                state.launches.get(&run),
+                Some(crate::agent_model::Launch::Pi { .. })
+            ) {
+                self.stop_native_record_inputs(&run, "Pi controller disconnected", None, false)
+            } else {
+                Ok(())
+            };
+        }
         let Some(op) = self.operation.as_ref().filter(|op| {
             matches!(
                 self.state.launches.get(&op.run),
@@ -268,9 +282,6 @@ impl Owner {
             return Ok(());
         };
         let run = op.run.clone();
-        if self.record_history.is_some() {
-            return self.stop_native_record_inputs(&run, "Pi controller disconnected", None, false);
-        }
         // Stop must be visible to the worker before its reply channels disappear.
         op.stop.store(true, std::sync::atomic::Ordering::Release);
         let mut next = self.state.clone();

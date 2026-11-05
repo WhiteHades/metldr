@@ -21,6 +21,16 @@ fn matches_kind(launch: &Launch, kind: Kind) -> bool {
 }
 
 impl Owner {
+    pub(super) fn native_input_state(&mut self, run: &str) -> Result<Store> {
+        if let Some(history) = &mut self.record_history {
+            return history.edit(|edit| {
+                let execution = edit.execution(run)?;
+                edit.project_execution(&execution)
+            });
+        }
+        Ok(self.state.clone())
+    }
+
     pub(super) fn native_input_active(&mut self, run: &str, kind: Kind) -> Result<bool> {
         if self
             .operation
@@ -37,29 +47,15 @@ impl Owner {
             if self.operation.as_ref().is_none_or(|op| op.run != run) {
                 return Ok(None);
             }
-            let missing = !self.state.view.runs.iter().any(|saved| saved.id == run);
             if let Some(history) = &mut self.record_history {
-                let scope = history.selection()?;
-                let (status, projection) = history.edit(|edit| {
-                    let task = edit.native_task(&scope, run)?;
-                    let status = (!task.run.status.terminal() && matches_kind(&task.launch, kind))
-                        .then_some(task.run.status);
-                    let projection = if missing && status.is_some() {
-                        let state = edit.project(&scope, Some(run))?;
-                        let runs: Vec<_> =
-                            state.view.runs.iter().map(|run| run.id.as_str()).collect();
-                        let actions = edit.browser_view(&scope, &runs)?;
-                        Some((state, actions))
-                    } else {
-                        None
-                    };
-                    Ok((status, projection))
-                })?;
-                if let Some((state, actions)) = projection {
-                    self.state = state;
-                    self.browser_view = actions;
-                }
-                return Ok(status);
+                return history.edit(|edit| {
+                    let execution = edit.execution(run)?;
+                    let task = edit.native_task(&execution, run)?;
+                    Ok(
+                        (!task.run.status.terminal() && matches_kind(&task.launch, kind))
+                            .then_some(task.run.status),
+                    )
+                });
             }
             Ok(self
                 .state
@@ -86,26 +82,28 @@ impl Owner {
             if self.record_history.is_none() {
                 return self.commit(next);
             }
-            let reservation = if next.next == self.state.next {
-                None
-            } else if self.state.next.checked_add(1) == Some(next.next) {
-                Some(format!("{}:{}", self.state.view.store, self.state.next))
-            } else {
-                return Err("native input changed the identity counter unexpectedly".into());
-            };
-            if next.view.store != self.state.view.store {
-                return Err("native input changed store identity".into());
-            }
             let status = next
                 .view
                 .runs
                 .iter()
                 .find(|r| r.id == run)
-                .map(|run| run.status);
-            self.record_change(|edit, scope| {
+                .map(|run| run.status)
+                .ok_or("native input has no matching run")?;
+            self.record_execution(run, |edit, scope| {
+                let counter = edit.next_counter();
+                let reservation = if next.next == counter {
+                    None
+                } else if counter.checked_add(1) == Some(next.next) {
+                    Some(format!("{}:{counter}", scope.store()))
+                } else {
+                    return Err("native input changed the identity counter unexpectedly".into());
+                };
+                if next.view.store != scope.store() {
+                    return Err("native input changed store identity".into());
+                }
                 let task = edit.native_task(scope, run)?;
                 if task.run.status.terminal()
-                    || status.is_some_and(|status| task.run.status != status)
+                    || task.run.status != status
                     || !matches_kind(&task.launch, kind)
                     || (reservation.is_some() && task.run.status != Status::Running)
                 {
@@ -116,7 +114,7 @@ impl Owner {
                 {
                     return Err("native input identity reservation is stale".into());
                 }
-                Ok(((), Some(edit.refresh_view(scope, Some(run))?)))
+                edit.refresh_execution(scope)
             })
         })();
         if result.as_ref().is_err_and(|error| fatal(error.as_ref())) {
@@ -137,7 +135,7 @@ impl Owner {
         };
         op.stop.store(true, Ordering::Release);
         let pending = self.detach_inputs(run);
-        let saved = self.persist_records(|edit, scope| {
+        let saved = self.persist_execution(run, |edit, scope| {
             edit.prevent_browser(scope, run, reason)?;
             let mut task = edit.native_task(scope, run)?;
             if !task.run.status.terminal() {
@@ -147,7 +145,7 @@ impl Owner {
                 }
                 edit.put_native(scope, task)?;
             }
-            Ok(((), Some(edit.refresh_view(scope, Some(run))?)))
+            edit.refresh_execution(scope)
         });
         let (_, changed) = match saved {
             Ok(saved) => saved,

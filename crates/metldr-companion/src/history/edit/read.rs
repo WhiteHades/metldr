@@ -218,8 +218,9 @@ impl Edit<'_> {
 
     pub(crate) fn action_detail(&self, scope: &Selection, id: &str) -> Result<Observed<Action>> {
         self.checked((|| {
-            let value = self.browser_action(scope, id)?;
-            let saved = self.browser_record(scope, id)?;
+            let execution = self.current_action_execution(scope, id)?;
+            let value = self.browser_action(&execution, id)?;
+            let saved = self.browser_record(&execution, id)?;
             Ok(Observed {
                 revision: Counter(saved.revision),
                 value,

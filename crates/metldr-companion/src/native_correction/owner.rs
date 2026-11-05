@@ -32,7 +32,8 @@ impl Owner {
                 if current != scope {
                     return Err("correction selection changed".into());
                 }
-                let mut task = edit.native_task(scope, run)?;
+                let execution = edit.current_execution(scope, run)?;
+                let mut task = edit.native_task(&execution, run)?;
                 if let Some((index, saved)) = task
                     .run
                     .corrections
@@ -67,7 +68,7 @@ impl Owner {
                 }
                 task.run.corrections.push(proposed.clone());
                 let ordinal = task.run.corrections.len();
-                edit.put_native(scope, task)?;
+                edit.put_native(&execution, task)?;
                 Ok((
                     (proposed.clone(), ordinal, true),
                     Some(edit.refresh_view(scope, Some(run))?),
@@ -117,7 +118,7 @@ impl Owner {
             return Ok(());
         }
         slot.ready = Some(target);
-        self.record_change(|edit, scope| Ok(((), Some(edit.refresh_view(scope, Some(run))?))))
+        self.record_execution(run, |edit, execution| edit.refresh_execution(execution))
     }
 
     pub(crate) fn correction_dispatch(
@@ -134,10 +135,10 @@ impl Owner {
             .and_then(|op| op.correction.as_ref())
             .is_some_and(|slot| slot.ready.as_ref() == Some(&target));
         let result = if ready {
-            self.record_change(|edit, scope| {
-                let mut task = edit.native_task(scope, run)?;
+            self.record_execution(run, |edit, execution| {
+                let mut task = edit.native_task(execution, run)?;
                 if task.run.status != Status::Running || !target.matches(&task.launch) {
-                    return Ok((false, None));
+                    return Ok(false);
                 }
                 let receipt = task
                     .run
@@ -145,12 +146,12 @@ impl Owner {
                     .iter_mut()
                     .find(|r| r.request == request)
                     .ok_or("correction dispatch has no admission")?;
-                if receipt.epoch != scope.epoch || receipt.state != Phase::Pending {
-                    return Ok((false, None));
+                if receipt.state != Phase::Pending {
+                    return Ok(false);
                 }
                 receipt.resolve(Phase::Dispatching)?;
-                edit.put_native(scope, task)?;
-                Ok((true, Some(edit.refresh_view(scope, Some(run))?)))
+                edit.put_native(execution, task)?;
+                Ok(true)
             })
         } else {
             Ok(false)
@@ -168,8 +169,8 @@ impl Owner {
         if self.operation.as_ref().is_none_or(|op| op.run != run) || outcome.unresolved() {
             return Err("correction outcome has no matching owned run".into());
         }
-        self.record_change(|edit, scope| {
-            let mut task = edit.native_task(scope, run)?;
+        self.record_execution(run, |edit, execution| {
+            let mut task = edit.native_task(execution, run)?;
             let receipt = task
                 .run
                 .corrections
@@ -177,11 +178,11 @@ impl Owner {
                 .find(|r| r.request == request)
                 .ok_or("correction outcome has no saved admission")?;
             if receipt.state == outcome {
-                return Ok(((), None));
+                return Ok(());
             }
             receipt.resolve(outcome)?;
-            edit.put_native(scope, task)?;
-            Ok(((), Some(edit.refresh_view(scope, Some(run))?)))
+            edit.put_native(execution, task)?;
+            Ok(())
         })
     }
 
@@ -194,7 +195,7 @@ impl Owner {
         if slot.is_none_or(|slot| slot.ready.take().is_none()) {
             return Ok(());
         }
-        self.record_change(|edit, scope| Ok(((), Some(edit.refresh_view(scope, Some(run))?))))
+        self.record_execution(run, |edit, execution| edit.refresh_execution(execution))
     }
 
     pub(crate) fn correction_public(&self, state: &Store) -> Value {

@@ -309,17 +309,12 @@ impl Edit<'_> {
 pub(super) fn update_index(
     write: &WriteTransaction,
     profile: &Profile,
-    scope: &Selection,
+    conversation: &str,
     id: &str,
     workflow: &NativeWorkflow,
 ) -> Result<()> {
     let (kind, fingerprint) = fingerprint(workflow);
-    let new_bucket = bucket(
-        &scope.conversation,
-        &workflow.source().id,
-        kind,
-        fingerprint,
-    )?;
+    let new_bucket = bucket(conversation, &workflow.source().id, kind, fingerprint)?;
     let new_head = number(profile, workflow.last_run())?;
     let reader = Reader::Staged(write);
     let old = reader
@@ -329,7 +324,7 @@ pub(super) fn update_index(
     let mut order = write.open_table(NATIVE_CHOICES)?;
     if let Some(old) = old {
         let (old_kind, old_fingerprint) = self::fingerprint(&old.value);
-        if old.conversation != scope.conversation
+        if old.conversation != conversation
             || old_kind != kind
             || old_fingerprint != fingerprint
             || old.value.source().id != workflow.source().id

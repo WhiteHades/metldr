@@ -1,4 +1,4 @@
-use super::{Edit, NativeTask, Selection, native_task::workflow_id, storage};
+use super::{Edit, Execution, NativeTask, native_task::workflow_id, storage};
 use crate::{
     Result,
     agent_model::{Activity, Launch},
@@ -7,14 +7,14 @@ use crate::{
 };
 
 impl Edit<'_> {
-    pub(crate) fn put_native(&mut self, scope: &Selection, mut task: NativeTask) -> Result<()> {
+    pub(crate) fn put_native(&mut self, execution: &Execution, mut task: NativeTask) -> Result<()> {
         let result = (|| {
-            self.require_selection(scope)?;
-            if task.identity != task.run.id || task.scope != *scope {
-                return Err("native task draft identity or scope changed".into());
+            self.require_execution(execution, &task.run.id)?;
+            if task.execution != *execution {
+                return Err("native task draft execution changed".into());
             }
-            self.require_browser_finalized(scope, &task.run)?;
-            let before = self.native_task(scope, &task.run.id)?;
+            self.require_browser_finalized(execution, &task.run)?;
+            let before = self.native_task(execution, &task.run.id)?;
             crate::native_correction::validate_update(&before.run, &task.run)?;
             crate::native_correction::validate_route(&task.run, &task.launch)?;
             if task.versions != before.versions {
@@ -100,7 +100,7 @@ impl Edit<'_> {
                     super::super::summary::put_run(
                         self.write,
                         &Record {
-                            conversation: scope.conversation.clone(),
+                            conversation: execution.conversation.clone(),
                             revision: before.versions[0]
                                 .checked_add(1)
                                 .ok_or("native run revision exhausted")?,
@@ -112,7 +112,7 @@ impl Edit<'_> {
                     self.write.open_table(LAUNCHES)?.insert(
                         task.run.id.as_str(),
                         encode(&Record {
-                            conversation: scope.conversation.clone(),
+                            conversation: execution.conversation.clone(),
                             revision: before.versions[1]
                                 .checked_add(1)
                                 .ok_or("native launch revision exhausted")?,
@@ -123,7 +123,7 @@ impl Edit<'_> {
                 }
                 if workflow_changed {
                     self.save_native_workflow(
-                        scope,
+                        &execution.conversation,
                         workflow_id(&task.launch)?,
                         &task.workflow,
                         before.versions[2]
@@ -139,7 +139,7 @@ impl Edit<'_> {
                 Ok(())
             })?;
             self.changed = true;
-            self.native_task(scope, &task.run.id)?;
+            self.native_task(execution, &task.run.id)?;
             Ok(())
         })();
         self.checked(result)
