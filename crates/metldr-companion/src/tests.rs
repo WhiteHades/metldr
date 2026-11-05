@@ -148,6 +148,14 @@ mod tests {
             record_history: None,
             history_pins: Default::default(),
         };
+        assert!(owner.settled("stale", Err("stale".into()), false).is_err());
+        assert_eq!(
+            owner
+                .operation
+                .as_ref()
+                .map(|operation| operation.run.as_str()),
+            Some(run.as_str())
+        );
         let Event::Text { run: id, change } = rx.recv().unwrap() else {
             panic!("chunk must precede settlement");
         };

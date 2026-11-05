@@ -723,13 +723,17 @@ impl Owner {
         result: std::result::Result<(), String>,
         disconnected: bool,
     ) -> Result<()> {
+        if self
+            .operation
+            .as_ref()
+            .is_some_and(|operation| operation.run != run)
+        {
+            return Err("settlement run mismatch".into());
+        }
         let operation = self
             .operation
             .take()
             .ok_or("settlement without operation")?;
-        if operation.run != run {
-            return Err("settlement run mismatch".into());
-        }
         self.browser_io_finish(run);
         operation
             .worker
