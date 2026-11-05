@@ -125,21 +125,6 @@ impl History {
         Ok(history)
     }
 
-    pub(super) fn migrate(directory: PathBuf) -> Result<Self> {
-        #[cfg(target_os = "linux")]
-        {
-            migrate::run(directory, |_| Ok(()))
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            let _ = directory;
-            Err(
-                "history migration directory durability has not been verified on this platform"
-                    .into(),
-            )
-        }
-    }
-
     fn file(path: &Path, create: bool, lease: Arc<File>) -> Result<Self> {
         let mut builder = Builder::new();
         builder.set_cache_size(8 * 1024 * 1024);
