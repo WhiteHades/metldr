@@ -130,7 +130,8 @@ impl History {
                 Err("history edit caught a rejected operation".into())
             };
         }
-        if edit.changed {
+        let changed = edit.changed;
+        if changed {
             edit.profile.sequence = edit
                 .profile
                 .sequence
@@ -144,7 +145,14 @@ impl History {
             })?;
         }
         drop(edit);
-        storage(|| Ok(write.commit()?))?;
+        storage(|| {
+            if changed {
+                write.commit()?;
+            } else {
+                write.abort()?;
+            }
+            Ok(())
+        })?;
         Ok(result)
     }
 }

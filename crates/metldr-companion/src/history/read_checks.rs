@@ -99,6 +99,7 @@ fn saved_reads_page_details_and_fail_closed() -> Result<()> {
     let expected_sequence = before.sequence;
     let expected_next = before.next;
     assert!(history.db.begin_read()?.open_table(RUNS)?.len()? > 16);
+    let before_reads = fs::read(directory.0.join("history.redb"))?;
     let retained_bytes = history.edit(|edit| {
         (61..=80).try_fold(0usize, |total, number| {
             Ok(total
@@ -144,6 +145,10 @@ fn saved_reads_page_details_and_fail_closed() -> Result<()> {
     let cursor = first.next.as_ref().unwrap().clone();
     assert_eq!(profile(&history)?.next, expected_next);
     assert_eq!(profile(&history)?.sequence, expected_sequence);
+    assert!(
+        fs::read(directory.0.join("history.redb"))? == before_reads,
+        "history reads changed the database file"
+    );
 
     // A later allocation is outside the captured anchor and cannot enter this traversal.
     history.edit(|edit| {
