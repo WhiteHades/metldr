@@ -173,13 +173,17 @@ impl Owner {
         disconnected: bool,
         released: bool,
     ) -> Result<()> {
+        if self
+            .operation
+            .as_ref()
+            .is_some_and(|operation| operation.run != run)
+        {
+            return Err("agent settlement run mismatch".into());
+        }
         let operation = self
             .operation
             .take()
             .ok_or("agent settlement without operation")?;
-        if operation.run != run {
-            return Err("agent settlement run mismatch".into());
-        }
         self.browser_io_finish(run);
         operation
             .worker

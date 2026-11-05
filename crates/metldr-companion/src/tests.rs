@@ -156,6 +156,18 @@ mod tests {
                 .map(|operation| operation.run.as_str()),
             Some(run.as_str())
         );
+        assert!(
+            owner
+                .agent_settled("stale", crate::agent::Outcome::Cancelled, false, true)
+                .is_err()
+        );
+        assert_eq!(
+            owner
+                .operation
+                .as_ref()
+                .map(|operation| operation.run.as_str()),
+            Some(run.as_str())
+        );
         let Event::Text { run: id, change } = rx.recv().unwrap() else {
             panic!("chunk must precede settlement");
         };
