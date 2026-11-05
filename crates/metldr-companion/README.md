@@ -29,6 +29,20 @@ make companion
 
 The default output is `crates/metldr-companion/target/release/metldr-companion`. Cargo uses `CARGO_TARGET_DIR` instead when it is set. The checks write their local artifacts under this crate's `.tmp` directory.
 
+Run the explicit history load workload with:
+
+```sh
+METLDR_HISTORY_LOAD_SCALE=1000 METLDR_HISTORY_LOAD_LAYOUT=spread METLDR_HISTORY_LOAD_BYTES=1024 \
+  cargo test --locked --release --manifest-path crates/metldr-companion/Cargo.toml \
+  history::load_checks::history_load_real_relationships -- --exact --ignored --nocapture --test-threads=1
+```
+
+Scale accepts `1`, `10`, `100` or `1000`. Layout accepts `spread` for separate conversations or `fanout` for one conversation. Payload size accepts `128`, `1024` or `8192` bytes. The defaults are scale `1`, layout `spread` and `1024` bytes.
+
+Each group creates one source, 25 runs, three native workflows, three rejected browser actions and 12 table or chart artifacts through the normal storage methods. The workload checks related row counts and query results. It creates a fresh database under this crate's `.tmp` directory and removes it when the test finishes.
+
+The `METLDR_HISTORY_LOAD_JSON` output reports seeding, reopen validation and ten query families. Each query has a first access, three warmups and 30 further observations. Query timings include validation and transaction setup and close. Reopen validation does not imply a cold operating system cache. Use independent paired processes for performance comparisons; observations within one process are correlated. Browser navigation, unfinished runs and legacy IndexedDB need separate workloads.
+
 Process checks that require companion executables are ignored by default. To run the current startup checks on Linux, build the executable and provide its full path:
 
 ```sh
