@@ -1,5 +1,5 @@
 use crate::{Result, model::Source};
-use redb::{ReadableDatabase, TableDefinition};
+use redb::TableDefinition;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::io::{self, Write};

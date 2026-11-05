@@ -107,6 +107,7 @@ impl Disk {
         Ok(disk)
     }
 
+    #[cfg(test)]
     pub(super) fn open(directory: PathBuf) -> Result<(Self, Store)> {
         let disk = Self::lock(directory)?;
         let state = disk.read_snapshot()?;

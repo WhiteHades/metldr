@@ -83,6 +83,7 @@ impl History {
         }
     }
 
+    #[cfg(test)]
     fn import_new(path: &Path, original: &[u8], lease: Arc<File>) -> Result<Self> {
         let prepared = import::Prepared::new(original)?;
         let history = Self::file(path, true, lease)?;

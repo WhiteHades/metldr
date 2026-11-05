@@ -10,7 +10,7 @@ use metldr_conversation::{
     ArtifactCompletion, ArtifactId, ArtifactPresentation, Chart, GeneratedAnswer, ProjectedEntry,
     Table,
 };
-use redb::{ReadableDatabase, ReadableTable};
+use redb::ReadableTable;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]

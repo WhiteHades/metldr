@@ -2,7 +2,7 @@ use super::super::artifacts::{
     ArtifactContent, artifact_refs, eligible, projected_presentation, valid_call, valid_id,
     valid_surface,
 };
-use super::super::schema::{ARTIFACTS, LAUNCHES, RUNS, Record, decode, encode};
+use super::super::schema::{ARTIFACTS, LAUNCHES, RUNS, Record, encode};
 use super::super::{Artifact, Observed};
 use super::{Edit, Selection, record, storage};
 use crate::{
@@ -14,7 +14,6 @@ use metldr_conversation::{
     ArtifactCompletion, ArtifactId, Change, Chart, CompleteSource, GeneratedAnswer, Table,
 };
 use metldr_history_pages::Counter;
-use redb::ReadableTable;
 
 impl Edit<'_> {
     pub(crate) fn accept_table(

@@ -310,16 +310,6 @@ impl ContextMap {
         })
     }
 
-    pub fn contexts(&self) -> Vec<FrameContext> {
-        let mut contexts: Vec<_> = self
-            .frames
-            .keys()
-            .filter_map(|id| self.context(id))
-            .collect();
-        contexts.sort_by(|a, b| a.frame.cmp(&b.frame));
-        contexts
-    }
-
     pub fn validate(&self, context: &FrameContext) -> Result<()> {
         if self.context(context.frame_id()).as_ref() != Some(context) {
             return Err("browser execution context is stale".into());
@@ -327,6 +317,7 @@ impl ContextMap {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn parent_frame(&self, id: &str) -> Option<&str> {
         self.frames.get(id)?.parent.as_deref()
     }

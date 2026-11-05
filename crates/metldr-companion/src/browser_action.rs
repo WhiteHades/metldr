@@ -366,6 +366,7 @@ impl Store {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(super) fn interrupt_browser(&mut self) -> Result<bool> {
         let ids: Vec<_> = self
             .browser_actions
