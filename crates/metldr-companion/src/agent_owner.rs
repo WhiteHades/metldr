@@ -191,9 +191,9 @@ impl Owner {
             .map_err(|_| "agent worker panicked")?;
         if self.record_history.is_some() {
             let pending = self.detach_inputs(run);
-            let saved = self.record_change(|edit, scope| {
-                let uncertain = edit.finish_browser(scope, run)?;
-                let mut task = edit.native_task(scope, run)?;
+            let saved = self.record_execution(run, |edit, execution| {
+                let uncertain = edit.finish_browser(execution, run)?;
+                let mut task = edit.native_task(execution, run)?;
                 crate::native_correction::finish(
                     &mut task.run,
                     "The run ended before the correction was sent.",
@@ -224,8 +224,8 @@ impl Owner {
                 if let Outcome::Failed(error) = &result {
                     task.run.error = Some(error.chars().take(200).collect());
                 }
-                edit.put_native(scope, task)?;
-                Ok(((), Some(edit.project(scope, Some(run))?)))
+                edit.put_native(execution, task)?;
+                Ok(())
             });
             if let Err(error) = saved {
                 self.restore_inputs(pending);

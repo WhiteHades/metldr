@@ -225,7 +225,10 @@ fn reopen(mut owner: Owner) -> crate::Result<Owner> {
 fn task(owner: &mut Owner, run: &str) -> crate::Result<super::edit::NativeTask> {
     let history = owner.record_history.as_mut().unwrap();
     let selection = history.selection()?;
-    history.edit(|edit| edit.native_task(&selection, run))
+    history.edit(|edit| {
+        edit.current_execution(&selection, run)
+            .and_then(|execution| edit.native_task(&execution, run))
+    })
 }
 
 fn saved_start(history: &History, request: &str) -> crate::Result<Start> {
@@ -308,7 +311,10 @@ fn seed_bound_and_terminal(owner: &mut Owner, run: &str, dir: &PathBuf) -> crate
     }
     let history = owner.record_history.as_mut().unwrap();
     let selection = history.selection()?;
-    history.edit(|edit| edit.put_native(&selection, task))?;
+    history.edit(|edit| {
+        edit.current_execution(&selection, &task.run.id)
+            .and_then(|execution| edit.put_native(&execution, task))
+    })?;
     Ok(workflow_id)
 }
 
@@ -364,7 +370,10 @@ fn actual_owner_native_starts_are_record_durable_and_snapshot_compatible() -> cr
         assert_eq!(first.run.source, source);
         let history = owner.record_history.as_mut().unwrap();
         let selection = history.selection()?;
-        let initial_target = history.edit(|edit| edit.native_initial_target(&selection, &run))?;
+        let initial_target = history.edit(|edit| {
+            edit.current_execution(&selection, &run)
+                .and_then(|execution| edit.native_initial_target(&execution, &run))
+        })?;
         assert_eq!(
             initial_target,
             crate::browser_action::Target::from(&owner.state.view.source.as_ref().unwrap().page)
@@ -400,7 +409,9 @@ fn actual_owner_native_starts_are_record_durable_and_snapshot_compatible() -> cr
         let history = owner.record_history.as_mut().unwrap();
         let selected = history.selection()?;
         assert_eq!(
-            history.edit(|edit| edit.native_initial_target(&selected, &next))?,
+            history.edit(|edit| edit
+                .current_execution(&selected, &next)
+                .and_then(|execution| edit.native_initial_target(&execution, &next)))?,
             initial_target
         );
         stop(&mut owner);
@@ -578,7 +589,11 @@ fn native_start_publication_failure_and_corrupt_followup_never_dispatch() -> cra
         let selection = history.selection()?;
         let run = saved_start(history, "publish-fails")?.run;
         assert_eq!(
-            history.edit(|edit| Ok(edit.native_task(&selection, &run)?.run.status))?,
+            history.edit(|edit| Ok(edit
+                .current_execution(&selection, &run)
+                .and_then(|execution| edit.native_task(&execution, &run))?
+                .run
+                .status))?,
             Status::Running
         );
         owner = reopen(owner)?;
@@ -693,9 +708,12 @@ fn actual_owner_native_start_admission_and_failure_boundaries() -> crate::Result
                     input_digest: "f".repeat(64),
                 },
             )?;
-            let mut record = edit.run(&scope, &run)?;
+            let mut record = edit
+                .current_execution(&scope, &run)
+                .and_then(|execution| edit.run(&execution, &run))?;
             record.status = Status::Complete;
-            edit.put_run(&scope, record)?;
+            edit.current_execution(&scope, &record.id)
+                .and_then(|execution| edit.put_run(&execution, record))?;
             Ok(((), Some(edit.project(&scope, Some(&run))?)))
         })?;
         let error = owner

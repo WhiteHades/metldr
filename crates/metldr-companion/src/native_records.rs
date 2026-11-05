@@ -20,15 +20,15 @@ impl Owner {
             return Err("native callback came from a stale operation".into());
         }
         if self.record_history.is_some() {
-            return self.record_change(|edit, scope| {
-                let mut task = edit.native_task(scope, run)?;
+            return self.record_execution(run, |edit, execution| {
+                let mut task = edit.native_task(execution, run)?;
                 if task.run.status != Status::Running
                     || !change(&mut task.run, &mut task.launch, &mut task.workflow)?
                 {
-                    return Ok((false, None));
+                    return Ok(false);
                 }
-                edit.put_native(scope, task)?;
-                Ok((true, Some(edit.project(scope, Some(run))?)))
+                edit.put_native(execution, task)?;
+                Ok(true)
             });
         }
         // shortcut: remove the snapshot branch with the remaining snapshot callers at record cutover.

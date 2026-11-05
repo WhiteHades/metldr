@@ -115,7 +115,7 @@ impl Owner {
         }
         let fallback_answer = answer.clone();
         let previous = self.codex_input.clone();
-        let mut next = self.state.clone();
+        let mut next = self.native_input_state(run)?;
         let request = match next.id() {
             Ok(request) => request,
             Err(error) => {
@@ -250,9 +250,9 @@ impl Owner {
             .pending
             .remove(request)
             .ok_or("Codex input request is stale")?;
+        let next = self.native_input_state(run)?;
         let previous = self.codex_input.replace(state);
-        if let Err(error) =
-            self.commit_native_input(run, crate::agent_settings::Kind::Codex, self.state.clone())
+        if let Err(error) = self.commit_native_input(run, crate::agent_settings::Kind::Codex, next)
         {
             if !crate::native_input_records::fatal(error.as_ref()) {
                 self.codex_input = previous;
@@ -266,24 +266,25 @@ impl Owner {
     }
 
     pub(super) fn codex_input_withdraw(&mut self, run: &str, key: &InputId) -> Result<()> {
-        let previous = self.codex_input.clone();
-        let Some(state) = self.codex_input.as_mut().filter(|state| state.run == run) else {
-            return Ok(());
-        };
-        let before = state.pending.len();
-        state.pending.retain(|_, pending| &pending.key != key);
-        if state.pending.len() == before {
+        if self.codex_input.as_ref().is_none_or(|state| {
+            state.run != run || !state.pending.values().any(|pending| &pending.key == key)
+        }) {
             return Ok(());
         }
+        let previous = self.codex_input.clone();
+        let next = self.native_input_state(run)?;
+        let state = self
+            .codex_input
+            .as_mut()
+            .ok_or("missing Codex input state")?;
+        state.pending.retain(|_, pending| &pending.key != key);
         if state.pending.is_empty() {
             self.codex_input = None;
         }
         if self.record_history.is_some() {
-            if let Err(error) = self.commit_native_input(
-                run,
-                crate::agent_settings::Kind::Codex,
-                self.state.clone(),
-            ) {
+            if let Err(error) =
+                self.commit_native_input(run, crate::agent_settings::Kind::Codex, next)
+            {
                 if !crate::native_input_records::fatal(error.as_ref()) {
                     self.codex_input = previous;
                 }

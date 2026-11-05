@@ -102,10 +102,11 @@ fn scoped_controls_and_start_retry_survive_selection_without_replay() -> crate::
             },
             Launch::Fixture { input_digest },
         )?;
-        let mut record = edit.run(&selection, &run)?;
+        let execution = edit.current_execution(&selection, &run)?;
+        let mut record = edit.run(&execution, &run)?;
         record.status = Status::Complete;
         record.output = metldr_conversation::Content::flat("Original saved result".into())?;
-        edit.put_run(&selection, record)?;
+        edit.put_run(&execution, record)?;
         let retries = [
             (
                 "saved-page-text",
@@ -187,10 +188,11 @@ fn scoped_controls_and_start_retry_survive_selection_without_replay() -> crate::
                 },
                 launch,
             )?;
-            let mut record = edit.run(&selection, &run)?;
+            let execution = edit.current_execution(&selection, &run)?;
+            let mut record = edit.run(&execution, &run)?;
             record.status = Status::Complete;
             record.output = metldr_conversation::Content::flat("Original route result".into())?;
-            edit.put_run(&selection, record)?;
+            edit.put_run(&execution, record)?;
             saved.push((request, action, run));
         }
         Ok((source.id, run, action, saved))

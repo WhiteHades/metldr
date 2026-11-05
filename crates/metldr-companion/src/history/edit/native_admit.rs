@@ -65,7 +65,8 @@ impl Edit<'_> {
         })?;
         let (workflow_revision, initial) = if exists {
             let (latest, target) = self.native_latest(scope, name)?;
-            let before = self.native_task(scope, &latest)?;
+            let execution = self.current_execution(scope, &latest)?;
+            let before = self.native_task(&execution, &latest)?;
             if !before.run.status.terminal() {
                 return Err("native workflow still has active work".into());
             }
@@ -102,9 +103,13 @@ impl Edit<'_> {
             } if activity.is_empty() && selection.is_none() => (),
             _ => return Err("new native launch already has activity or selection".into()),
         }
+        let execution = super::Execution {
+            store: scope.store.clone(),
+            conversation: scope.conversation.clone(),
+            run: run.id.clone(),
+        };
         let task = NativeTask {
-            identity: run.id.clone(),
-            scope: scope.clone(),
+            execution,
             run,
             launch,
             workflow,
@@ -121,7 +126,12 @@ impl Edit<'_> {
             },
         };
         storage(|| {
-            self.save_native_workflow(scope, name, &task.workflow, workflow_revision)?;
+            self.save_native_workflow(
+                &scope.conversation,
+                name,
+                &task.workflow,
+                workflow_revision,
+            )?;
             super::super::summary::put_run(
                 self.write,
                 &Record {
@@ -185,7 +195,8 @@ impl Edit<'_> {
             Ok(())
         })?;
         self.changed = true;
-        self.native_task(scope, &task.run.id)?;
+        let execution = self.execution(&task.run.id)?;
+        self.native_task(&execution, &task.run.id)?;
         Ok(())
     }
 

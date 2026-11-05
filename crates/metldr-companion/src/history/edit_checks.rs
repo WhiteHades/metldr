@@ -87,12 +87,15 @@ fn response_run(
                 },
             },
         )?;
-        let mut record = edit.run(scope, &id)?;
+        let mut record = edit
+            .current_execution(scope, &id)
+            .and_then(|execution| edit.run(&execution, &id))?;
         record.output.change(Change::Final {
             key: MessageKey::observed(1)?,
             text: "Before".into(),
         })?;
-        edit.put_run(scope, record)?;
+        edit.current_execution(scope, &record.id)
+            .and_then(|execution| edit.put_run(&execution, record))?;
         Ok(id)
     })
 }
@@ -142,21 +145,34 @@ fn chart_records_keep_order_scope_and_identity_after_restart() -> Result<()> {
     )?;
     let before = serde_json::to_value(profile(&history)?)?;
     let aborted: Result<()> = history.edit(|edit| {
-        edit.accept_chart(&scope, &run, "aborted", "root", chart.clone())?;
+        edit.current_execution(&scope, &run).and_then(|execution| {
+            edit.accept_chart(&execution, &run, "aborted", "root", chart.clone())
+        })?;
         Err("synthetic rollback".into())
     });
     assert!(aborted.is_err());
     assert_eq!(serde_json::to_value(profile(&history)?)?, before);
     assert_eq!(history.db.begin_read()?.open_table(ARTIFACTS)?.len()?, 0);
-    let id =
-        history.edit(|edit| edit.accept_chart(&scope, &run, "chart:1", "root", chart.clone()))?;
+    let id = history.edit(|edit| {
+        edit.current_execution(&scope, &run).and_then(|execution| {
+            edit.accept_chart(&execution, &run, "chart:1", "root", chart.clone())
+        })
+    })?;
     assert_eq!(
         id,
-        history.edit(|edit| edit.accept_chart(&scope, &run, "chart:1", "root", chart.clone()))?
+        history.edit(|edit| {
+            edit.current_execution(&scope, &run).and_then(|execution| {
+                edit.accept_chart(&execution, &run, "chart:1", "root", chart.clone())
+            })
+        })?
     );
     assert!(
         history
-            .edit(|edit| edit.accept_chart(&scope, &run, "chart:1", "different", chart.clone()))
+            .edit(|edit| {
+                edit.current_execution(&scope, &run).and_then(|execution| {
+                    edit.accept_chart(&execution, &run, "chart:1", "different", chart.clone())
+                })
+            })
             .is_err()
     );
     let mut foreign = scope.clone();
@@ -167,14 +183,17 @@ fn chart_records_keep_order_scope_and_identity_after_restart() -> Result<()> {
             .is_err()
     );
     history.edit(|edit| {
-        let mut value = edit.run(&scope, &run)?;
+        let mut value = edit
+            .current_execution(&scope, &run)
+            .and_then(|execution| edit.run(&execution, &run))?;
         assert!(value.output.change(Change::Artifact(id.clone())).is_err());
         value.output.change(Change::Final {
             key: MessageKey::observed(2)?,
             text: "After".into(),
         })?;
         value.status = Status::Interrupted;
-        edit.put_run(&scope, value)
+        edit.current_execution(&scope, &value.id)
+            .and_then(|execution| edit.put_run(&execution, value))
     })?;
     drop(history);
     let mut history = History::open(&path, disk.lease())?;
@@ -188,10 +207,19 @@ fn chart_records_keep_order_scope_and_identity_after_restart() -> Result<()> {
     );
     assert!(
         history
-            .edit(|edit| edit.accept_chart(&scope, &run, "chart:2", "root", chart.clone()))
+            .edit(|edit| {
+                edit.current_execution(&scope, &run).and_then(|execution| {
+                    edit.accept_chart(&execution, &run, "chart:2", "root", chart.clone())
+                })
+            })
             .is_err()
     );
-    let output = history.edit(|edit| Ok(edit.run(&scope, &run)?.output))?;
+    let output = history.edit(|edit| {
+        Ok(edit
+            .current_execution(&scope, &run)
+            .and_then(|execution| edit.run(&execution, &run))?
+            .output)
+    })?;
     let display = metldr_conversation::Display::new(output.projection())?;
     assert!(matches!(&display.entries().collect::<Vec<_>>()[..], [
         EntryRef::Message { text: "Before", .. },
@@ -240,33 +268,53 @@ fn table_records_are_atomic_scoped_idempotent_and_survive_reopen() -> Result<()>
                 },
             },
         )?;
-        let mut record = edit.run(&scope, &id)?;
+        let mut record = edit
+            .current_execution(&scope, &id)
+            .and_then(|execution| edit.run(&execution, &id))?;
         record.output.change(Change::Final {
             key: MessageKey::observed(1)?,
             text: "Before".into(),
         })?;
-        edit.put_run(&scope, record)?;
+        edit.current_execution(&scope, &record.id)
+            .and_then(|execution| edit.put_run(&execution, record))?;
         Ok(id)
     })?;
     let before = serde_json::to_value(profile(&history)?)?;
     let aborted: Result<()> = history.edit(|edit| {
-        edit.accept_table(&scope, &run_id, "call:aborted", "surface", table()?)?;
+        edit.current_execution(&scope, &run_id)
+            .and_then(|execution| {
+                edit.accept_table(&execution, &run_id, "call:aborted", "surface", table()?)
+            })?;
         Err("synthetic rollback".into())
     });
     assert!(aborted.is_err());
     assert_eq!(serde_json::to_value(profile(&history)?)?, before);
     assert_eq!(history.db.begin_read()?.open_table(ARTIFACTS)?.len()?, 0);
-    let id =
-        history.edit(|edit| edit.accept_table(&scope, &run_id, "call:1", "surface", table()?))?;
+    let id = history.edit(|edit| {
+        edit.current_execution(&scope, &run_id)
+            .and_then(|execution| {
+                edit.accept_table(&execution, &run_id, "call:1", "surface", table()?)
+            })
+    })?;
     assert_eq!(
         id,
-        history.edit(|edit| edit.accept_table(&scope, &run_id, "call:1", "surface", table()?))?
+        history.edit(|edit| {
+            edit.current_execution(&scope, &run_id)
+                .and_then(|execution| {
+                    edit.accept_table(&execution, &run_id, "call:1", "surface", table()?)
+                })
+        })?
     );
     assert_eq!(history.db.begin_read()?.open_table(ARTIFACTS)?.len()?, 1);
     let before = serde_json::to_value(profile(&history)?)?;
     assert!(
         history
-            .edit(|edit| edit.accept_table(&scope, &run_id, "call:1", "changed", table()?))
+            .edit(|edit| {
+                edit.current_execution(&scope, &run_id)
+                    .and_then(|execution| {
+                        edit.accept_table(&execution, &run_id, "call:1", "changed", table()?)
+                    })
+            })
             .is_err()
     );
     assert_eq!(serde_json::to_value(profile(&history)?)?, before);
@@ -285,28 +333,44 @@ fn table_records_are_atomic_scoped_idempotent_and_survive_reopen() -> Result<()>
             .is_err()
     );
     history.edit(|edit| {
-        let mut record = edit.run(&scope, &run_id)?;
+        let mut record = edit
+            .current_execution(&scope, &run_id)
+            .and_then(|execution| edit.run(&execution, &run_id))?;
         assert!(!serde_json::to_string(&record)?.contains("Quarterly sales"));
         record.output.change(Change::Final {
             key: MessageKey::observed(2)?,
             text: "After".into(),
         })?;
         record.status = Status::StopRequested;
-        edit.put_run(&scope, record)
+        edit.current_execution(&scope, &record.id)
+            .and_then(|execution| edit.put_run(&execution, record))
     })?;
     assert!(
         history
-            .edit(|edit| edit.accept_table(&scope, &run_id, "call:2", "surface", table()?))
+            .edit(|edit| {
+                edit.current_execution(&scope, &run_id)
+                    .and_then(|execution| {
+                        edit.accept_table(&execution, &run_id, "call:2", "surface", table()?)
+                    })
+            })
             .is_err()
     );
     assert_eq!(
         id,
-        history.edit(|edit| edit.accept_table(&scope, &run_id, "call:1", "surface", table()?))?
+        history.edit(|edit| {
+            edit.current_execution(&scope, &run_id)
+                .and_then(|execution| {
+                    edit.accept_table(&execution, &run_id, "call:1", "surface", table()?)
+                })
+        })?
     );
     history.edit(|edit| {
-        let mut record = edit.run(&scope, &run_id)?;
+        let mut record = edit
+            .current_execution(&scope, &run_id)
+            .and_then(|execution| edit.run(&execution, &run_id))?;
         record.status = Status::Interrupted;
-        edit.put_run(&scope, record)
+        edit.current_execution(&scope, &record.id)
+            .and_then(|execution| edit.put_run(&execution, record))
     })?;
     drop(history);
     let mut history = History::open(&path, disk.lease())?;
@@ -345,7 +409,12 @@ fn table_records_are_atomic_scoped_idempotent_and_survive_reopen() -> Result<()>
     let serialized = std::str::from_utf8(&assembled)?;
     assert!(serialized.contains("🐈"));
     assert!(serialized.contains("\\n"));
-    let content = history.edit(|edit| Ok(edit.run(&scope, &run_id)?.output))?;
+    let content = history.edit(|edit| {
+        Ok(edit
+            .current_execution(&scope, &run_id)
+            .and_then(|execution| edit.run(&execution, &run_id))?
+            .output)
+    })?;
     let display = metldr_conversation::Display::new(content.projection())?;
     assert!(
         matches!(&display.entries().collect::<Vec<_>>()[..], [metldr_conversation::EntryRef::Message {text:"Before",..}, metldr_conversation::EntryRef::Artifact { id: observed, .. }, metldr_conversation::EntryRef::Message {text:"After",..}] if *observed == &id)
@@ -383,13 +452,16 @@ fn generated_artifacts_revise_complete_interrupt_and_reopen() -> Result<()> {
     let run_id = response_run(&mut history, &scope, "generated:start", 'c')?;
     let partial = GeneratedAnswer::default().updated(GeneratedUpdate::Html("<p>A".into()))?;
     let id = history.edit(|edit| {
-        edit.preview_generated(
-            &scope,
-            &run_id,
-            "call:generated",
-            "surface",
-            partial.clone(),
-        )
+        edit.current_execution(&scope, &run_id)
+            .and_then(|execution| {
+                edit.preview_generated(
+                    &execution,
+                    &run_id,
+                    "call:generated",
+                    "surface",
+                    partial.clone(),
+                )
+            })
     })?;
     assert_eq!(
         history
@@ -399,25 +471,31 @@ fn generated_artifacts_revise_complete_interrupt_and_reopen() -> Result<()> {
         1
     );
     history.edit(|edit| {
-        edit.preview_generated(
-            &scope,
-            &run_id,
-            "call:generated",
-            "surface",
-            partial.clone(),
-        )
+        edit.current_execution(&scope, &run_id)
+            .and_then(|execution| {
+                edit.preview_generated(
+                    &execution,
+                    &run_id,
+                    "call:generated",
+                    "surface",
+                    partial.clone(),
+                )
+            })
     })?;
     let extended = partial.updated(GeneratedUpdate::Html("B</p>".into()))?;
     assert_eq!(
         id,
         history.edit(|edit| {
-            edit.preview_generated(
-                &scope,
-                &run_id,
-                "call:generated",
-                "surface",
-                extended.clone(),
-            )
+            edit.current_execution(&scope, &run_id)
+                .and_then(|execution| {
+                    edit.preview_generated(
+                        &execution,
+                        &run_id,
+                        "call:generated",
+                        "surface",
+                        extended.clone(),
+                    )
+                })
         })?
     );
     let saved = history.edit(|edit| edit.artifact_detail(&scope, id.as_str()))?;
@@ -431,22 +509,28 @@ fn generated_artifacts_revise_complete_interrupt_and_reopen() -> Result<()> {
     );
     let complete = extended.updated(GeneratedUpdate::HtmlComplete)?.finish()?;
     history.edit(|edit| {
-        edit.complete_generated(
-            &scope,
-            &run_id,
-            "call:generated",
-            "surface",
-            complete.clone(),
-        )
+        edit.current_execution(&scope, &run_id)
+            .and_then(|execution| {
+                edit.complete_generated(
+                    &execution,
+                    &run_id,
+                    "call:generated",
+                    "surface",
+                    complete.clone(),
+                )
+            })
     })?;
     history.edit(|edit| {
-        edit.complete_generated(
-            &scope,
-            &run_id,
-            "call:generated",
-            "surface",
-            complete.clone(),
-        )
+        edit.current_execution(&scope, &run_id)
+            .and_then(|execution| {
+                edit.complete_generated(
+                    &execution,
+                    &run_id,
+                    "call:generated",
+                    "surface",
+                    complete.clone(),
+                )
+            })
     })?;
     assert_eq!(
         history
@@ -455,14 +539,23 @@ fn generated_artifacts_revise_complete_interrupt_and_reopen() -> Result<()> {
             .0,
         3
     );
-    let mut record = history.edit(|edit| edit.run(&scope, &run_id))?;
+    let mut record = history.edit(|edit| {
+        edit.current_execution(&scope, &run_id)
+            .and_then(|execution| edit.run(&execution, &run_id))
+    })?;
     record.status = Status::Complete;
-    history.edit(|edit| edit.put_run(&scope, record))?;
+    history.edit(|edit| {
+        edit.current_execution(&scope, &record.id)
+            .and_then(|execution| edit.put_run(&execution, record))
+    })?;
 
     let interrupted_run = response_run(&mut history, &scope, "generated:interrupt", 'f')?;
     let draft = GeneratedAnswer::default().updated(GeneratedUpdate::Html("<p>draft".into()))?;
     let interrupted_id = history.edit(|edit| {
-        edit.preview_generated(&scope, &interrupted_run, "call:draft", "surface", draft)
+        edit.current_execution(&scope, &interrupted_run)
+            .and_then(|execution| {
+                edit.preview_generated(&execution, &interrupted_run, "call:draft", "surface", draft)
+            })
     })?;
     drop(history);
     let mut history = History::open(&path, disk.lease())?;
@@ -547,8 +640,12 @@ fn format_sixteen_migrates_tables_and_refuses_generated_records() -> Result<()> 
         vec![vec!["B".into()]],
         "source".into(),
     )?;
-    let id = history
-        .edit(|edit| edit.accept_table(&scope, &run_id, "call:table", "surface", table.clone()))?;
+    let id = history.edit(|edit| {
+        edit.current_execution(&scope, &run_id)
+            .and_then(|execution| {
+                edit.accept_table(&execution, &run_id, "call:table", "surface", table.clone())
+            })
+    })?;
     let saved = history.edit(|edit| edit.artifact_detail(&scope, id.as_str()))?;
     drop(history);
     {
@@ -587,7 +684,10 @@ fn format_sixteen_migrates_tables_and_refuses_generated_records() -> Result<()> 
         metldr_conversation::GeneratedUpdate::Html("<p>generated".into()),
     )?;
     history.edit(|edit| {
-        edit.preview_generated(&scope, &run_id, "call:generated", "surface", source)
+        edit.current_execution(&scope, &run_id)
+            .and_then(|execution| {
+                edit.preview_generated(&execution, &run_id, "call:generated", "surface", source)
+            })
     })?;
     drop(history);
     mark_format_sixteen(&generated_path)?;
@@ -676,14 +776,15 @@ fn actual_records_commit_update_retry_abort_and_reopen() -> Result<()> {
         (43, 62)
     );
     history.edit(|tx| {
-        let mut changed = tx.run(&selection, &id)?;
+        let execution = tx.current_execution(&selection, &id)?;
+        let mut changed = tx.run(&execution, &id)?;
         changed
             .output
             .change(metldr_conversation::Change::FlatAppend(
                 "Exact saved text, repeated repeated. 🦀".into(),
             ))?;
         changed.status = Status::Complete;
-        tx.put_run(&selection, changed)
+        tx.put_run(&execution, changed)
     })?;
     assert_eq!(counts(&history)?, (1, 1, 1, 1, 0));
     assert_eq!(
@@ -692,7 +793,10 @@ fn actual_records_commit_update_retry_abort_and_reopen() -> Result<()> {
     );
     drop(history);
     let mut history = History::open(&path, disk.lease())?;
-    let saved = history.edit(|tx| tx.run(&selection, &id))?;
+    let saved = history.edit(|tx| {
+        let execution = tx.current_execution(&selection, &id)?;
+        tx.run(&execution, &id)
+    })?;
     assert_eq!(
         saved.output.text(),
         "Exact saved text, repeated repeated. 🦀"
@@ -715,20 +819,25 @@ fn actual_records_commit_update_retry_abort_and_reopen() -> Result<()> {
     assert!(
         history
             .edit(|tx| {
-                let mut completed = tx.run(&selection, &id)?;
-                completed.status = Status::Failed;
-                completed.error = Some("must not replace a completed result".into());
-                completed
-                    .output
-                    .change(metldr_conversation::Change::FlatAppend(
-                        " unwanted overwrite".into(),
-                    ))?;
-                tx.put_run(&selection, completed)
+                tx.current_execution(&selection, &id).and_then(|execution| {
+                    let mut completed = tx.run(&execution, &id)?;
+                    completed.status = Status::Failed;
+                    completed.error = Some("must not replace a completed result".into());
+                    completed
+                        .output
+                        .change(metldr_conversation::Change::FlatAppend(
+                            " unwanted overwrite".into(),
+                        ))?;
+                    tx.put_run(&execution, completed)
+                })
             })
             .is_err()
     );
     assert_eq!(serde_json::to_value(profile(&history)?)?, completed_profile);
-    let preserved = history.edit(|tx| tx.run(&selection, &id))?;
+    let preserved = history.edit(|tx| {
+        let execution = tx.current_execution(&selection, &id)?;
+        tx.run(&execution, &id)
+    })?;
     assert_eq!(preserved.status, Status::Complete);
     assert_eq!(
         preserved.output.text(),
@@ -742,9 +851,10 @@ fn actual_records_commit_update_retry_abort_and_reopen() -> Result<()> {
             Ok(id)
         })?;
         history.edit(|tx| {
-            let mut saved = tx.run(&selection, &id)?;
+            let execution = tx.current_execution(&selection, &id)?;
+            let mut saved = tx.run(&execution, &id)?;
             saved.status = Status::Complete;
-            tx.put_run(&selection, saved)
+            tx.put_run(&execution, saved)
         })?;
     }
     assert_eq!(counts(&history)?, (21, 21, 21, 21, 0));
@@ -787,7 +897,8 @@ fn actual_records_commit_update_retry_abort_and_reopen() -> Result<()> {
             Ok(id)
         })?;
         history.edit(|tx| {
-            let mut saved = tx.run(&selection, &id)?;
+            let execution = tx.current_execution(&selection, &id)?;
+            let mut saved = tx.run(&execution, &id)?;
             if saved.output.is_native() {
                 saved.output.change(metldr_conversation::Change::Append {
                     key: metldr_conversation::MessageKey::observed(1)?,
@@ -801,7 +912,7 @@ fn actual_records_commit_update_retry_abort_and_reopen() -> Result<()> {
             } else {
                 Status::Complete
             };
-            tx.put_run(&selection, saved)
+            tx.put_run(&execution, saved)
         })?;
     }
     let context = history.edit(|tx| {
@@ -820,7 +931,13 @@ fn actual_records_commit_update_retry_abort_and_reopen() -> Result<()> {
         ["route3", "route4", "route5", "route6", "route7", "route8"]
     );
     assert_eq!(
-        history.edit(|tx| tx.run(&selection, &id))?.output.text(),
+        history
+            .edit(|tx| {
+                let execution = tx.current_execution(&selection, &id)?;
+                tx.run(&execution, &id)
+            })?
+            .output
+            .text(),
         "Exact saved text, repeated repeated. 🦀"
     );
     let legacy_directory = Directory::new();
@@ -881,7 +998,10 @@ fn actual_records_commit_update_retry_abort_and_reopen() -> Result<()> {
     assert_ne!(current, old_selection);
     assert!(
         imported
-            .edit(|tx| tx.run(&old_selection, &legacy_run))
+            .edit(|tx| {
+                tx.current_execution(&old_selection, &legacy_run)
+                    .and_then(|execution| tx.run(&execution, &legacy_run))
+            })
             .is_err()
     );
     assert!(

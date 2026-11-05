@@ -117,10 +117,10 @@ impl Owner {
             {
                 return Err("presentation has no active history owner".into());
             }
-            self.record_change(|edit, scope| {
+            self.record_execution(run, |edit, execution| {
                 let id = match update {
                     Update::Preview(progress) => edit.preview_generated(
-                        scope,
+                        execution,
                         run,
                         &progress.call_id,
                         &progress.surface_id,
@@ -128,21 +128,21 @@ impl Owner {
                     )?,
                     Update::Complete(invocation) => match invocation.presentation.content {
                         PresentationContent::Table(table) => edit.accept_table(
-                            scope,
+                            execution,
                             run,
                             &invocation.id,
                             &invocation.presentation.surface_id,
                             table,
                         )?,
                         PresentationContent::Chart(chart) => edit.accept_chart(
-                            scope,
+                            execution,
                             run,
                             &invocation.id,
                             &invocation.presentation.surface_id,
                             chart,
                         )?,
                         PresentationContent::Generated(source) => edit.complete_generated(
-                            scope,
+                            execution,
                             run,
                             &invocation.id,
                             &invocation.presentation.surface_id,
@@ -150,7 +150,7 @@ impl Owner {
                         )?,
                     },
                 };
-                Ok((id, Some(edit.project(scope, Some(run))?)))
+                Ok(id)
             })
         })();
         match result {

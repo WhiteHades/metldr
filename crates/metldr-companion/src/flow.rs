@@ -532,6 +532,10 @@ impl Owner {
                 approve,
             } => {
                 self.require_conversation(scope)?;
+                if let Some(history) = &mut self.record_history {
+                    history
+                        .edit(|edit| edit.current_action_execution(scope, &action).map(|_| ()))?;
+                }
                 self.browser_decide(&action, revision, approve)?;
                 self.reply_view(Some(id), "view", true)
             }
@@ -548,7 +552,7 @@ impl Owner {
                 request,
                 option,
             } => {
-                self.require_conversation(scope)?;
+                self.require_current_run(scope, &run)?;
                 self.native_decide(id, &run, &request, option.as_deref())
             }
             ConversationAction::PiUiReply {
@@ -556,7 +560,7 @@ impl Owner {
                 request,
                 answer,
             } => {
-                self.require_conversation(scope)?;
+                self.require_current_run(scope, &run)?;
                 self.pi_ui_reply(id, &run, &request, answer)
             }
             ConversationAction::CodexInputReply {
@@ -564,7 +568,7 @@ impl Owner {
                 request,
                 answer,
             } => {
-                self.require_conversation(scope)?;
+                self.require_current_run(scope, &run)?;
                 self.codex_input_reply(id, &run, &request, answer)
             }
             ConversationAction::Watch { run } => {
@@ -607,7 +611,7 @@ impl Owner {
                 self.emit(json!({"v":crate::WIRE_VERSION,"request":id,"kind":"unwatched"}))
             }
             ConversationAction::Stop { run } => {
-                self.require_conversation(scope)?;
+                self.require_current_run(scope, &run)?;
                 self.stop_run(id, &run)
             }
             start @ (ConversationAction::Summarize { .. } | ConversationAction::Ask { .. }) => {
@@ -624,6 +628,18 @@ impl Owner {
             .selection()?;
         if current != *expected {
             return Err("history selection changed".into());
+        }
+        Ok(())
+    }
+
+    fn require_current_run(
+        &mut self,
+        expected: &crate::history::Selection,
+        run: &str,
+    ) -> Result<()> {
+        self.require_conversation(expected)?;
+        if let Some(history) = self.record_history.as_mut() {
+            history.edit(|edit| edit.current_execution(expected, run).map(|_| ()))?;
         }
         Ok(())
     }
@@ -695,13 +711,13 @@ impl Owner {
             return Err("artifact references require a committed table record".into());
         }
         if self.record_history.is_some() {
-            self.record_change(|edit, selection| {
-                let mut record = edit.run(selection, run)?;
+            self.record_execution(run, |edit, execution| {
+                let mut record = edit.run(execution, run)?;
                 if record.status.terminal() || !record.output.change(change)? {
-                    return Ok(((), None));
+                    return Ok(());
                 }
-                edit.put_run(selection, record)?;
-                Ok(((), Some(edit.project(selection, Some(run))?)))
+                edit.put_run(execution, record)?;
+                Ok(())
             })?;
             return Ok(());
         }
@@ -740,9 +756,9 @@ impl Owner {
             .join()
             .map_err(|_| "provider worker panicked")?;
         if self.record_history.is_some() {
-            self.record_change(|edit, selection| {
-                edit.finish_browser(selection, run)?;
-                let mut record = edit.run(selection, run)?;
+            self.record_execution(run, |edit, execution| {
+                edit.finish_browser(execution, run)?;
+                let mut record = edit.run(execution, run)?;
                 record.status = if result.is_ok() {
                     Status::Complete
                 } else if disconnected {
@@ -756,8 +772,8 @@ impl Owner {
                     record.error =
                         Some(result.err().unwrap_or_default().chars().take(200).collect());
                 }
-                edit.put_run(selection, record)?;
-                Ok(((), Some(edit.project(selection, Some(run))?)))
+                edit.put_run(execution, record)?;
+                Ok(())
             })?;
             self.cancel_browser_approval(run);
             return Ok(());

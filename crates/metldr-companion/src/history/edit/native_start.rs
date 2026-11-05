@@ -17,7 +17,7 @@ impl Edit<'_> {
                 let run = self
                     .saved_run(&saved.run)?
                     .ok_or("saved native start has no run")?;
-                let workflow = self.load_native_workflow(scope, name, &launch)?;
+                let workflow = self.load_native_workflow(&scope.conversation, name, &launch)?;
                 if run.value.source != workflow.value.source().id {
                     return Err("saved native start source differs".into());
                 }
@@ -34,7 +34,8 @@ impl Edit<'_> {
     ) -> Result<NativeWorkflow> {
         let result = (|| {
             let (run, _) = self.native_latest(scope, workflow)?;
-            Ok(self.native_task(scope, &run)?.workflow)
+            let execution = self.current_execution(scope, &run)?;
+            Ok(self.native_task(&execution, &run)?.workflow)
         })();
         self.checked(result)
     }

@@ -170,7 +170,10 @@ fn imported_native_destinations_and_latest_runs_survive_reopen_and_reject_wrong_
     };
     for run in legacy.view.runs.iter().filter(|run| run.kind == "agent") {
         assert_eq!(
-            history.edit(|edit| edit.native_initial_target(&selection, &run.id))?,
+            history.edit(|edit| {
+                edit.current_execution(&selection, &run.id)
+                    .and_then(|execution| edit.native_initial_target(&execution, &run.id))
+            })?,
             legacy.native_browser_target(&run.id)?
         );
     }
@@ -180,7 +183,9 @@ fn imported_native_destinations_and_latest_runs_survive_reopen_and_reject_wrong_
     assert_eq!(destination.document, "pi-third-document");
     assert_eq!(destination.url, redirect);
     assert_eq!(
-        history.edit(|edit| edit.native_initial_target(&selection, &pi))?,
+        history.edit(|edit| edit
+            .current_execution(&selection, &pi)
+            .and_then(|execution| edit.native_initial_target(&execution, &pi)))?,
         pi_initial
     );
     let Launch::Codex { workflow, .. } = &legacy.launches[&codex] else {
@@ -339,7 +344,9 @@ fn imported_native_destinations_and_latest_runs_survive_reopen_and_reject_wrong_
     }
     assert!(
         history
-            .edit(|edit| edit.native_initial_target(&selection, &last))
+            .edit(|edit| edit
+                .current_execution(&selection, &last)
+                .and_then(|execution| edit.native_initial_target(&execution, &last)))
             .unwrap_err()
             .downcast_ref::<Failure>()
             .is_some()

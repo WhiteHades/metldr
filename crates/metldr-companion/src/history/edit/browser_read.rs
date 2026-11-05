@@ -1,4 +1,4 @@
-use super::{Edit, Selection, record, storage};
+use super::{Edit, Execution, Selection, record, storage};
 use crate::{
     Result,
     agent_model::Launch,
@@ -8,17 +8,38 @@ use crate::{
 use redb::{ReadableTable, ReadableTableMetadata};
 
 impl Edit<'_> {
-    pub(crate) fn browser_action(&self, scope: &Selection, id: &str) -> Result<Action> {
+    pub(crate) fn action_execution(&self, id: &str) -> Result<Execution> {
+        let saved: Record<Action> =
+            storage(|| record(self.write, ACTIONS, id)?.ok_or("browser action is absent".into()))?;
+        self.execution(&saved.value.proposal.run)
+    }
+
+    pub(crate) fn current_action_execution(
+        &self,
+        scope: &Selection,
+        id: &str,
+    ) -> Result<Execution> {
         self.checked((|| {
-            let saved = self.browser_record(scope, id)?;
+            self.require_selection(scope)?;
+            let execution = self.action_execution(id)?;
+            if execution.conversation != scope.conversation {
+                return Err("browser action belongs to a different conversation".into());
+            }
+            Ok(execution)
+        })())
+    }
+
+    pub(crate) fn browser_action(&self, execution: &Execution, id: &str) -> Result<Action> {
+        self.checked((|| {
+            let saved = self.browser_record(execution, id)?;
             let action = saved.value;
-            let initial = self.browser_initial(scope, &action.proposal.run)?;
+            let initial = self.browser_initial(execution, execution.run())?;
             let grant = if action.proposal.binding.grant_revision == 1 {
                 None
             } else {
                 Some(self.browser_grant(
-                    scope,
-                    &action.proposal.run,
+                    execution,
+                    execution.run(),
                     action.proposal.binding.grant_revision,
                 )?)
             };
@@ -32,7 +53,7 @@ impl Edit<'_> {
                 Ok(())
             })?;
             if !matches!(action.state, Phase::Settled { .. }) {
-                let head = self.browser_navigation(scope, &action.proposal.run)?;
+                let head = self.browser_navigation(execution, execution.run())?;
                 storage(|| {
                     if !action.proposal.matches_position(
                         initial.as_ref(),
@@ -51,13 +72,13 @@ impl Edit<'_> {
 
     pub(crate) fn browser_by_tool(
         &self,
-        scope: &Selection,
+        execution: &Execution,
         run: &str,
         tool: &str,
     ) -> Result<Option<Action>> {
         self.checked((|| {
-            self.require_selection(scope)?;
-            self.run(scope, run)?;
+            self.require_execution(execution, run)?;
+            self.run(execution, run)?;
             let id = storage(|| {
                 Ok(self
                     .write
@@ -65,18 +86,22 @@ impl Edit<'_> {
                     .get((run, tool))?
                     .map(|v| v.value().to_owned()))
             })?;
-            id.map(|id| self.browser_action(scope, &id)).transpose()
+            id.map(|id| self.browser_action(execution, &id)).transpose()
         })())
     }
 
-    pub(super) fn browser_record(&self, scope: &Selection, id: &str) -> Result<Record<Action>> {
-        self.require_selection(scope)?;
+    pub(super) fn browser_record(&self, execution: &Execution, id: &str) -> Result<Record<Action>> {
+        self.require_execution(execution, execution.run())?;
         storage(|| {
             let saved: Record<Action> =
                 record(self.write, ACTIONS, id)?.ok_or("browser action is absent")?;
             let a = &saved.value;
             a.validate()?;
-            if saved.conversation != scope.conversation || a.id != id || !self.valid_id(id) {
+            if saved.conversation != execution.conversation()
+                || a.id != id
+                || !self.valid_id(id)
+                || a.proposal.run != execution.run()
+            {
                 return Err("browser action ownership or identity differs".into());
             }
             let run = self
@@ -87,7 +112,7 @@ impl Edit<'_> {
                 .next()
                 .ok_or("invalid browser action identity")?
                 .parse::<u64>()?;
-            if run.conversation != scope.conversation
+            if run.conversation != execution.conversation()
                 || self
                     .write
                     .open_table(ACTION_ORDER)?
@@ -142,30 +167,36 @@ impl Edit<'_> {
         })
     }
 
-    pub(super) fn browser_initial(&self, scope: &Selection, run: &str) -> Result<Option<Target>> {
-        let task = self.run(scope, run)?;
+    pub(super) fn browser_initial(
+        &self,
+        execution: &Execution,
+        run: &str,
+    ) -> Result<Option<Target>> {
+        self.require_execution(execution, run)?;
+        let task = self.run(execution, run)?;
         let launch: Record<Launch> = storage(|| {
             record(self.write, LAUNCHES, run)?.ok_or("browser launch is absent".into())
         })?;
-        if launch.conversation != scope.conversation {
+        if launch.conversation != execution.conversation() {
             return storage(|| Err("browser launch ownership differs".into()));
         }
         if matches!(
             launch.value,
             Launch::Pi { .. } | Launch::Codex { .. } | Launch::OpenCode { .. }
         ) {
-            return self.native_initial_target(scope, run).map(Some);
+            return self.native_initial_target(execution, run).map(Some);
         }
-        self.source(&task.source)
+        self.source_in(execution.conversation(), &task.source)
             .map(|source| source.map(|s| Target::from(&s.page)))
     }
 
     fn browser_grant(
         &self,
-        scope: &Selection,
+        execution: &Execution,
         run: &str,
         revision: u64,
     ) -> Result<(Binding, String)> {
+        self.require_execution(execution, run)?;
         storage(|| {
             let id = self
                 .write
@@ -174,7 +205,7 @@ impl Edit<'_> {
                 .ok_or("browser destination grant is absent")?
                 .value()
                 .to_owned();
-            let action = self.browser_record(scope, &id)?.value;
+            let action = self.browser_record(execution, &id)?.value;
             match action.state {
                 Phase::Settled {
                     outcome: Outcome::Navigated { binding, url, .. },
@@ -188,9 +219,10 @@ impl Edit<'_> {
 
     pub(super) fn browser_navigation(
         &self,
-        scope: &Selection,
+        execution: &Execution,
         run: &str,
     ) -> Result<Option<(Binding, String)>> {
+        self.require_execution(execution, run)?;
         let id = storage(|| {
             Ok(self
                 .write
@@ -199,7 +231,7 @@ impl Edit<'_> {
                 .map(|v| v.value().to_owned()))
         })?;
         let Some(id) = id else { return Ok(None) };
-        let action = self.browser_action(scope, &id)?;
+        let action = self.browser_action(execution, &id)?;
         storage(|| match action.state {
             Phase::Settled {
                 outcome: Outcome::Navigated { binding, url, .. },
@@ -208,7 +240,8 @@ impl Edit<'_> {
         })
     }
 
-    pub(super) fn browser_open(&self, scope: &Selection, run: &str) -> Result<Option<Action>> {
+    pub(super) fn browser_open(&self, execution: &Execution, run: &str) -> Result<Option<Action>> {
+        self.require_execution(execution, run)?;
         let entry = storage(|| {
             let table = self.write.open_table(OPEN_ACTIONS)?;
             if table.len()? > 1 {
@@ -220,13 +253,15 @@ impl Edit<'_> {
                 .transpose()?
                 .and_then(|(id, owner)| (owner.value() == run).then(|| id.value().to_owned())))
         })?;
-        entry.map(|id| self.browser_action(scope, &id)).transpose()
+        entry
+            .map(|id| self.browser_action(execution, &id))
+            .transpose()
     }
 
-    pub(crate) fn uncertain_browser(&self, scope: &Selection, run: &str) -> Result<bool> {
+    pub(crate) fn uncertain_browser(&self, execution: &Execution, run: &str) -> Result<bool> {
         self.checked((|| {
-            self.require_selection(scope)?;
-            self.run(scope, run)?;
+            self.require_execution(execution, run)?;
+            self.run(execution, run)?;
             let id = storage(|| {
                 Ok(self
                     .write
@@ -235,7 +270,7 @@ impl Edit<'_> {
                     .map(|v| v.value().to_owned()))
             })?;
             let Some(id) = id else { return Ok(false) };
-            let action = self.browser_action(scope, &id)?;
+            let action = self.browser_action(execution, &id)?;
             storage(|| {
                 if action.proposal.run == run
                     && matches!(

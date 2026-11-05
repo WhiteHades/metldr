@@ -175,9 +175,14 @@ fn native_admission_binding_continuation_and_terminal_output_persist() -> Result
         let run_number = run_id.rsplit(':').next().unwrap().parse::<u64>()?;
         assert_eq!(run_number, workflow_number + 1);
 
-        let stale = history.edit(|edit| edit.native_task(&selection, &run_id))?;
+        let stale = history.edit(|edit| {
+            edit.current_execution(&selection, &run_id)
+                .and_then(|execution| edit.native_task(&execution, &run_id))
+        })?;
         history.edit(|edit| {
-            let mut task = edit.native_task(&selection, &run_id)?;
+            let mut task = edit
+                .current_execution(&selection, &run_id)
+                .and_then(|execution| edit.native_task(&execution, &run_id))?;
             match &mut task.launch {
                 Launch::Codex { selection, .. } => {
                     if let Launch::Codex {
@@ -239,25 +244,34 @@ fn native_admission_binding_continuation_and_terminal_output_persist() -> Result
                     value.revision += 1;
                 }
             }
-            edit.put_native(&selection, task)
+            edit.current_execution(&selection, &task.run.id)
+                .and_then(|execution| edit.put_native(&execution, task))
         })?;
         assert!(
             history
-                .edit(|edit| edit.put_native(&selection, stale))
+                .edit(|edit| edit
+                    .current_execution(&selection, &stale.run.id)
+                    .and_then(|execution| edit.put_native(&execution, stale)))
                 .is_err()
         );
 
         history.edit(|edit| {
-            let mut task = edit.native_task(&selection, &run_id)?;
+            let mut task = edit
+                .current_execution(&selection, &run_id)
+                .and_then(|execution| edit.native_task(&execution, &run_id))?;
             task.run.output.change(Change::Final {
                 key: MessageKey::native(format!("native-{index}")).unwrap(),
                 text: format!("native output {index}"),
             })?;
             task.run.output.end(Ending::Complete)?;
             task.run.status = Status::Complete;
-            edit.put_native(&selection, task)
+            edit.current_execution(&selection, &task.run.id)
+                .and_then(|execution| edit.put_native(&execution, task))
         })?;
-        let completed = history.edit(|edit| edit.native_task(&selection, &run_id))?;
+        let completed = history.edit(|edit| {
+            edit.current_execution(&selection, &run_id)
+                .and_then(|execution| edit.native_task(&execution, &run_id))
+        })?;
         saved.push((workflow_id, run_id, completed));
     }
 
@@ -305,11 +319,16 @@ fn native_admission_binding_continuation_and_terminal_output_persist() -> Result
             1
         );
 
-        let mut rewrite = history.edit(|edit| edit.native_task(&selection, run_id))?;
+        let mut rewrite = history.edit(|edit| {
+            edit.current_execution(&selection, run_id)
+                .and_then(|execution| edit.native_task(&execution, run_id))
+        })?;
         rewrite.run.status = Status::Failed;
         assert!(
             history
-                .edit(|edit| edit.put_native(&selection, rewrite))
+                .edit(|edit| edit
+                    .current_execution(&selection, &rewrite.run.id)
+                    .and_then(|execution| edit.put_native(&execution, rewrite)))
                 .is_err()
         );
     }
@@ -371,7 +390,9 @@ fn native_admission_binding_continuation_and_terminal_output_persist() -> Result
             Ok(run_id)
         })?;
         history.edit(|edit| {
-            let mut task = edit.native_task(&selection, &next_id)?;
+            let mut task = edit
+                .current_execution(&selection, &next_id)
+                .and_then(|execution| edit.native_task(&execution, &next_id))?;
             match (&mut task.launch, &previous.launch) {
                 (Launch::Codex { selection, .. }, Launch::Codex { selection: old, .. }) => {
                     *selection = old.clone()
@@ -386,30 +407,43 @@ fn native_admission_binding_continuation_and_terminal_output_persist() -> Result
                 NativeWorkflow::Codex(w) => w.revision += 1,
                 NativeWorkflow::OpenCode(w) => w.revision += 1,
             }
-            edit.put_native(&selection, task)
+            edit.current_execution(&selection, &task.run.id)
+                .and_then(|execution| edit.put_native(&execution, task))
         })?;
         if index == 0 {
             history.edit(|edit| {
-                let mut run = edit.run(&selection, &next_id)?;
+                let mut run = edit
+                    .current_execution(&selection, &next_id)
+                    .and_then(|execution| edit.run(&execution, &next_id))?;
                 run.status = Status::StopRequested;
-                edit.put_run(&selection, run)
+                edit.current_execution(&selection, &run.id)
+                    .and_then(|execution| edit.put_run(&execution, run))
             })?;
             assert_eq!(
-                history.edit(|edit| edit.run(&selection, &next_id))?.status,
+                history
+                    .edit(|edit| edit
+                        .current_execution(&selection, &next_id)
+                        .and_then(|execution| edit.run(&execution, &next_id)))?
+                    .status,
                 Status::StopRequested
             );
             assert!(
                 history
                     .edit(|edit| {
-                        let mut run = edit.run(&selection, &next_id)?;
+                        let mut run = edit
+                            .current_execution(&selection, &next_id)
+                            .and_then(|execution| edit.run(&execution, &next_id))?;
                         run.status = Status::Running;
-                        edit.put_run(&selection, run)
+                        edit.current_execution(&selection, &run.id)
+                            .and_then(|execution| edit.put_run(&execution, run))
                     })
                     .is_err()
             );
         }
         history.edit(|edit| {
-            let mut run = edit.run(&selection, &next_id)?;
+            let mut run = edit
+                .current_execution(&selection, &next_id)
+                .and_then(|execution| edit.run(&execution, &next_id))?;
             run.output.change(Change::Final {
                 key: MessageKey::native("followup".into()).unwrap(),
                 text: "continued output".into(),
@@ -419,19 +453,26 @@ fn native_admission_binding_continuation_and_terminal_output_persist() -> Result
             } else {
                 Status::Complete
             };
-            edit.put_run(&selection, run)
+            edit.current_execution(&selection, &run.id)
+                .and_then(|execution| edit.put_run(&execution, run))
         })?;
         if index == 0 {
             history.edit(|edit| {
-                let mut task = edit.native_task(&selection, &next_id)?;
+                let mut task = edit
+                    .current_execution(&selection, &next_id)
+                    .and_then(|execution| edit.native_task(&execution, &next_id))?;
                 let NativeWorkflow::Pi(workflow) = &mut task.workflow else {
                     unreachable!()
                 };
                 assert_eq!(workflow.revision, 5);
                 workflow.binding.block_recovery();
-                edit.put_native(&selection, task)
+                edit.current_execution(&selection, &task.run.id)
+                    .and_then(|execution| edit.put_native(&execution, task))
             })?;
-            let blocked = history.edit(|edit| edit.native_task(&selection, &next_id))?;
+            let blocked = history.edit(|edit| {
+                edit.current_execution(&selection, &next_id)
+                    .and_then(|execution| edit.native_task(&execution, &next_id))
+            })?;
             let NativeWorkflow::Pi(workflow) = &blocked.workflow else {
                 unreachable!()
             };
@@ -477,7 +518,9 @@ fn native_admission_binding_continuation_and_terminal_output_persist() -> Result
         );
         assert_eq!(
             history
-                .edit(|edit| edit.run(&selection, previous_id))?
+                .edit(|edit| edit
+                    .current_execution(&selection, previous_id)
+                    .and_then(|execution| edit.run(&execution, previous_id)))?
                 .output
                 .text(),
             format!("native output {index}")
@@ -490,7 +533,9 @@ fn native_admission_binding_continuation_and_terminal_output_persist() -> Result
         assert_ne!(&latest, old_id);
         assert_eq!(
             history
-                .edit(|edit| edit.run(&selection, &latest))?
+                .edit(|edit| edit
+                    .current_execution(&selection, &latest)
+                    .and_then(|execution| edit.run(&execution, &latest)))?
                 .output
                 .text(),
             "continued output"

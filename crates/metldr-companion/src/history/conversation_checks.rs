@@ -148,7 +148,8 @@ fn actual_conversations_keep_receipts_scopes_settings_and_native_history() -> Re
     history.edit(|tx| {
         let mut complete = run.clone();
         complete.status = Status::Complete;
-        tx.put_run(&b, complete)
+        tx.current_execution(&b, &complete.id)
+            .and_then(|execution| tx.put_run(&execution, complete))
     })?;
     let mut current = select(&mut history, &b, "select-a", &original.conversation)?;
     assert_ne!(current.epoch, original.epoch);
@@ -270,7 +271,11 @@ fn actual_conversations_keep_receipts_scopes_settings_and_native_history() -> Re
     assert_eq!(retry.original, b);
     assert_eq!(retry.current, current);
     current = select(&mut reopened, &current, "reopen-a", &original.conversation)?;
-    let task = reopened.edit(|tx| tx.native_task(&current, &legacy.view.runs[9].id))?;
+    let task = reopened.edit(|tx| {
+        let id = &legacy.view.runs[9].id;
+        tx.current_execution(&current, id)
+            .and_then(|execution| tx.native_task(&execution, id))
+    })?;
     let super::NativeWorkflow::Codex(workflow) = task.workflow else {
         panic!("wrong native family")
     };
@@ -278,7 +283,11 @@ fn actual_conversations_keep_receipts_scopes_settings_and_native_history() -> Re
         workflow.binding.resume()?.unwrap().as_str(),
         "thread-fixture-1"
     );
-    let unknown = reopened.edit(|tx| tx.native_task(&current, &legacy.view.runs[10].id))?;
+    let unknown = reopened.edit(|tx| {
+        let id = &legacy.view.runs[10].id;
+        tx.current_execution(&current, id)
+            .and_then(|execution| tx.native_task(&execution, id))
+    })?;
     let super::NativeWorkflow::OpenCode(workflow) = unknown.workflow else {
         panic!("wrong native family")
     };

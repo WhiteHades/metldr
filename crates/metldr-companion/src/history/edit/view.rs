@@ -1,4 +1,4 @@
-use super::{Edit, Selection, record, storage};
+use super::{Edit, Execution, Selection, record, storage};
 use crate::{
     Result,
     agent_model::Launch,
@@ -39,6 +39,12 @@ impl Edit<'_> {
 
     pub(crate) fn changed(&self) -> bool {
         self.changed
+    }
+
+    pub(crate) fn refresh_execution(&mut self, execution: &Execution) -> Result<()> {
+        self.require_execution(execution, execution.run())?;
+        self.changed = true;
+        Ok(())
     }
 
     pub(crate) fn refresh_view(
@@ -142,7 +148,8 @@ impl Edit<'_> {
             let mut runs = Vec::new();
             let mut launches = BTreeMap::new();
             if let Some(id) = run {
-                let value = self.run(expected, id)?;
+                let execution = self.current_execution(expected, id)?;
+                let value = self.run(&execution, id)?;
                 let launch: Record<Launch> = storage(|| {
                     record(self.write, LAUNCHES, id)?
                         .ok_or_else(|| "projected launch is absent".into())

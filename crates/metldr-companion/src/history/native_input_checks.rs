@@ -84,7 +84,10 @@ fn make_owner_with_binding(
     let path = directory.0.join("history.redb");
     let mut history = History::import_new(&path, &serde_json::to_vec(&original)?, disk.lease())?;
     let scope = history.selection()?;
-    let seeded = history.edit(|edit| edit.native_task(&scope, &run))?;
+    let seeded = history.edit(|edit| {
+        edit.current_execution(&scope, &run)
+            .and_then(|execution| edit.native_task(&execution, &run))
+    })?;
     assert_eq!(seeded.run.status, Status::Running);
     assert_eq!(seeded.workflow.source().id, seeded.run.source);
     let state = history.edit(|edit| edit.project(&scope, Some(&run)))?;
@@ -154,11 +157,10 @@ fn native_corrections_fence_duplicates_stop_and_uncertain_session_reuse() -> Res
         owner.correct_native("correction-1", &scope, &run, "Keep the exact correction.")?;
         assert_eq!(sequence(&owner)?, admitted);
         assert!(receiver.take()?.is_none());
-        let admitted_task = owner
-            .record_history
-            .as_mut()
-            .unwrap()
-            .edit(|edit| edit.native_task(&scope, &run))?;
+        let admitted_task = owner.record_history.as_mut().unwrap().edit(|edit| {
+            edit.current_execution(&scope, &run)
+                .and_then(|execution| edit.native_task(&execution, &run))
+        })?;
         let super::NativeWorkflow::Pi(workflow) = admitted_task.workflow else {
             panic!("Pi fixture")
         };
@@ -194,11 +196,10 @@ fn native_corrections_fence_duplicates_stop_and_uncertain_session_reuse() -> Res
             assert!(!reply.recv()?);
             owner.agent_settled(&run, crate::agent::Outcome::Cancelled, false, true)?;
         }
-        let saved = owner
-            .record_history
-            .as_mut()
-            .unwrap()
-            .edit(|edit| edit.native_task(&scope, &run))?;
+        let saved = owner.record_history.as_mut().unwrap().edit(|edit| {
+            edit.current_execution(&scope, &run)
+                .and_then(|execution| edit.native_task(&execution, &run))
+        })?;
         assert_eq!(saved.run.corrections.len(), 1);
         assert_eq!(saved.run.corrections[0].text, "Keep the exact correction.");
         assert!(matches!(
@@ -359,11 +360,10 @@ fn native_input_records_reserve_publish_cancel_and_keep_payloads_volatile() -> R
     );
     assert_eq!(sequence(&owner)?, first_sequence + 34);
     let scope = owner.record_history.as_ref().unwrap().selection()?;
-    let saved = owner
-        .record_history
-        .as_mut()
-        .unwrap()
-        .edit(|edit| edit.native_task(&scope, &run))?;
+    let saved = owner.record_history.as_mut().unwrap().edit(|edit| {
+        edit.current_execution(&scope, &run)
+            .and_then(|execution| edit.native_task(&execution, &run))
+    })?;
     assert!(serde_json::to_string(&saved.run)?.find("yes").is_none());
     assert!(!frames.lock().unwrap().is_empty());
     owner.pi_ui_change(
@@ -391,11 +391,10 @@ fn native_input_records_reserve_publish_cancel_and_keep_payloads_volatile() -> R
             .stop
             .load(std::sync::atomic::Ordering::Acquire)
     );
-    let stopped = owner
-        .record_history
-        .as_mut()
-        .unwrap()
-        .edit(|edit| edit.native_task(&scope, &run))?;
+    let stopped = owner.record_history.as_mut().unwrap().edit(|edit| {
+        edit.current_execution(&scope, &run)
+            .and_then(|execution| edit.native_task(&execution, &run))
+    })?;
     assert_eq!(stopped.run.status, Status::StopRequested);
     let before_display = sequence(&owner)?;
     owner.pi_ui_change(
@@ -412,9 +411,12 @@ fn native_input_records_reserve_publish_cancel_and_keep_payloads_volatile() -> R
     let (_directory, mut stale, _, run) = make_owner("pi")?;
     let scope = stale.record_history.as_ref().unwrap().selection()?;
     stale.record_history.as_mut().unwrap().edit(|edit| {
-        let mut task = edit.native_task(&scope, &run)?;
+        let mut task = edit
+            .current_execution(&scope, &run)
+            .and_then(|execution| edit.native_task(&execution, &run))?;
         task.run.status = Status::StopRequested;
-        edit.put_native(&scope, task)
+        edit.current_execution(&scope, &task.run.id)
+            .and_then(|execution| edit.put_native(&execution, task))
     })?;
     let stopped_sequence = sequence(&stale)?;
     stale.pi_ui_change(
@@ -467,7 +469,9 @@ fn native_input_records_reserve_publish_cancel_and_keep_payloads_volatile() -> R
     let scope = reopened.selection()?;
     assert_eq!(
         reopened
-            .edit(|edit| edit.native_task(&scope, &run))?
+            .edit(|edit| edit
+                .current_execution(&scope, &run)
+                .and_then(|execution| edit.native_task(&execution, &run)))?
             .run
             .status,
         Status::Running
@@ -620,7 +624,9 @@ fn native_input_records_reserve_publish_cancel_and_keep_payloads_volatile() -> R
             .record_history
             .as_mut()
             .unwrap()
-            .edit(|edit| edit.native_task(&scope, &run))?
+            .edit(|edit| edit
+                .current_execution(&scope, &run)
+                .and_then(|execution| edit.native_task(&execution, &run)))?
             .run
             .status,
         Status::StopRequested

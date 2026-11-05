@@ -722,7 +722,9 @@ fn recovered_before_ready() -> Result<()> {
     let (disk, mut history) = History::load(directory.0.clone())?;
     let scope = history.selection()?;
     history.edit(|edit| {
-        let task = edit.native_task(&scope, &format!("{store}:09"))?;
+        let run = format!("{store}:09");
+        let execution = edit.current_execution(&scope, &run)?;
+        let task = edit.native_task(&execution, &run)?;
         assert_eq!(task.run.status, Status::Interrupted);
         assert!(
             matches!(task.workflow, super::NativeWorkflow::Pi(ref workflow)

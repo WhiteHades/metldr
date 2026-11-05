@@ -4,7 +4,7 @@ use super::super::artifacts::{
 };
 use super::super::schema::{ARTIFACTS, LAUNCHES, RUNS, Record, encode};
 use super::super::{Artifact, Observed};
-use super::{Edit, Selection, record, storage};
+use super::{Edit, Execution, Selection, record, storage};
 use crate::{
     Result,
     agent_model::Launch,
@@ -18,14 +18,14 @@ use metldr_history_pages::Counter;
 impl Edit<'_> {
     pub(crate) fn accept_table(
         &mut self,
-        scope: &Selection,
+        execution: &Execution,
         run_id: &str,
         call: &str,
         surface_id: &str,
         table: Table,
     ) -> Result<ArtifactId> {
         let result = self.accept_static_inner(
-            scope,
+            execution,
             run_id,
             call,
             surface_id,
@@ -36,14 +36,14 @@ impl Edit<'_> {
 
     pub(crate) fn accept_chart(
         &mut self,
-        scope: &Selection,
+        execution: &Execution,
         run_id: &str,
         call: &str,
         surface_id: &str,
         chart: Chart,
     ) -> Result<ArtifactId> {
         let result = self.accept_static_inner(
-            scope,
+            execution,
             run_id,
             call,
             surface_id,
@@ -54,23 +54,23 @@ impl Edit<'_> {
 
     fn accept_static_inner(
         &mut self,
-        scope: &Selection,
+        execution: &Execution,
         run_id: &str,
         call: &str,
         surface_id: &str,
         content: ArtifactContent,
     ) -> Result<ArtifactId> {
-        self.require_selection(scope)?;
+        self.require_execution(execution, run_id)?;
         valid_call(call)?;
         valid_surface(surface_id)?;
         let before = self.saved_run(run_id)?.ok_or("unknown history run")?;
-        if before.conversation != scope.conversation || before.value.id != run_id {
-            return Err("run belongs to a different conversation".into());
+        if before.conversation != execution.conversation() || before.value.id != run_id {
+            return Err("run belongs to a different execution".into());
         }
-        self.validate_artifacts(scope, &before.value)?;
+        self.validate_artifacts(execution, &before.value)?;
         let launch: Record<Launch> =
             record(self.write, LAUNCHES, run_id)?.ok_or("run has no launch")?;
-        if launch.conversation != scope.conversation || !eligible(&launch.value) {
+        if launch.conversation != execution.conversation() || !eligible(&launch.value) {
             return Err("static artifacts require a Responses text run".into());
         }
         let refs = artifact_refs(&before.value);
@@ -84,7 +84,7 @@ impl Edit<'_> {
                 .ok_or("run artifact reference is absent")?;
             valid_call(&saved.value.call)?;
             valid_surface(&saved.value.surface_id)?;
-            if saved.conversation != scope.conversation
+            if saved.conversation != execution.conversation()
                 || saved.value.id != *id
                 || saved.value.run != run_id
                 || calls.contains(&saved.value.call)
@@ -123,7 +123,7 @@ impl Edit<'_> {
         };
         storage(|| {
             let value = Record {
-                conversation: scope.conversation.clone(),
+                conversation: execution.conversation().to_owned(),
                 revision: 1,
                 value: artifact,
             };
@@ -139,55 +139,61 @@ impl Edit<'_> {
         })?;
         let mut next = before.value;
         next.output.change(change)?;
-        self.put_run(scope, next)?;
+        self.put_run(execution, next)?;
         Ok(id)
     }
 
     pub(crate) fn preview_generated(
         &mut self,
-        scope: &Selection,
+        execution: &Execution,
         run_id: &str,
         call: &str,
         surface_id: &str,
         source: GeneratedAnswer,
     ) -> Result<ArtifactId> {
-        let result = self.generated_inner(scope, run_id, call, surface_id, source, false);
+        let result = self.generated_inner(execution, run_id, call, surface_id, source, false);
         self.checked(result)
     }
 
     pub(crate) fn complete_generated(
         &mut self,
-        scope: &Selection,
+        execution: &Execution,
         run_id: &str,
         call: &str,
         surface_id: &str,
         source: CompleteSource,
     ) -> Result<ArtifactId> {
-        let result =
-            self.generated_inner(scope, run_id, call, surface_id, source.into_answer(), true);
+        let result = self.generated_inner(
+            execution,
+            run_id,
+            call,
+            surface_id,
+            source.into_answer(),
+            true,
+        );
         self.checked(result)
     }
 
     fn generated_inner(
         &mut self,
-        scope: &Selection,
+        execution: &Execution,
         run_id: &str,
         call: &str,
         surface_id: &str,
         source: GeneratedAnswer,
         complete: bool,
     ) -> Result<ArtifactId> {
-        self.require_selection(scope)?;
+        self.require_execution(execution, run_id)?;
         valid_call(call)?;
         valid_surface(surface_id)?;
         let before = self.saved_run(run_id)?.ok_or("unknown history run")?;
-        if before.conversation != scope.conversation || before.value.id != run_id {
-            return Err("run belongs to a different conversation".into());
+        if before.conversation != execution.conversation() || before.value.id != run_id {
+            return Err("run belongs to a different execution".into());
         }
-        self.validate_artifacts(scope, &before.value)?;
+        self.validate_artifacts(execution, &before.value)?;
         let launch: Record<Launch> =
             record(self.write, LAUNCHES, run_id)?.ok_or("run has no launch")?;
-        if launch.conversation != scope.conversation || !eligible(&launch.value) {
+        if launch.conversation != execution.conversation() || !eligible(&launch.value) {
             return Err("generated artifacts require a Responses text run".into());
         }
         let refs = artifact_refs(&before.value);
@@ -198,7 +204,7 @@ impl Edit<'_> {
             let mut saved: Record<Artifact> = record(self.write, ARTIFACTS, id.as_str())?
                 .ok_or("run artifact reference is absent")?;
             valid_id(&self.profile, id.as_str())?;
-            if saved.conversation != scope.conversation
+            if saved.conversation != execution.conversation()
                 || saved.value.id != *id
                 || saved.value.run != run_id
             {
@@ -266,7 +272,7 @@ impl Edit<'_> {
                     .insert(id.as_str(), encode(&saved)?.as_slice())?;
                 Ok(())
             })?;
-            self.put_run(scope, next)?;
+            self.put_run(execution, next)?;
             return Ok(id.clone());
         }
         if complete {
@@ -297,7 +303,7 @@ impl Edit<'_> {
         })?;
         storage(|| {
             let value = Record {
-                conversation: scope.conversation.clone(),
+                conversation: execution.conversation().to_owned(),
                 revision: 1,
                 value: artifact,
             };
@@ -311,7 +317,7 @@ impl Edit<'_> {
             }
             Ok(())
         })?;
-        self.put_run(scope, next)?;
+        self.put_run(execution, next)?;
         Ok(id)
     }
 
@@ -331,7 +337,8 @@ impl Edit<'_> {
             let run = self
                 .saved_run(&saved.value.run)?
                 .ok_or("artifact run is absent")?;
-            self.validate_artifacts(scope, &run.value)?;
+            let execution = self.current_execution(scope, &saved.value.run)?;
+            self.validate_artifacts(&execution, &run.value)?;
             let launch: Record<Launch> = record(self.write, LAUNCHES, &saved.value.run)?
                 .ok_or("artifact run launch is absent")?;
             if run.conversation != scope.conversation
@@ -364,9 +371,9 @@ impl Edit<'_> {
         })())
     }
 
-    pub(crate) fn validate_artifacts(&self, scope: &Selection, run: &Run) -> Result<()> {
+    pub(crate) fn validate_artifacts(&self, execution: &Execution, run: &Run) -> Result<()> {
         self.checked((|| {
-            self.require_selection(scope)?;
+            self.require_execution(execution, &run.id)?;
             let refs = artifact_refs(run);
             if refs.is_empty() {
                 return Ok(());
@@ -378,9 +385,9 @@ impl Edit<'_> {
                 record(self.write, RUNS, &run.id)?.ok_or("unknown history run")?;
             let launch: Record<Launch> =
                 record(self.write, LAUNCHES, &run.id)?.ok_or("run has no launch")?;
-            if saved_run.conversation != scope.conversation
+            if saved_run.conversation != execution.conversation()
                 || saved_run.value.id != run.id
-                || launch.conversation != scope.conversation
+                || launch.conversation != execution.conversation()
                 || !eligible(&launch.value)
             {
                 return if refs.is_empty() {
@@ -398,7 +405,7 @@ impl Edit<'_> {
                 valid_surface(&artifact.value.surface_id)?;
                 if artifact.value.id != id
                     || artifact.value.run != run.id
-                    || artifact.conversation != scope.conversation
+                    || artifact.conversation != execution.conversation()
                     || artifact
                         .value
                         .presentation_for_run(artifact.revision, run.status)?

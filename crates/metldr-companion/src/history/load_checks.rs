@@ -149,7 +149,8 @@ fn native_group(
             launch,
             workflow,
         )?;
-        let mut task = edit.native_task(scope, &run_id)?;
+        let execution = edit.current_execution(scope, &run_id)?;
+        let mut task = edit.native_task(&execution, &run_id)?;
         match &mut task.workflow {
             NativeWorkflow::Pi(value) => {
                 let id = format!("load-pi-{group}");
@@ -199,9 +200,9 @@ fn native_group(
                 *selection = Some(selected);
             }
         }
-        edit.put_native(scope, task)?;
+        edit.put_native(&execution, task)?;
         let (action, created) = edit.propose_browser(
-            scope,
+            &execution,
             Proposal {
                 run: run_id.clone(),
                 tool_use_id: "load-field-call".into(),
@@ -226,7 +227,7 @@ fn native_group(
         if !created {
             return Err("load browser proposal unexpectedly duplicated".into());
         }
-        let rejected = edit.decide_browser(scope, &action.id, action.revision, false)?;
+        let rejected = edit.decide_browser(&execution, &action.id, action.revision, false)?;
         if !matches!(
             rejected.state,
             crate::browser_action::Phase::Settled {
@@ -235,13 +236,13 @@ fn native_group(
         ) {
             return Err("load browser action was not rejected".into());
         }
-        let mut task = edit.native_task(scope, &run_id)?;
+        let mut task = edit.native_task(&execution, &run_id)?;
         task.run.output.change(metldr_conversation::Change::Final {
             key: metldr_conversation::MessageKey::native("load-message".into())?,
             text: format!("native {group}.{kind}"),
         })?;
         task.run.status = Status::Complete;
-        edit.put_native(scope, task)?;
+        edit.put_native(&execution, task)?;
         runs.push(run_id);
     }
     Ok(runs)
@@ -387,14 +388,17 @@ fn history_load_real_relationships() -> Result<()> {
                         input_digest: format!("{:064x}", group * 16 + item + 1),
                     },
                 )?;
-                let mut run = edit.run(&scope, &id)?;
+                let mut run = edit
+                    .current_execution(&scope, &id)
+                    .and_then(|execution| edit.run(&execution, &id))?;
                 run.output
                     .change(metldr_conversation::Change::FlatAppend(text(
                         &format!("Summary {group}.{item}: "),
                         bytes,
                     )))?;
                 run.status = Status::Complete;
-                edit.put_run(&scope, run)?;
+                edit.current_execution(&scope, &run.id)
+                    .and_then(|execution| edit.put_run(&execution, run))?;
                 latest_fixtures.push(id);
             }
             for item in 0..6 {
@@ -423,14 +427,18 @@ fn history_load_real_relationships() -> Result<()> {
                         },
                     },
                 )?;
-                let mut run = edit.run(&scope, &id)?;
+                let mut run = edit
+                    .current_execution(&scope, &id)
+                    .and_then(|execution| edit.run(&execution, &id))?;
                 run.output.change(metldr_conversation::Change::Final {
                     key: metldr_conversation::MessageKey::observed(1)?,
                     text: text(&format!("Answer {group}.{item}: "), bytes),
                 })?;
-                edit.put_run(&scope, run)?;
+                edit.current_execution(&scope, &run.id)
+                    .and_then(|execution| edit.put_run(&execution, run))?;
+                let execution = edit.current_execution(&scope, &id)?;
                 edit.accept_chart(
-                    &scope,
+                    &execution,
                     &id,
                     &format!("load-chart-{group}-{item}"),
                     "load-surface",
@@ -446,7 +454,7 @@ fn history_load_real_relationships() -> Result<()> {
                 )?;
                 latest_artifact = edit
                     .accept_table(
-                        &scope,
+                        &execution,
                         &id,
                         &format!("load-table-{group}-{item}"),
                         "load-surface",
@@ -459,9 +467,9 @@ fn history_load_real_relationships() -> Result<()> {
                     )?
                     .as_str()
                     .into();
-                let mut run = edit.run(&scope, &id)?;
+                let mut run = edit.run(&execution, &id)?;
                 run.status = Status::Complete;
-                edit.put_run(&scope, run)?;
+                edit.put_run(&execution, run)?;
                 latest_response = id.clone();
                 latest_text.push(id);
             }
@@ -606,7 +614,9 @@ fn history_load_real_relationships() -> Result<()> {
         record_query(&mut history, "native_task", |history| {
             history.edit(|edit| {
                 for id in &latest_native {
-                    let task = edit.native_task(&scope, id)?;
+                    let task = edit
+                        .current_execution(&scope, id)
+                        .and_then(|execution| edit.native_task(&execution, id))?;
                     if task.run.id != *id || task.run.status != Status::Complete {
                         return Err("native task identity or status differs".into());
                     }
@@ -637,7 +647,11 @@ fn history_load_real_relationships() -> Result<()> {
             history.edit(|edit| {
                 for id in &latest_native {
                     let action = edit
-                        .browser_by_tool(&scope, id, "load-field-call")?
+                        .browser_by_tool(
+                            &edit.current_execution(&scope, id)?,
+                            id,
+                            "load-field-call",
+                        )?
                         .ok_or("browser proposal lookup absent")?;
                     if action.proposal.run != *id {
                         return Err("browser proposal ownership differs".into());

@@ -1,4 +1,4 @@
-use super::{Edit, NativeWorkflow, Selection, record, storage};
+use super::{Edit, Execution, NativeWorkflow, Selection, record, storage};
 use crate::{
     Result,
     agent_model::Launch,
@@ -12,8 +12,7 @@ pub(crate) struct NativeTask {
     pub launch: Launch,
     pub workflow: NativeWorkflow,
     pub(super) versions: [u64; 3],
-    pub(super) identity: String,
-    pub(super) scope: Selection,
+    pub(super) execution: Execution,
 }
 
 pub(super) fn workflow_id(launch: &Launch) -> Result<&str> {
@@ -26,32 +25,35 @@ pub(super) fn workflow_id(launch: &Launch) -> Result<&str> {
 }
 
 impl Edit<'_> {
-    pub(crate) fn native_task(&self, scope: &Selection, id: &str) -> Result<NativeTask> {
+    pub(crate) fn native_task(&self, execution: &Execution, id: &str) -> Result<NativeTask> {
         let result = (|| {
-            self.native_initial_target(scope, id)?;
-            self.native_task_data(scope, id)
+            self.require_execution(execution, id)?;
+            self.native_initial_target(execution, id)?;
+            self.native_task_data(execution, id)
         })();
         self.checked(result)
     }
 
-    pub(super) fn native_task_data(&self, scope: &Selection, id: &str) -> Result<NativeTask> {
-        self.require_selection(scope)?;
+    pub(super) fn native_task_data(&self, execution: &Execution, id: &str) -> Result<NativeTask> {
+        self.require_execution(execution, id)?;
         storage(|| {
             let run = self.saved_run(id)?.ok_or("native run is absent")?;
             let launch: Record<Launch> =
                 record(self.write, LAUNCHES, id)?.ok_or("native launch is absent")?;
-            if run.conversation != scope.conversation || launch.conversation != scope.conversation {
+            if run.conversation != execution.conversation
+                || launch.conversation != execution.conversation
+            {
                 return Err("native task ownership differs".into());
             }
             let name = workflow_id(&launch.value)?;
-            let workflow = self.load_native_workflow(scope, name, &launch.value)?;
+            let workflow =
+                self.load_native_workflow(&execution.conversation, name, &launch.value)?;
             let task = NativeTask {
                 run: run.value,
                 launch: launch.value,
                 workflow: workflow.value,
                 versions: [run.revision, launch.revision, workflow.revision],
-                identity: id.into(),
-                scope: scope.clone(),
+                execution: execution.clone(),
             };
             self.native_state(&task)?;
             Ok(task)
@@ -60,7 +62,7 @@ impl Edit<'_> {
 
     pub(super) fn load_native_workflow(
         &self,
-        scope: &Selection,
+        conversation: &str,
         id: &str,
         launch: &Launch,
     ) -> Result<Record<NativeWorkflow>> {
@@ -85,10 +87,10 @@ impl Edit<'_> {
                 _ => return Err("task has no native workflow".into()),
             };
             let source = saved.value.source();
-            if saved.conversation != scope.conversation
+            if saved.conversation != conversation
                 || !self.valid_id(id)
                 || self
-                    .source_in(&scope.conversation, &source.id)?
+                    .source_in(conversation, &source.id)?
                     .is_none_or(|known| known.page != source.page)
             {
                 return Err("native workflow ownership or source differs".into());
@@ -122,10 +124,14 @@ impl Edit<'_> {
         };
         if task.workflow.last_run() != task.run.id {
             let id = task.workflow.last_run();
-            let run = self.run(&super::selection(&self.profile), id)?;
+            let execution = self.execution(id)?;
+            if execution.conversation != task.execution.conversation {
+                return Err("native last run ownership differs".into());
+            }
+            let run = self.run(&execution, id)?;
             let launch: Record<Launch> =
                 record(self.write, LAUNCHES, id)?.ok_or("native workflow last launch is absent")?;
-            if launch.conversation != self.profile.selected {
+            if launch.conversation != task.execution.conversation {
                 return Err("native last launch ownership differs".into());
             }
             state.view.runs.push(run);
@@ -143,14 +149,23 @@ impl Edit<'_> {
         Ok(state)
     }
 
+    pub(crate) fn project_execution(&self, execution: &Execution) -> Result<Store> {
+        self.checked((|| {
+            let task = self.native_task(execution, execution.run())?;
+            let mut state = self.native_state(&task)?;
+            state.view.sequence = self
+                .profile
+                .sequence
+                .checked_add(u64::from(self.changed))
+                .ok_or("native view sequence exhausted")?;
+            state.validate()?;
+            Ok(state)
+        })())
+    }
+
     pub(super) fn project_native(&self, scope: &Selection, id: &str) -> Result<Store> {
-        let task = self.native_task(scope, id)?;
-        let mut state = self.native_state(&task)?;
-        state.view.sequence = self
-            .profile
-            .sequence
-            .checked_add(u64::from(self.changed))
-            .ok_or("native view sequence exhausted")?;
+        let execution = self.current_execution(scope, id)?;
+        let mut state = self.project_execution(&execution)?;
         state.view.source = self.selected_source(scope)?;
         state.validate()?;
         Ok(state)
@@ -158,18 +173,24 @@ impl Edit<'_> {
 
     pub(super) fn save_native_workflow(
         &self,
-        scope: &Selection,
+        conversation: &str,
         name: &str,
         workflow: &NativeWorkflow,
         revision: u64,
     ) -> Result<()> {
-        super::native_choices::update_index(self.write, &self.profile, scope, name, workflow)?;
+        super::native_choices::update_index(
+            self.write,
+            &self.profile,
+            conversation,
+            name,
+            workflow,
+        )?;
         macro_rules! save {
             ($table:ident, $value:expr) => {{
                 self.write.open_table($table)?.insert(
                     name,
                     encode(&Record {
-                        conversation: scope.conversation.clone(),
+                        conversation: conversation.to_owned(),
                         revision,
                         value: $value,
                     })?

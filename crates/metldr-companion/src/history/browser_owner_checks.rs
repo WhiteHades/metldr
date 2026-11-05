@@ -224,7 +224,10 @@ fn approve_dispatch_settle(
 fn saved_action(owner: &mut Owner, id: &str) -> crate::Result<crate::browser_action::Action> {
     let history = owner.record_history.as_mut().unwrap();
     let selection = history.selection()?;
-    history.edit(|edit| edit.browser_action(&selection, id))
+    history.edit(|edit| {
+        edit.current_action_execution(&selection, id)
+            .and_then(|execution| edit.browser_action(&execution, id))
+    })
 }
 
 #[test]
@@ -319,7 +322,9 @@ fn actual_owner_browser_lifecycle_is_record_durable_and_fails_closed() -> crate:
     let mut history = History::open(&history_path, owner.disk.lease())?;
     let scope = history.selection()?;
     let (latest, target) = history.edit(|edit| {
-        let task = edit.native_task(&scope, &run)?;
+        let task = edit
+            .current_execution(&scope, &run)
+            .and_then(|execution| edit.native_task(&execution, &run))?;
         let Launch::Codex { workflow, .. } = task.launch else {
             return Err("fixture launch changed".into());
         };
@@ -481,7 +486,12 @@ fn actual_owner_browser_lifecycle_is_record_durable_and_fails_closed() -> crate:
     let mut reopened = History::open(&history_path, failed_owner.disk.lease())?;
     let selection = reopened.selection()?;
     let durable = reopened
-        .edit(|edit| edit.browser_by_tool(&selection, &failed_run, "publication-fails"))?
+        .edit(|edit| {
+            edit.current_execution(&selection, &failed_run)
+                .and_then(|execution| {
+                    edit.browser_by_tool(&execution, &failed_run, "publication-fails")
+                })
+        })?
         .ok_or("published proposal was not durable")?;
     assert!(matches!(durable.state, Phase::Pending));
 

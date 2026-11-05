@@ -1,4 +1,4 @@
-use super::{Edit, Selection, record, storage};
+use super::{Edit, Execution, record, storage};
 use crate::{
     Result,
     agent_model::Launch,
@@ -11,22 +11,22 @@ use redb::ReadableTableMetadata;
 impl Edit<'_> {
     pub(crate) fn propose_browser(
         &mut self,
-        scope: &Selection,
+        execution: &Execution,
         proposal: Proposal,
     ) -> Result<(Action, bool)> {
         let result = (|| {
-            self.require_selection(scope)?;
+            self.require_execution(execution, &proposal.run)?;
             proposal.validate()?;
             if let Some(action) =
-                self.browser_by_tool(scope, &proposal.run, &proposal.tool_use_id)?
+                self.browser_by_tool(execution, &proposal.run, &proposal.tool_use_id)?
             {
                 if action.proposal != proposal {
                     return Err("browser tool identity was reused with a changed proposal".into());
                 }
                 return Ok((action, false));
             }
-            let initial = self.browser_running(scope, &proposal.run)?;
-            let navigation = self.browser_navigation(scope, &proposal.run)?;
+            let initial = self.browser_running(execution, &proposal.run)?;
+            let navigation = self.browser_navigation(execution, &proposal.run)?;
             if !proposal.matches_position(
                 Some(&initial),
                 navigation.as_ref().map(|(b, u)| (b, u.as_str())),
@@ -43,7 +43,7 @@ impl Edit<'_> {
                 self.write.open_table(ACTIONS)?.insert(
                     action.id.as_str(),
                     encode(&Record {
-                        conversation: scope.conversation.clone(),
+                        conversation: execution.conversation().to_owned(),
                         revision: 1,
                         value: &action,
                     })?
@@ -79,7 +79,7 @@ impl Edit<'_> {
                 Ok(())
             })?;
             self.changed = true;
-            self.browser_action(scope, &action.id)?;
+            self.browser_action(execution, &action.id)?;
             Ok((action, true))
         })();
         self.checked(result)
@@ -87,93 +87,96 @@ impl Edit<'_> {
 
     pub(crate) fn decide_browser(
         &mut self,
-        scope: &Selection,
+        execution: &Execution,
         id: &str,
         revision: u64,
         approve: bool,
     ) -> Result<Action> {
         let result = (|| {
-            let action = self.browser_action(scope, id)?;
-            self.browser_running(scope, &action.proposal.run)?;
+            let action = self.browser_action(execution, id)?;
+            self.browser_running(execution, execution.run())?;
             let next = action.decide(revision, approve)?;
-            self.put_browser(scope, next)
+            self.put_browser(execution, next)
         })();
         self.checked(result)
     }
 
     pub(crate) fn dispatch_browser(
         &mut self,
-        scope: &Selection,
+        execution: &Execution,
         id: &str,
         revision: u64,
     ) -> Result<Action> {
         let result = (|| {
-            let action = self.browser_action(scope, id)?;
-            self.browser_running(scope, &action.proposal.run)?;
+            let action = self.browser_action(execution, id)?;
+            self.browser_running(execution, execution.run())?;
             let next = action.dispatch(revision)?;
-            self.put_browser(scope, next)
+            self.put_browser(execution, next)
         })();
         self.checked(result)
     }
 
     pub(crate) fn settle_browser(
         &mut self,
-        scope: &Selection,
+        execution: &Execution,
         id: &str,
         revision: u64,
         outcome: Outcome,
     ) -> Result<Action> {
         let result = (|| {
-            let action = self.browser_action(scope, id)?;
+            let action = self.browser_action(execution, id)?;
             let next = action.settle(revision, outcome)?;
-            self.put_browser(scope, next)
+            self.put_browser(execution, next)
         })();
         self.checked(result)
     }
 
     pub(crate) fn prevent_browser(
         &mut self,
-        scope: &Selection,
+        execution: &Execution,
         run: &str,
         reason: &str,
     ) -> Result<()> {
         let result = (|| {
-            self.run(scope, run)?;
-            if let Some(action) = self.browser_open(scope, run)?
+            self.require_execution(execution, run)?;
+            self.run(execution, run)?;
+            if let Some(action) = self.browser_open(execution, run)?
                 && let Some(next) = action.prevent(reason)?
             {
-                self.put_browser(scope, next)?;
+                self.put_browser(execution, next)?;
             }
             Ok(())
         })();
         self.checked(result)
     }
 
-    pub(crate) fn finish_browser(&mut self, scope: &Selection, run: &str) -> Result<bool> {
+    pub(crate) fn finish_browser(&mut self, execution: &Execution, run: &str) -> Result<bool> {
         let result = (|| {
-            self.run(scope, run)?;
-            if let Some(action) = self.browser_open(scope, run)?
+            self.require_execution(execution, run)?;
+            self.run(execution, run)?;
+            if let Some(action) = self.browser_open(execution, run)?
                 && let Some(next) = action.finish(
                     "worker ended before dispatch",
                     "worker ended without a verified browser result",
                 )?
             {
-                self.put_browser(scope, next)?;
+                self.put_browser(execution, next)?;
             }
-            self.uncertain_browser(scope, run)
+            self.uncertain_browser(execution, run)
         })();
         self.checked(result)
     }
 
-    pub(super) fn require_browser_finalized(&self, scope: &Selection, run: &Run) -> Result<()> {
-        if run.status.terminal() && self.browser_open(scope, &run.id)?.is_some() {
+    pub(super) fn require_browser_finalized(&self, execution: &Execution, run: &Run) -> Result<()> {
+        if run.status.terminal() && self.browser_open(execution, &run.id)?.is_some() {
             return Err("browser actions must finish before task completion".into());
         }
         Ok(())
     }
 
-    fn browser_running(&self, scope: &Selection, id: &str) -> Result<Target> {
-        let run = self.run(scope, id)?;
+    fn browser_running(&self, execution: &Execution, id: &str) -> Result<Target> {
+        self.require_execution(execution, id)?;
+        let run = self.run(execution, id)?;
         if run.status != Status::Running {
             return Err("browser run is not active".into());
         }
@@ -183,17 +186,20 @@ impl Edit<'_> {
             launch.value,
             Launch::Pi { .. } | Launch::Codex { .. } | Launch::OpenCode { .. }
         ) && self
-            .selected_source(scope)?
-            .is_none_or(|source| source.id != run.source)
+            .saved_conversation(execution.conversation())?
+            .source
+            .as_deref()
+            != Some(run.source.as_str())
         {
             return Err("browser source is not current".into());
         }
-        self.browser_initial(scope, id)?
+        self.browser_initial(execution, id)?
             .ok_or("browser source content is unavailable".into())
     }
 
-    pub(super) fn put_browser(&mut self, scope: &Selection, next: Action) -> Result<Action> {
-        let before = self.browser_record(scope, &next.id)?;
+    pub(super) fn put_browser(&mut self, execution: &Execution, next: Action) -> Result<Action> {
+        self.require_execution(execution, &next.proposal.run)?;
+        let before = self.browser_record(execution, &next.id)?;
         next.validate()?;
         if next.proposal != before.value.proposal
             || before.value.revision.checked_add(1) != Some(next.revision)
@@ -206,8 +212,8 @@ impl Edit<'_> {
                 outcome: Outcome::Navigated { .. }
             }
         ) {
-            let initial = self.browser_initial(scope, &next.proposal.run)?;
-            let previous = self.browser_navigation(scope, &next.proposal.run)?;
+            let initial = self.browser_initial(execution, &next.proposal.run)?;
+            let previous = self.browser_navigation(execution, &next.proposal.run)?;
             if !next.proposal.matches_position(
                 initial.as_ref(),
                 previous.as_ref().map(|(b, u)| (b, u.as_str())),
@@ -219,7 +225,7 @@ impl Edit<'_> {
             self.write.open_table(ACTIONS)?.insert(
                 next.id.as_str(),
                 encode(&Record {
-                    conversation: scope.conversation.clone(),
+                    conversation: execution.conversation().to_owned(),
                     revision: before
                         .revision
                         .checked_add(1)
@@ -270,7 +276,7 @@ impl Edit<'_> {
                         self.write.open_table(NATIVE_TARGETS)?.insert(
                             next.proposal.run.as_str(),
                             encode(&Record {
-                                conversation: scope.conversation.clone(),
+                                conversation: execution.conversation().to_owned(),
                                 revision: saved
                                     .revision
                                     .checked_add(1)
@@ -293,7 +299,7 @@ impl Edit<'_> {
             Ok(())
         })?;
         self.changed = true;
-        self.browser_action(scope, &next.id)?;
+        self.browser_action(execution, &next.id)?;
         Ok(next)
     }
 }
