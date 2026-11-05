@@ -172,7 +172,9 @@ pub(super) fn render(
         let ready=fingerprint.as_deref()==Some(&w.fingerprint) && state.view.runs.iter().any(|r|r.id==w.last_run && r.status.terminal()) && w.binding.resume().is_ok_and(|id|id.is_some());
         json!({"workflow":id,"source":w.source.id,"profile":w.fingerprint,"revision":w.revision,"ready":ready})
     }).collect());
-    view["native_permissions"] = Value::Array(native_permissions.iter().map(|(request,pending)| {
+    view["native_permissions"] = Value::Array(native_permissions.iter().filter(|(_,pending)| {
+        state.view.runs.iter().any(|run| run.id == pending.run)
+    }).map(|(request,pending)| {
         let details=&pending.details;
         json!({"run":pending.run,"request":request,"agent":details["agent"],"tool":details["tool"],"title":details["title"],"input":details["input"],"options":details["options"]})
     }).collect());
