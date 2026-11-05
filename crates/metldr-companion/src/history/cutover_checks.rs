@@ -229,9 +229,9 @@ fn crash_recovery_at_every_phase() -> Result<()> {
 
         let backup = fs::read(directory.0.join("snapshot.v8.json"))?;
         assert_eq!(backup, legacy);
-        let history = History::migrate(directory.0.clone())?;
+        let (_, history) = History::load(directory.0.clone())?;
         drop(history);
-        let history = History::migrate(directory.0.clone())?;
+        let (_, history) = History::load(directory.0.clone())?;
         let read = history.db.begin_read()?;
         let meta = read.open_table(schema::META)?;
         assert_eq!(meta.get("legacy_snapshot")?.unwrap().value(), legacy);
@@ -258,7 +258,7 @@ fn crash_recovery_at_every_phase() -> Result<()> {
         }
         write.commit()?;
         drop(history);
-        let reopened = History::migrate(directory.0.clone())?;
+        let (_, reopened) = History::load(directory.0.clone())?;
         let read = reopened.db.begin_read()?;
         let meta = read.open_table(schema::META)?;
         assert_eq!(meta.get("cutover_sentinel")?.unwrap().value(), b"preserved");
@@ -276,7 +276,7 @@ fn migration_refuses_ambiguous_state_and_old_writer_conflict() -> Result<()> {
     let mismatch = OwnedDirectory::new();
     let old = snapshot(&mismatch.0)?;
     fs::write(mismatch.0.join("snapshot.v8.json"), b"different backup")?;
-    assert!(History::migrate(mismatch.0.clone()).is_err());
+    assert!(History::load(mismatch.0.clone()).is_err());
     assert!(!mismatch.0.join("history.redb").exists());
     assert_eq!(fs::read(mismatch.0.join("snapshot.json"))?, old);
     assert_eq!(
@@ -294,15 +294,15 @@ fn migration_refuses_ambiguous_state_and_old_writer_conflict() -> Result<()> {
             "legacy_sha256": format!("{:x}", Sha256::digest(&old))
         }))?,
     )?;
-    assert!(History::migrate(marker_only.0.clone()).is_err());
+    assert!(History::load(marker_only.0.clone()).is_err());
     assert!(!marker_only.0.join("history.redb").exists());
 
     let corrupt = OwnedDirectory::new();
     let original = snapshot(&corrupt.0)?;
-    drop(History::migrate(corrupt.0.clone())?);
+    drop(History::load(corrupt.0.clone())?);
     let marker = fs::read(corrupt.0.join("snapshot.json"))?;
     fs::write(corrupt.0.join("history.redb"), b"not a redb database")?;
-    assert!(History::migrate(corrupt.0.clone()).is_err());
+    assert!(History::load(corrupt.0.clone()).is_err());
     assert_eq!(
         fs::read(corrupt.0.join("history.redb"))?,
         b"not a redb database"
@@ -331,7 +331,7 @@ fn migration_refuses_ambiguous_state_and_old_writer_conflict() -> Result<()> {
         stored.view.source.as_ref().unwrap().id,
         format!("{}:60", stored.view.store)
     );
-    assert!(History::migrate(conflict.0.clone()).is_err());
+    assert!(History::load(conflict.0.clone()).is_err());
     assert!(conflict.0.join("history.redb").exists());
     assert!(conflict.0.join("snapshot.v8.json").exists());
     assert_eq!(fs::read(conflict.0.join("snapshot.v8.json"))?, original);
