@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File, OpenOptions},
     io::{self, Read, Write},
-    path::{Path, PathBuf},
+    path::Path,
 };
 
 const MARKER_SCHEMA: u8 = 9;
@@ -35,8 +35,9 @@ struct Header {
     schema: u8,
 }
 
+#[cfg(test)]
 pub(super) fn run(
-    directory: PathBuf,
+    directory: std::path::PathBuf,
     observed: impl FnMut(Phase) -> Result<()>,
 ) -> Result<History> {
     let disk = Disk::lock(directory)?;
