@@ -47,7 +47,7 @@ fn replay(events: &[Value], chunk: usize) -> Result<(stream::Turn, String)> {
             .into_bytes()
         })
         .collect();
-    let mut parser = sse::Sse::default();
+    let mut parser = sse::Sse::new("Messages");
     let mut state = stream::State::new("fixture-model");
     let mut visible = String::new();
     for bytes in bytes.chunks(chunk) {

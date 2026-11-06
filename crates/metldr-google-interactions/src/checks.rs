@@ -37,7 +37,7 @@ fn replay(v: &[Value], size: usize) -> Result<(stream::Turn, String, Vec<TextEve
             value["event_type"].as_str().unwrap()
         ));
     }
-    let mut sse = sse::Sse::default();
+    let mut sse = sse::Sse::new("Google");
     let mut state = stream::State::default();
     let mut text = String::new();
     let mut events = Vec::new();

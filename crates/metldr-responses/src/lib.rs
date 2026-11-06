@@ -4,7 +4,7 @@
 mod checks;
 mod client;
 mod generated;
-mod sse;
+use metldr_sse as sse;
 mod stream;
 
 pub use client::Client;
