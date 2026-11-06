@@ -1,202 +1,114 @@
 export type OperationType = 'chat' | 'indexing' | 'summary'
 
-interface QueuedOperation<T> {
-  id: string
+interface QueuedOperation {
   sourceUrl: string
-  execute: (signal: AbortSignal) => Promise<T>
-  resolve: (value: T) => void
+  run: (signal: AbortSignal, settled: () => void) => void
   reject: (error: Error) => void
-  abortController: AbortController
-  timestamp: number
 }
 
-interface ActiveOperation {
-  promise: Promise<unknown>
-  abortController: AbortController
+interface OperationGroup {
+  limit: number
+  active: Map<string, AbortController>
+  queue: QueuedOperation[]
 }
 
-interface OperationLimits {
-  chat: number
-  indexing: number
-  summary: number
+function group(limit: number): OperationGroup {
+  return { limit, active: new Map(), queue: [] }
 }
 
 class ConcurrencyManager {
-  private readonly limits: OperationLimits = {
-    chat: 3,
-    indexing: 3,
-    summary: 2
+  private readonly groups: Record<OperationType, OperationGroup> = {
+    chat: group(3),
+    indexing: group(3),
+    summary: group(2)
   }
 
-  private activeOperations = new Map<OperationType, Map<string, ActiveOperation>>()
-  private queues = new Map<OperationType, QueuedOperation<unknown>[]>()
-
-  constructor() {
-    for (const type of ['chat', 'indexing', 'summary'] as OperationType[]) {
-      this.activeOperations.set(type, new Map())
-      this.queues.set(type, [])
-    }
-  }
-
-  async execute<T>(
+  execute<T>(
     type: OperationType,
     sourceUrl: string,
     operation: (signal: AbortSignal) => Promise<T>
   ): Promise<T> {
-    const active = this.activeOperations.get(type)!
-    const limit = this.limits[type]
-
-    const existingForUrl = active.get(sourceUrl)
-    if (existingForUrl) {
-      console.log(`[ConcurrencyManager] ${type} for ${sourceUrl.slice(0, 50)} already running, waiting...`)
-      try {
-        await existingForUrl.promise
-      } catch {}
-      return this.execute(type, sourceUrl, operation)
-    }
-
-    if (active.size < limit) {
-      return this.runOperation(type, sourceUrl, operation)
-    }
-
-    console.log(`[ConcurrencyManager] ${type} limit (${limit}) reached, queueing...`)
     return new Promise((resolve, reject) => {
-      const abortController = new AbortController()
-      const queue = this.queues.get(type)!
-      queue.push({
-        id: `${type}:${sourceUrl}:${Date.now()}`,
+      this.groups[type].queue.push({
         sourceUrl,
-        execute: operation as (signal: AbortSignal) => Promise<unknown>,
-        resolve: resolve as (value: unknown) => void,
-        reject,
-        abortController,
-        timestamp: Date.now()
+        run: (signal, settled) => {
+          void Promise.resolve().then(() => operation(signal)).finally(settled).then(resolve, reject)
+        },
+        reject
       })
+      this.processQueue(type)
     })
   }
 
-  private async runOperation<T>(
-    type: OperationType,
-    sourceUrl: string,
-    operation: (signal: AbortSignal) => Promise<T>
-  ): Promise<T> {
-    const active = this.activeOperations.get(type)!
-    const abortController = new AbortController()
-    
-    const promise = operation(abortController.signal)
-    active.set(sourceUrl, { promise, abortController })
-    
-    try {
-      const result = await promise
-      return result
-    } finally {
-      active.delete(sourceUrl)
-      this.processQueue(type)
-    }
-  }
-
   private processQueue(type: OperationType): void {
-    const queue = this.queues.get(type)!
-    const active = this.activeOperations.get(type)!
-    const limit = this.limits[type]
-
-    while (queue.length > 0 && active.size < limit) {
-      const next = queue.shift()!
-      
-      if (next.abortController.signal.aborted) {
-        next.reject(new Error('Operation cancelled before start'))
-        continue
-      }
-      
+    const { active, queue, limit } = this.groups[type]
+    for (let index = 0; index < queue.length && active.size < limit;) {
+      const next = queue[index]
+      if (!next) break
       if (active.has(next.sourceUrl)) {
-        queue.push(next)
+        index += 1
         continue
       }
 
-      const abortController = next.abortController
-      const promise = next.execute(abortController.signal)
-      active.set(next.sourceUrl, { promise, abortController })
-      
-      promise
-        .then(next.resolve)
-        .catch(next.reject)
-        .finally(() => {
-          active.delete(next.sourceUrl)
-          this.processQueue(type)
-        })
+      queue.splice(index, 1)
+      const controller = new AbortController()
+      active.set(next.sourceUrl, controller)
+      next.run(controller.signal, () => {
+        active.delete(next.sourceUrl)
+        this.processQueue(type)
+      })
     }
   }
 
   getActiveCount(type: OperationType): number {
-    return this.activeOperations.get(type)?.size || 0
+    return this.groups[type].active.size
   }
 
   getQueueLength(type: OperationType): number {
-    return this.queues.get(type)?.length || 0
+    return this.groups[type].queue.length
   }
 
   isRunning(type: OperationType, sourceUrl: string): boolean {
-    return this.activeOperations.get(type)?.has(sourceUrl) || false
+    return this.groups[type].active.has(sourceUrl)
   }
 
   abort(type: OperationType, sourceUrl: string): boolean {
-    const active = this.activeOperations.get(type)
-    const op = active?.get(sourceUrl)
-    if (op) {
-      op.abortController.abort()
-      active?.delete(sourceUrl)
-      console.log(`[ConcurrencyManager] Aborted active ${type} for ${sourceUrl.slice(0, 50)}`)
-      return true
+    const { active, queue } = this.groups[type]
+    const controller = active.get(sourceUrl)
+    let cancelled = false
+    for (let index = queue.length - 1; index >= 0; index -= 1) {
+      const next = queue[index]
+      if (next?.sourceUrl === sourceUrl) {
+        queue.splice(index, 1)
+        next.reject(new Error('Operation cancelled'))
+        cancelled = true
+      }
     }
-    
-    const queue = this.queues.get(type)!
-    const idx = queue.findIndex(q => q.sourceUrl === sourceUrl)
-    if (idx !== -1) {
-      const [removed] = queue.splice(idx, 1)
-      removed.abortController.abort()
-      removed.reject(new Error('Operation cancelled'))
-      console.log(`[ConcurrencyManager] Cancelled queued ${type} for ${sourceUrl.slice(0, 50)}`)
-      return true
-    }
-    
-    return false
+    controller?.abort()
+    return cancelled || controller !== undefined
   }
 
   abortAll(type: OperationType): void {
-    const active = this.activeOperations.get(type)!
-    for (const [url, op] of active) {
-      op.abortController.abort()
-      console.log(`[ConcurrencyManager] Aborted ${type} for ${url.slice(0, 50)}`)
+    const { active, queue } = this.groups[type]
+    const controllers = Array.from(active.values())
+    for (const next of queue.splice(0)) {
+      next.reject(new Error('All operations cancelled'))
     }
-    active.clear()
-    
-    const queue = this.queues.get(type)!
-    for (const op of queue) {
-      op.abortController.abort()
-      op.reject(new Error('All operations cancelled'))
-    }
-    queue.length = 0
+    for (const controller of controllers) controller.abort()
   }
 
   abortForUrl(sourceUrl: string): void {
-    for (const type of ['chat', 'indexing', 'summary'] as OperationType[]) {
-      this.abort(type, sourceUrl)
-    }
-  }
-
-  cancelQueued(type: OperationType, sourceUrl: string): void {
-    this.abort(type, sourceUrl)
+    this.abort('chat', sourceUrl)
+    this.abort('indexing', sourceUrl)
+    this.abort('summary', sourceUrl)
   }
 
   getStatus(): Record<OperationType, { active: number; queued: number }> {
-    const status: Record<string, { active: number; queued: number }> = {}
-    for (const type of ['chat', 'indexing', 'summary'] as OperationType[]) {
-      status[type] = {
-        active: this.getActiveCount(type),
-        queued: this.getQueueLength(type)
-      }
+    return {
+      chat: { active: this.getActiveCount('chat'), queued: this.getQueueLength('chat') },
+      indexing: { active: this.getActiveCount('indexing'), queued: this.getQueueLength('indexing') },
+      summary: { active: this.getActiveCount('summary'), queued: this.getQueueLength('summary') }
     }
-    return status as Record<OperationType, { active: number; queued: number }>
   }
 }
 

@@ -32,3 +32,12 @@ Open Help on the welcome page for Chrome AI and Ollama setup. Its Ollama guide i
 Run `npm run check:chat` for the chat interface and `npm run build:chat` after generating its Rust bindings.
 
 Run `make check-rust`, `make check-panel` or `make check-companion` for the affected code. Run `make rust` after Rust changes during a preview session. The build also refreshes the chat's Rust bindings. See the [panel guide](../crates/metldr-panel/README.md) for browser setup and module details.
+
+The background scheduler has three Rust driven checks against its actual TypeScript service. They need Node.js with native TypeScript support and the `timeout` command. Run from the repository root:
+
+```sh
+mkdir -p .tmp/check-concurrency
+rustc --edition 2024 --test scripts/check-concurrency.rs -o .tmp/check-concurrency/check
+.tmp/check-concurrency/check --test-threads=1
+rm .tmp/check-concurrency/check
+```
