@@ -25,6 +25,7 @@ mod active;
 mod agents;
 mod answer_frame;
 mod browser_actions;
+mod capture;
 mod codex_input;
 mod connection;
 mod conversations;
@@ -471,28 +472,16 @@ impl UiBridge {
     }
 
     pub fn capture(&self) -> Result<Promise, JsValue> {
-        self.core.ensure_current().map_err(js_error)?;
-        let view = self.core.cached().map_err(js_error)?;
-        if self.core.page.settings_blocked() {
-            return Err(js_error(FlowError::HistoryBusy));
-        }
-        self.core.owner.borrow_mut().capture().map_err(js_error)?;
-        // Prepare the permission request in the user's click, before yielding.
-        let capture = self.core.flow().capture_selected(&view);
-        drop(view);
-        self.core.page.notify_settings();
-        let core = Rc::clone(&self.core);
+        let capture = self.core.capture().map_err(js_error)?;
         Ok(future_to_promise(async move {
-            let result = capture.await.and_then(|view| core.accept(view));
-            core.owner.borrow_mut().capture_finished();
-            core.page.notify_settings();
-            result.map(|_| JsValue::UNDEFINED).map_err(js_error)
+            capture.await.map(|_| JsValue::UNDEFINED).map_err(js_error)
         }))
     }
 
     pub async fn run(&self, request: UiRunRequest, emit: Function) -> Result<(), JsValue> {
         self.core
-            .run(request, |event| emit_event(event, &emit))
+            .run(request, move |event| emit_event(event, &emit))
+            .map_err(js_error)?
             .await
             .map_err(js_error)
     }
