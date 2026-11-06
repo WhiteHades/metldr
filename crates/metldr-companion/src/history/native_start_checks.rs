@@ -172,7 +172,7 @@ fn setup(
         agent_runtime: Default::default(),
         fixture: None,
         subscribers: BTreeMap::new(),
-        operation: None,
+        operations: BTreeMap::new(),
         tx,
         pi_profile: None,
         codex_profile: None,
@@ -191,17 +191,17 @@ fn setup(
 }
 
 fn stop(owner: &mut Owner) {
-    if let Some(operation) = owner.operation.take() {
+    for (run, operation) in std::mem::take(&mut owner.operations) {
         operation
             .stop
             .store(true, std::sync::atomic::Ordering::Relaxed);
         operation.worker.join().expect("owned native worker");
-        owner.browser_io_finish(&operation.run);
+        owner.browser_io_finish(&run);
     }
 }
 
 fn reopen(mut owner: Owner) -> crate::Result<Owner> {
-    assert!(owner.operation.is_none());
+    assert!(owner.operations.is_empty());
     drop(owner.record_history.take());
     let mut history = History::open(
         &owner.disk.directory.join("history.redb"),
@@ -337,10 +337,8 @@ fn actual_owner_native_starts_are_record_durable_and_snapshot_compatible() -> cr
         })?;
         let run = owner.state.view.runs.last().unwrap().id.clone();
         let prepared_receipt = saved_start(owner.record_history.as_ref().unwrap(), &request)?;
-        assert_eq!(
-            owner.operation.as_ref().map(|op| op.run.as_str()),
-            Some(run.as_str())
-        );
+        assert_eq!(owner.operations.len(), 1);
+        assert!(owner.operations.contains_key(&run));
         let first = task(&mut owner, &run)?;
         assert_eq!(first.run.status, Status::Running);
         assert!(matches!(
@@ -446,7 +444,7 @@ fn actual_owner_native_starts_are_record_durable_and_snapshot_compatible() -> cr
             request: request.clone(),
             command: scoped(&owner, command),
         })?;
-        assert!(owner.operation.is_none());
+        assert!(owner.operations.is_empty());
         assert!(
             captured_frames(&frames)?
                 .iter()
@@ -469,7 +467,7 @@ fn actual_owner_native_starts_are_record_durable_and_snapshot_compatible() -> cr
             command: scoped(&owner, changed),
         })?;
         assert_eq!(owner.state.view.runs.len(), count);
-        assert!(owner.operation.is_none());
+        assert!(owner.operations.is_empty());
         assert!(
             captured_frames(&frames)?
                 .iter()
@@ -525,7 +523,7 @@ fn actual_owner_native_starts_are_record_durable_and_snapshot_compatible() -> cr
         assert_eq!(replay.run, prepared_receipt.run);
         assert_eq!(replay.conversation, prepared_receipt.conversation);
         assert_eq!(replay.format, prepared_receipt.format);
-        assert!(owner.operation.is_none());
+        assert!(owner.operations.is_empty());
         assert!(captured_frames(&frames)?.iter().any(|frame| {
             frame["kind"] == "started"
                 && frame["run"] == run
@@ -550,7 +548,7 @@ fn actual_owner_native_starts_are_record_durable_and_snapshot_compatible() -> cr
             },
         })?;
         assert_eq!(owner.state.view.runs.len(), count);
-        assert!(owner.operation.is_none());
+        assert!(owner.operations.is_empty());
         assert!(
             captured_frames(&frames)?
                 .iter()
@@ -583,7 +581,7 @@ fn native_start_publication_failure_and_corrupt_followup_never_dispatch() -> cra
                 })
                 .is_err()
         );
-        assert!(owner.operation.is_none());
+        assert!(owner.operations.is_empty());
         assert!(frames.lock().unwrap().is_empty());
         let history = owner.record_history.as_mut().unwrap();
         let selection = history.selection()?;
@@ -603,7 +601,7 @@ fn native_start_publication_failure_and_corrupt_followup_never_dispatch() -> cra
             request: "publish-fails".into(),
             command: scoped(&owner, command),
         })?;
-        assert!(owner.operation.is_none());
+        assert!(owner.operations.is_empty());
 
         let bound_dir = Directory::new()?;
         let (mut corrupt, _rx, corrupt_frames, _) = setup(engine, &bound_dir)?;
@@ -639,7 +637,7 @@ fn native_start_publication_failure_and_corrupt_followup_never_dispatch() -> cra
                 })
                 .is_err()
         );
-        assert!(corrupt.operation.is_none());
+        assert!(corrupt.operations.is_empty());
         assert!(corrupt_frames.lock().unwrap().is_empty());
         assert_eq!(corrupt.state.view.runs.len(), count);
         let read = corrupt.record_history.as_ref().unwrap().db.begin_read()?;
@@ -662,8 +660,8 @@ fn native_start_keeps_the_snapshot_execution_path_working() -> crate::Result<()>
             Engine::Codex => owner.codex_start("snapshot-start", &scope, action)?,
             Engine::OpenCode => owner.opencode_start("snapshot-start", &scope, action)?,
         }
-        assert!(owner.operation.is_some());
-        let run = owner.operation.as_ref().unwrap().run.clone();
+        let run = owner.state.view.runs.last().unwrap().id.clone();
+        assert!(owner.operations.contains_key(&run));
         assert_eq!(
             owner
                 .state
@@ -726,7 +724,7 @@ fn actual_owner_native_start_admission_and_failure_boundaries() -> crate::Result
             !super::is_failure(error.as_ref()),
             "request reuse must be a refusal, not a storage failure: {error}"
         );
-        assert!(owner.operation.is_none());
+        assert!(owner.operations.is_empty());
     }
     actual_owner_native_starts_are_record_durable_and_snapshot_compatible()?;
     native_start_publication_failure_and_corrupt_followup_never_dispatch()?;

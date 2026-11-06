@@ -191,7 +191,7 @@ impl Owner {
         if self.record_history.is_some() {
             self.require_conversation(scope)?;
         }
-        if self.operation.is_some() {
+        if !self.operations.is_empty() {
             return Err("another run is active".into());
         }
         let value = match prior {

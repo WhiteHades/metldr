@@ -132,7 +132,6 @@ pub(super) struct PendingPermission {
     pub ack: std::sync::mpsc::SyncSender<Option<String>>,
 }
 pub(super) struct Operation {
-    pub(super) run: String,
     pub(super) stop: Arc<AtomicBool>,
     pub(super) worker: JoinHandle<()>,
     pub(super) correction: Option<crate::native_correction::Slot>,
@@ -154,7 +153,7 @@ pub(super) struct Owner {
     pub(super) browser_view: BTreeMap<String, crate::browser_action::Action>,
     pub(super) fixture: Option<crate::native::Fixture>,
     pub(super) subscribers: BTreeMap<String, Subscription>,
-    pub(super) operation: Option<Operation>,
+    pub(super) operations: BTreeMap<String, Operation>,
     pub(super) tx: SyncSender<Event>,
     pub(super) pi_profile: Option<crate::agent_model::Profile>,
     pub(super) codex_profile: Option<crate::codex_model::Profile>,
@@ -292,7 +291,7 @@ impl Owner {
         view["provider_settings"] = self.settings.public(&state.providers);
         view["agent_settings"] = self.agent_runtime.public(
             &state.agent_settings,
-            self.operation.is_some() || self.settings.job.is_some(),
+            !self.operations.is_empty() || self.settings.job.is_some(),
         );
         let mut reply = json!({"v":crate::WIRE_VERSION,"request":request,"kind":kind,"view":view,"ended":ended});
         crate::tool_report::fit_wire(&mut reply)?;
@@ -692,10 +691,8 @@ impl Owner {
             self.codex_input = codex_input;
             return Err(error);
         }
-        if let Some(operation) = &self.operation {
-            if operation.run == run {
-                operation.stop.store(true, Ordering::Release);
-            }
+        if let Some(operation) = self.operations.get(run) {
+            operation.stop.store(true, Ordering::Release);
         }
         self.cancel_browser_approval(run);
         drop(pi_ui);
@@ -739,17 +736,13 @@ impl Owner {
         result: std::result::Result<(), String>,
         disconnected: bool,
     ) -> Result<()> {
-        if self
-            .operation
-            .as_ref()
-            .is_some_and(|operation| operation.run != run)
-        {
-            return Err("settlement run mismatch".into());
-        }
-        let operation = self
-            .operation
-            .take()
-            .ok_or("settlement without operation")?;
+        let operation = self.operations.remove(run).ok_or_else(|| {
+            if self.operations.is_empty() {
+                "settlement without operation"
+            } else {
+                "settlement run mismatch"
+            }
+        })?;
         self.browser_io_finish(run);
         operation
             .worker

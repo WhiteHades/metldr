@@ -68,7 +68,7 @@ fn owner(
                 address,
             }),
             subscribers: BTreeMap::new(),
-            operation: None,
+            operations: BTreeMap::new(),
             tx,
             pi_profile: None,
             codex_profile: None,
@@ -195,7 +195,7 @@ fn receive_request(listener: &TcpListener) -> Result<(TcpStream, Value)> {
 }
 
 fn no_dispatch(owner: &Owner, listener: &TcpListener, rx: &mpsc::Receiver<Event>) {
-    assert!(owner.operation.is_none());
+    assert!(owner.operations.is_empty());
     assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
     assert!(matches!(listener.accept(), Err(e) if e.kind() == io::ErrorKind::WouldBlock));
 }
@@ -231,7 +231,7 @@ fn reopen(
     address: SocketAddr,
     run: &str,
 ) -> Result<(Owner, mpsc::Receiver<Event>, Arc<Mutex<Vec<u8>>>)> {
-    assert!(owner_before.operation.is_none());
+    assert!(owner_before.operations.is_empty());
     owner_before.record_history.take();
     let mut history = History::open(
         &owner_before.disk.directory.join("history.redb"),
@@ -754,10 +754,7 @@ fn actual_owner_conversation_switch_waits_for_work_and_preserves_retry() -> Resu
         assert_eq!(owner.subscribers.len(), 0);
     }
     assert_eq!(
-        owner
-            .operation
-            .as_ref()
-            .map(|operation| operation.run.as_str()),
+        owner.operations.get(&run).map(|_| run.as_str()),
         Some(run.as_str())
     );
     assert_eq!(owner.state.view.runs[0].id, run);

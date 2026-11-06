@@ -63,7 +63,7 @@ fn owner(disk: Disk, state: Store, history: History) -> Owner {
         agent_runtime: Default::default(),
         fixture: None,
         subscribers: BTreeMap::new(),
-        operation: None,
+        operations: BTreeMap::new(),
         tx,
         pi_profile: None,
         codex_profile: None,

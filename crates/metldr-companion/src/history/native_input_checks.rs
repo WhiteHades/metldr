@@ -105,12 +105,14 @@ fn make_owner_with_binding(
         agent_runtime: Default::default(),
         fixture: None,
         subscribers: BTreeMap::new(),
-        operation: Some(Operation {
-            run: run.clone(),
-            stop: Arc::new(AtomicBool::new(false)),
-            worker,
-            correction: None,
-        }),
+        operations: BTreeMap::from([(
+            run.clone(),
+            Operation {
+                stop: Arc::new(AtomicBool::new(false)),
+                worker,
+                correction: None,
+            },
+        )]),
         tx,
         pi_profile: None,
         codex_profile: None,
@@ -137,7 +139,7 @@ fn sequence(owner: &Owner) -> Result<u64> {
 }
 
 fn stop_owner(owner: &mut Owner) {
-    if let Some(operation) = owner.operation.take() {
+    for (_, operation) in std::mem::take(&mut owner.operations) {
         operation.worker.join().expect("owned input-check worker");
     }
 }
@@ -149,7 +151,7 @@ fn native_corrections_fence_duplicates_stop_and_uncertain_session_reuse() -> Res
         let (directory, mut owner, _, run) = make_owner_with_binding("pi", true)?;
         let scope = owner.record_history.as_ref().unwrap().selection()?;
         let (slot, receiver) = channel(&run, &owner.tx);
-        owner.operation.as_mut().unwrap().correction = Some(slot);
+        owner.operations.get_mut(&run).unwrap().correction = Some(slot);
         owner.correction_ready(&run, Target::Pi)?;
         owner.correct_native("correction-1", &scope, &run, "Keep the exact correction.")?;
         assert_eq!(receiver.take()?.unwrap().text, "Keep the exact correction.");
@@ -385,8 +387,8 @@ fn native_input_records_reserve_publish_cancel_and_keep_payloads_volatile() -> R
     ));
     assert!(
         owner
-            .operation
-            .as_ref()
+            .operations
+            .get(&run)
             .unwrap()
             .stop
             .load(std::sync::atomic::Ordering::Acquire)
@@ -446,8 +448,8 @@ fn native_input_records_reserve_publish_cancel_and_keep_payloads_volatile() -> R
     assert!(result.is_err());
     assert!(
         failed
-            .operation
-            .as_ref()
+            .operations
+            .get(&run)
             .unwrap()
             .stop
             .load(std::sync::atomic::Ordering::Acquire)
@@ -612,8 +614,8 @@ fn native_input_records_reserve_publish_cancel_and_keep_payloads_volatile() -> R
     assert!(duplicate.native_permissions.is_empty());
     assert!(
         duplicate
-            .operation
-            .as_ref()
+            .operations
+            .get(&run)
             .unwrap()
             .stop
             .load(std::sync::atomic::Ordering::Acquire)
@@ -804,8 +806,8 @@ fn offscreen_pi_disconnect_stops_and_cancels_its_own_input() -> Result<()> {
     owner.disconnect_pi_ui()?;
     assert!(
         owner
-            .operation
-            .as_ref()
+            .operations
+            .get(&run)
             .unwrap()
             .stop
             .load(std::sync::atomic::Ordering::Acquire)

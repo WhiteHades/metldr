@@ -289,11 +289,7 @@ impl Owner {
         ack: mpsc::SyncSender<Option<String>>,
     ) -> Result<()> {
         if self.record_history.is_some() {
-            if self
-                .operation
-                .as_ref()
-                .is_none_or(|operation| operation.run != run)
-            {
+            if !self.operations.contains_key(run) {
                 let _ = ack.try_send(None);
                 return Ok(());
             }
@@ -324,7 +320,7 @@ impl Owner {
             let _ = ack.try_send(None);
             return result;
         }
-        if self.operation.as_ref().is_none_or(|op| op.run != run)
+        if !self.operations.contains_key(run)
             || self
                 .state
                 .view
@@ -354,13 +350,13 @@ impl Owner {
         let pending = self.take_native_permissions(run);
         if let Err(error) = self.commit(next) {
             self.native_permissions.extend(pending);
-            if let Some(op) = &self.operation {
+            if let Some(op) = self.operations.get(run) {
                 op.stop.store(true, std::sync::atomic::Ordering::Release);
             }
             let _ = ack.send(None);
             return Err(error);
         }
-        if let Some(op) = &self.operation {
+        if let Some(op) = self.operations.get(run) {
             op.stop.store(true, std::sync::atomic::Ordering::Release);
         }
         self.cancel_browser_approval(run);

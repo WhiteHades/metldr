@@ -55,12 +55,14 @@ impl Owner {
         let worker_stop = stop.clone();
         let tx = self.tx.clone();
         let worker = thread::spawn(move || crate::opencode::execute(job, worker_stop, tx, events));
-        self.operation = Some(Operation {
-            run: run.clone(),
-            stop,
-            worker,
-            correction: None,
-        });
+        self.operations.insert(
+            run.clone(),
+            Operation {
+                stop,
+                worker,
+                correction: None,
+            },
+        );
         self.emit(self.started_reply(request, scope, &run)?)
     }
 

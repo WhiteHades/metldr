@@ -176,7 +176,7 @@ impl Owner {
         if self.record_history.is_some() {
             self.require_conversation(scope)?;
         }
-        if self.operation.is_some()
+        if !self.operations.is_empty()
             || (self.record_history.is_none() && self.state.view.runs.len() >= 16)
         {
             return Err("another run is active or prototype capacity reached".into());
@@ -275,12 +275,14 @@ impl Owner {
                 result,
             });
         });
-        self.operation = Some(Operation {
-            run: run.clone(),
-            stop,
-            worker,
-            correction: None,
-        });
+        self.operations.insert(
+            run.clone(),
+            Operation {
+                stop,
+                worker,
+                correction: None,
+            },
+        );
         self.emit(self.started_reply(id, scope, &run)?)
     }
 }

@@ -288,7 +288,7 @@ impl Owner {
                 return Err("agent request identity already used".into());
             }
         }
-        if self.operation.is_some() || self.settings.job.is_some() {
+        if !self.operations.is_empty() || self.settings.job.is_some() {
             return Err("agent settings are busy; refresh the view before retrying".into());
         }
         if slot.revision != expected {
@@ -350,7 +350,7 @@ impl Owner {
     }
     pub(crate) fn agent_refresh(&mut self, id: &str) -> Result<()> {
         self.refresh_saved_settings()?;
-        if self.operation.is_some() || self.settings.job.is_some() {
+        if !self.operations.is_empty() || self.settings.job.is_some() {
             return Err("agent settings are busy".into());
         }
         self.persist_settings(self.state.clone())?;
@@ -461,7 +461,7 @@ mod checks {
             browser_view: BTreeMap::new(),
             fixture: None,
             subscribers: Default::default(),
-            operation: None,
+            operations: BTreeMap::new(),
             tx,
             pi_profile: None,
             codex_profile: None,
@@ -498,18 +498,26 @@ mod checks {
             executable: "/bin/sh".into(),
             workspace: root.clone(),
         };
-        owner.operation = Some(crate::flow::Operation {
-            run: "active".into(),
-            stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            worker: std::thread::spawn(|| {}),
-            correction: None,
-        });
+        owner.operations.insert(
+            "active".into(),
+            crate::flow::Operation {
+                stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                worker: std::thread::spawn(|| {}),
+                correction: None,
+            },
+        );
         assert!(
             owner
                 .agent_save("blocked-task", 0, profile.clone())
                 .is_err()
         );
-        owner.operation.take().unwrap().worker.join().unwrap();
+        owner
+            .operations
+            .remove("active")
+            .unwrap()
+            .worker
+            .join()
+            .unwrap();
         owner.settings.job = Some(std::thread::spawn(|| {}));
         assert!(
             owner
@@ -535,7 +543,7 @@ mod checks {
         assert_eq!(owner.state.agent_settings.slot(Kind::Codex).revision, 0);
 
         owner.agent_save("save:1", 0, profile.clone()).unwrap();
-        assert!(owner.operation.is_none());
+        assert!(owner.operations.is_empty());
         assert!(owner.state.view.runs.is_empty());
         let sequence = owner.state.view.sequence;
         owner.agent_save("save:1", 0, profile.clone()).unwrap();

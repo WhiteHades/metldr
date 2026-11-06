@@ -208,7 +208,7 @@ pub(super) fn send_progress(
 
 impl crate::flow::Owner {
     pub(super) fn tool_progress(&mut self, run: &str, call: Call) -> Result<()> {
-        if self.operation.as_ref().is_none_or(|op| op.run != run)
+        if !self.operations.contains_key(run)
             || self
                 .state
                 .view

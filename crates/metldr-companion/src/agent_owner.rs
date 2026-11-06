@@ -86,12 +86,14 @@ impl Owner {
         let (correction, corrections) = crate::native_correction::channel(&run, &tx);
         let worker =
             thread::spawn(move || agent::execute(job, worker_stop, tx, events, corrections));
-        self.operation = Some(Operation {
-            run: run.clone(),
-            stop,
-            worker,
-            correction: Some(correction),
-        });
+        self.operations.insert(
+            run.clone(),
+            Operation {
+                stop,
+                worker,
+                correction: Some(correction),
+            },
+        );
         self.emit(self.started_reply(id, scope, &run)?)
     }
 
@@ -173,17 +175,13 @@ impl Owner {
         disconnected: bool,
         released: bool,
     ) -> Result<()> {
-        if self
-            .operation
-            .as_ref()
-            .is_some_and(|operation| operation.run != run)
-        {
-            return Err("agent settlement run mismatch".into());
-        }
-        let operation = self
-            .operation
-            .take()
-            .ok_or("agent settlement without operation")?;
+        let operation = self.operations.remove(run).ok_or_else(|| {
+            if self.operations.is_empty() {
+                "agent settlement without operation"
+            } else {
+                "agent settlement run mismatch"
+            }
+        })?;
         self.browser_io_finish(run);
         operation
             .worker

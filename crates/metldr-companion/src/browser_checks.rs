@@ -70,12 +70,14 @@ fn with_owner(check: impl FnOnce(&mut Owner, Proposal)) {
             address: "127.0.0.1:1".parse().unwrap(),
         }),
         subscribers: BTreeMap::new(),
-        operation: Some(Operation {
-            run: run.clone(),
-            stop: Arc::new(AtomicBool::new(false)),
-            worker: std::thread::spawn(|| {}),
-            correction: None,
-        }),
+        operations: BTreeMap::from([(
+            run.clone(),
+            Operation {
+                stop: Arc::new(AtomicBool::new(false)),
+                worker: std::thread::spawn(|| {}),
+                correction: None,
+            },
+        )]),
         tx,
         pi_profile: None,
         codex_profile: None,
@@ -113,7 +115,7 @@ fn with_owner(check: impl FnOnce(&mut Owner, Proposal)) {
         },
     };
     check(&mut owner, proposal);
-    if let Some(operation) = owner.operation.take() {
+    for (_, operation) in std::mem::take(&mut owner.operations) {
         operation.worker.join().unwrap();
     }
     drop(owner);
@@ -446,7 +448,13 @@ fn native_browser_actions_keep_the_workflow_source_and_block_uncertain_recovery(
 #[test]
 fn saved_fixture_start_replays_but_cannot_retarget_https() {
     with_owner(|owner, proposal| {
-        owner.operation.take().unwrap().worker.join().unwrap();
+        owner
+            .operations
+            .remove(&proposal.run)
+            .unwrap()
+            .worker
+            .join()
+            .unwrap();
         let source = owner.state.view.source.as_ref().unwrap().id.clone();
         let text = "Fill the owned field";
         let scope = crate::tests::owner_scope(owner);
@@ -484,7 +492,7 @@ fn saved_fixture_start_replays_but_cannot_retarget_https() {
         owner
             .browser_start("saved-request", &scope, &source, text, None)
             .unwrap();
-        assert!(owner.operation.is_none());
+        assert!(owner.operations.is_empty());
         let profile = crate::https_profile::Config::Https {
             endpoint: "https://example.com/v1/messages".into(),
             model: "resolved-model".into(),
@@ -515,7 +523,7 @@ fn saved_fixture_start_replays_but_cannot_retarget_https() {
                 )
                 .is_err()
         );
-        assert!(owner.operation.is_none());
+        assert!(owner.operations.is_empty());
         let digest = crate::agent_model::digest(&serde_json::json!({
             "source":source,"text":text,"origin":&owner.fixture.as_ref().unwrap().origin,"route":binding.public()
         }))
@@ -538,7 +546,7 @@ fn saved_fixture_start_replays_but_cannot_retarget_https() {
                 Some(&binding.fingerprint),
             )
             .unwrap();
-        assert!(owner.operation.is_none());
+        assert!(owner.operations.is_empty());
         assert_eq!(saved(owner).view.runs.len(), 1);
         let profile = crate::https_profile::Config::Https {
             endpoint: "https://example.com/v1/responses".into(),
@@ -559,7 +567,7 @@ fn saved_fixture_start_replays_but_cannot_retarget_https() {
                 .responses_start("other-request", &scope, &source, text, &"0".repeat(64))
                 .is_err()
         );
-        assert!(owner.operation.is_none());
+        assert!(owner.operations.is_empty());
         let digest = crate::agent_model::digest(&serde_json::json!({
             "source":source,"text":text,"origin":&owner.fixture.as_ref().unwrap().origin,"route":binding.public_responses()
         }))
@@ -576,7 +584,7 @@ fn saved_fixture_start_replays_but_cannot_retarget_https() {
         owner
             .responses_start("saved-request", &scope, &source, text, &binding.fingerprint)
             .unwrap();
-        assert!(owner.operation.is_none());
+        assert!(owner.operations.is_empty());
         owner.responses_route = None;
         let public = crate::public_view::render(
             &owner.state,
@@ -619,7 +627,7 @@ fn saved_fixture_start_replays_but_cannot_retarget_https() {
                 .google_start("stale-google", &scope, &source, text, &"0".repeat(64))
                 .is_err()
         );
-        assert!(owner.operation.is_none());
+        assert!(owner.operations.is_empty());
         let digest = crate::agent_model::digest(&serde_json::json!({
             "source":source,"text":text,"origin":&owner.fixture.as_ref().unwrap().origin,"route":google.public_google()
         }))
@@ -636,7 +644,7 @@ fn saved_fixture_start_replays_but_cannot_retarget_https() {
         owner
             .google_start("saved-request", &scope, &source, text, &google.fingerprint)
             .unwrap();
-        assert!(owner.operation.is_none());
+        assert!(owner.operations.is_empty());
         owner.google_route = None;
         let public = crate::public_view::render(
             &owner.state,
@@ -677,7 +685,7 @@ fn saved_fixture_start_replays_but_cannot_retarget_https() {
                 .chat_start("stale-chat", &scope, &source, text, &"0".repeat(64))
                 .is_err()
         );
-        assert!(owner.operation.is_none());
+        assert!(owner.operations.is_empty());
         let digest = crate::agent_model::digest(&serde_json::json!({
             "source":source,"text":text,"origin":&owner.fixture.as_ref().unwrap().origin,"route":chat.public_chat_completions()
         }))
@@ -694,7 +702,7 @@ fn saved_fixture_start_replays_but_cannot_retarget_https() {
         owner
             .chat_start("saved-request", &scope, &source, text, &chat.fingerprint)
             .unwrap();
-        assert!(owner.operation.is_none());
+        assert!(owner.operations.is_empty());
         owner.chat_route = None;
         let public = crate::public_view::render(
             &owner.state,

@@ -113,12 +113,14 @@ fn make_owner(directory: &Directory) -> crate::Result<(Owner, String)> {
             agent_runtime: Default::default(),
             fixture: None,
             subscribers: BTreeMap::new(),
-            operation: Some(Operation {
-                run: run.clone(),
-                stop: Arc::new(AtomicBool::new(false)),
-                worker: std::thread::spawn(|| {}),
-                correction: None,
-            }),
+            operations: BTreeMap::from([(
+                run.clone(),
+                Operation {
+                    stop: Arc::new(AtomicBool::new(false)),
+                    worker: std::thread::spawn(|| {}),
+                    correction: None,
+                },
+            )]),
             tx,
             pi_profile: None,
             codex_profile: None,
@@ -371,8 +373,8 @@ fn actual_owner_browser_lifecycle_is_record_durable_and_fails_closed() -> crate:
     ));
     assert!(
         owner
-            .operation
-            .as_ref()
+            .operations
+            .get(&run)
             .unwrap()
             .stop
             .load(std::sync::atomic::Ordering::Acquire)
@@ -475,8 +477,8 @@ fn actual_owner_browser_lifecycle_is_record_durable_and_fails_closed() -> crate:
     assert!(reply.recv()?.is_err());
     assert!(failed_owner.browser_approval.is_none());
     failed_owner
-        .operation
-        .take()
+        .operations
+        .remove(&failed_run)
         .unwrap()
         .worker
         .join()
@@ -538,8 +540,8 @@ fn actual_owner_browser_lifecycle_is_record_durable_and_fails_closed() -> crate:
     assert!(reply.recv()?.is_err());
     assert!(frames.lock().unwrap().is_empty());
     corrupt
-        .operation
-        .take()
+        .operations
+        .remove(&corrupt_run)
         .unwrap()
         .worker
         .join()
