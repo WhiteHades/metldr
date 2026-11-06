@@ -42,12 +42,8 @@ fn make_owner(engine: &str) -> Result<(Directory, Owner, Arc<std::sync::Mutex<Ve
     make_owner_with_binding(engine, false)
 }
 
-fn make_owner_with_binding(
-    engine: &str,
-    bound: bool,
-) -> Result<(Directory, Owner, Arc<std::sync::Mutex<Vec<u8>>>, String)> {
+fn input_fixture(engine: &str, bound: bool) -> Result<(Directory, crate::model::Store, String)> {
     let directory = Directory::new()?;
-    let disk = Disk::lock(directory.0.clone())?;
     let mut original = fixture::legacy();
     crate::recovery::interrupt(&mut original)?;
     let run = match engine {
@@ -80,6 +76,25 @@ fn make_owner_with_binding(
         };
     }
     original.validate()?;
+    Ok((directory, original, run))
+}
+
+fn make_owner_with_binding(
+    engine: &str,
+    bound: bool,
+) -> Result<(Directory, Owner, Arc<std::sync::Mutex<Vec<u8>>>, String)> {
+    let (directory, original, run) = input_fixture(engine, bound)?;
+    let (owner, frames) = import_owner(&directory, original, &run)?;
+    Ok((directory, owner, frames, run))
+}
+
+fn import_owner(
+    directory: &Directory,
+    original: crate::model::Store,
+    run: &str,
+) -> Result<(Owner, Arc<std::sync::Mutex<Vec<u8>>>)> {
+    original.validate()?;
+    let disk = Disk::lock(directory.0.clone())?;
     disk.save(&original)?;
     let path = directory.0.join("history.redb");
     let mut history = History::import_new(&path, &serde_json::to_vec(&original)?, disk.lease())?;
@@ -93,7 +108,6 @@ fn make_owner_with_binding(
     let state = history.edit(|edit| edit.project(&scope, Some(&run)))?;
     let (transport, frames) = Transport::captured();
     let (tx, _) = mpsc::sync_channel::<Event>(8);
-    let worker = thread::spawn(|| {});
     let owner = Owner {
         transport,
         disk,
@@ -105,21 +119,29 @@ fn make_owner_with_binding(
         agent_runtime: Default::default(),
         fixture: None,
         subscribers: BTreeMap::new(),
-        operations: BTreeMap::from([(
-            run.clone(),
-            Operation {
-                stop: Arc::new(AtomicBool::new(false)),
-                worker,
-                correction: None,
-            },
-        )]),
+        operations: original
+            .view
+            .runs
+            .iter()
+            .filter(|run| !run.status.terminal())
+            .map(|run| {
+                (
+                    run.id.clone(),
+                    Operation {
+                        stop: Arc::new(AtomicBool::new(false)),
+                        worker: thread::spawn(|| {}),
+                        correction: None,
+                    },
+                )
+            })
+            .collect(),
         tx,
         pi_profile: None,
         codex_profile: None,
         opencode_profile: None,
         native_permissions: BTreeMap::new(),
-        pi_ui: None,
-        codex_input: None,
+        pi_ui: Default::default(),
+        codex_input: Default::default(),
         browser_approval: None,
         browser_io: None,
         browser_route: None,
@@ -127,7 +149,7 @@ fn make_owner_with_binding(
         google_route: None,
         chat_route: None,
     };
-    Ok((directory, owner, frames, run))
+    Ok((owner, frames))
 }
 
 fn sequence(owner: &Owner) -> Result<u64> {
@@ -145,12 +167,14 @@ fn stop_owner(owner: &mut Owner) {
 }
 
 #[cfg(unix)]
-#[tokio::test(flavor = "current_thread")]
-async fn codex_input_replies_and_withdrawals_preserve_owned_waiters() -> Result<()> {
-    use metldr_codex_session::{CodexSession, Event as NativeEvent, InputAnswer, Thread};
+async fn codex_inputs(
+    directory: &Directory,
+) -> Result<(
+    metldr_codex_session::CodexSession,
+    Vec<metldr_codex_session::Input>,
+)> {
+    use metldr_codex_session::{CodexSession, Event as NativeEvent, Thread};
     use std::os::unix::fs::PermissionsExt;
-
-    let (directory, mut owner, _, run) = make_owner("codex")?;
     let executable = directory.0.join("input-peer");
     let send = |value: serde_json::Value| {
         format!(
@@ -186,13 +210,23 @@ async fn codex_input_replies_and_withdrawals_preserve_owned_waiters() -> Result<
         };
         inputs.push(input);
     }
+    Ok((session, inputs))
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn codex_input_replies_and_withdrawals_preserve_owned_waiters() -> Result<()> {
+    use metldr_codex_session::InputAnswer;
+
+    let (directory, mut owner, _, run) = make_owner("codex")?;
+    let (session, inputs) = codex_inputs(&directory).await?;
     let mut receivers = Vec::new();
     for input in &inputs[..2] {
         let (answer, receiver) = mpsc::sync_channel(1);
         owner.codex_input_offer(&run, input.id().clone(), input.prompt().clone(), answer)?;
         receivers.push(receiver);
     }
-    let request = owner.codex_input.as_ref().unwrap().public()?["pending"][0]["request"]
+    let request = owner.codex_input.get(&run).unwrap().public(&run)?["pending"][0]["request"]
         .as_str()
         .unwrap()
         .to_owned();
@@ -249,7 +283,7 @@ async fn codex_input_replies_and_withdrawals_preserve_owned_waiters() -> Result<
     ));
     owner.subscribers.clear();
     owner.codex_input_withdraw(&run, inputs[1].id())?;
-    assert!(owner.codex_input.is_none());
+    assert!(owner.codex_input.is_empty());
     assert!(matches!(
         receivers[1].try_recv(),
         Err(mpsc::TryRecvError::Disconnected)
@@ -269,7 +303,7 @@ async fn codex_input_replies_and_withdrawals_preserve_owned_waiters() -> Result<
         receivers[3].try_recv(),
         Err(mpsc::TryRecvError::Empty)
     ));
-    let request = owner.codex_input.as_ref().unwrap().public()?["pending"][0]["request"]
+    let request = owner.codex_input.get(&run).unwrap().public(&run)?["pending"][0]["request"]
         .as_str()
         .unwrap()
         .to_owned();
@@ -287,7 +321,7 @@ async fn codex_input_replies_and_withdrawals_preserve_owned_waiters() -> Result<
         .unwrap_err();
     assert!(crate::flow::fatal(error.as_ref()));
     assert_eq!(sequence(&owner)?, before + 1);
-    assert!(owner.codex_input.is_none());
+    assert!(owner.codex_input.is_empty());
     assert!(matches!(
         receivers[3].try_recv(),
         Err(mpsc::TryRecvError::Disconnected)
@@ -469,12 +503,16 @@ fn native_input_records_reserve_publish_cancel_and_keep_payloads_volatile() -> R
     for key in 1..=17 {
         let answer = pi_offer(&mut owner, &run, key)?;
         assert!(
-            owner.pi_ui.as_ref().is_some_and(|ui| {
-                ui.public().unwrap()["pending"].as_array().unwrap().len() == 1
+            owner.pi_ui.get(&run).is_some_and(|ui| {
+                ui.public(&run).unwrap()["pending"]
+                    .as_array()
+                    .unwrap()
+                    .len()
+                    == 1
             }),
             "live Pi prompt was lost while viewing history"
         );
-        let request = owner.pi_ui.as_ref().unwrap().public()?["pending"][0]["request"]
+        let request = owner.pi_ui.get(&run).unwrap().public(&run)?["pending"][0]["request"]
             .as_str()
             .unwrap()
             .to_owned();
@@ -526,7 +564,10 @@ fn native_input_records_reserve_publish_cancel_and_keep_payloads_volatile() -> R
         &run,
         crate::agent::ui::Change::Display(crate::agent::ui::Display::Title("visible".into())),
     )?;
-    assert_eq!(owner.pi_ui.as_ref().unwrap().public()?["title"], "visible");
+    assert_eq!(
+        owner.pi_ui.get(&run).unwrap().public(&run)?["title"],
+        "visible"
+    );
     let withdrawn = pi_offer(&mut owner, &run, 90)?;
     owner.pi_ui_change(&run, crate::agent::ui::Change::Withdraw { key: 90 })?;
     assert!(matches!(
@@ -580,13 +621,13 @@ fn native_input_records_reserve_publish_cancel_and_keep_payloads_volatile() -> R
         crate::agent::ui::Change::Display(crate::agent::ui::Display::Title("stale".into())),
     )?;
     assert_eq!(sequence(&stale)?, stopped_sequence);
-    assert!(stale.pi_ui.is_none());
+    assert!(stale.pi_ui.is_empty());
     stop_owner(&mut stale);
 
     // Publication fails after the durable edit. The fatal path cancels waiters and keeps that edit.
     let (directory, mut failed, _, run) = make_owner("pi")?;
     let answer = pi_offer(&mut failed, &run, 1)?;
-    let request = failed.pi_ui.as_ref().unwrap().public()?["pending"][0]["request"]
+    let request = failed.pi_ui.get(&run).unwrap().public(&run)?["pending"][0]["request"]
         .as_str()
         .unwrap()
         .to_owned();
@@ -609,7 +650,7 @@ fn native_input_records_reserve_publish_cancel_and_keep_payloads_volatile() -> R
             .load(std::sync::atomic::Ordering::Acquire)
     );
     assert!(
-        failed.pi_ui.as_ref().unwrap().public()?["pending"]
+        failed.pi_ui.get(&run).unwrap().public(&run)?["pending"]
             .as_array()
             .unwrap()
             .is_empty()
@@ -644,7 +685,7 @@ fn native_input_records_reserve_publish_cancel_and_keep_payloads_volatile() -> R
     // A stale/missing run row is a fatal history failure before an answer can be delivered.
     let (_directory, mut corrupt, _, run) = make_owner("pi")?;
     let answer = pi_offer(&mut corrupt, &run, 7)?;
-    let request = corrupt.pi_ui.as_ref().unwrap().public()?["pending"][0]["request"]
+    let request = corrupt.pi_ui.get(&run).unwrap().public(&run)?["pending"][0]["request"]
         .as_str()
         .unwrap()
         .to_owned();
@@ -973,5 +1014,337 @@ fn offscreen_pi_disconnect_stops_and_cancels_its_own_input() -> Result<()> {
     assert_eq!(serde_json::to_vec(&owner.state)?, visible);
     assert!(frames.lock().unwrap().is_empty());
     stop_owner(&mut owner);
+    Ok(())
+}
+
+fn paired_owner(
+    engine: &str,
+) -> Result<(
+    Directory,
+    Owner,
+    Arc<std::sync::Mutex<Vec<u8>>>,
+    [String; 2],
+)> {
+    let (directory, mut original, first) = input_fixture(engine, false)?;
+    let second = add_native_sibling(&mut original, &first)?;
+    let (owner, frames) = import_owner(&directory, original, &first)?;
+    Ok((directory, owner, frames, [first, second]))
+}
+
+fn add_native_sibling(original: &mut crate::model::Store, first: &str) -> Result<String> {
+    let mut run = original
+        .view
+        .runs
+        .iter()
+        .find(|run| run.id == first)
+        .unwrap()
+        .clone();
+    run.id = original.id()?;
+    let second = run.id.clone();
+    let workflow_id = original.id()?;
+    let mut launch = original.launches[first].clone();
+    match &mut launch {
+        crate::agent_model::Launch::Pi { workflow, .. } => {
+            let mut value = original.workflows[workflow].clone();
+            value.last_run = second.clone();
+            value.binding = crate::agent_model::Binding::Pending;
+            original.workflows.insert(workflow_id.clone(), value);
+            *workflow = workflow_id;
+        }
+        crate::agent_model::Launch::Codex {
+            workflow,
+            selection,
+            ..
+        } => {
+            let mut value = original.codex_workflows[workflow].clone();
+            value.last_run = second.clone();
+            value.binding = crate::codex_model::Binding::Pending;
+            original.codex_workflows.insert(workflow_id.clone(), value);
+            *workflow = workflow_id;
+            *selection = None;
+        }
+        _ => unreachable!("paired native provider"),
+    }
+    original.launches.insert(second.clone(), launch);
+    original.view.runs.push(run);
+    original.validate()?;
+    Ok(second)
+}
+
+fn last_view(frames: &Arc<std::sync::Mutex<Vec<u8>>>) -> Result<serde_json::Value> {
+    let bytes = frames.lock().unwrap();
+    let mut cursor = std::io::Cursor::new(bytes.as_slice());
+    let mut result = None;
+    while let Some(bytes) = crate::wire::read_raw(&mut cursor, crate::FRAME_MAX)? {
+        let mut value: serde_json::Value = serde_json::from_slice(&bytes)?;
+        if let Some(view) = value.get_mut("view") {
+            result = Some(view.take());
+        }
+    }
+    result.ok_or("missing input view".into())
+}
+
+#[test]
+fn same_provider_pi_inputs_keep_sibling_waiters() -> Result<()> {
+    use crate::agent::ui::{Answer, Change};
+    let (_directory, mut owner, frames, [a, b]) = paired_owner("pi")?;
+    owner.pi_ui_change(
+        &a,
+        Change::Display(crate::agent::ui::Display::Notify {
+            message: "A notice".into(),
+            level: "info".into(),
+        }),
+    )?;
+    let first = pi_offer(&mut owner, &a, 1)?;
+    let request_a = last_view(&frames)?["pi_ui"]["pending"][0]["request"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let second = pi_offer(&mut owner, &b, 1)?;
+    assert!(
+        matches!(first.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "first Pi waiter must survive sibling offer"
+    );
+    assert!(matches!(second.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    let view = last_view(&frames)?;
+    assert_eq!(view["pi_ui"]["run"], b);
+    assert_eq!(view["pi_ui"]["pending"].as_array().unwrap().len(), 1);
+    let request_b = view["pi_ui"]["pending"][0]["request"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_ne!(request_a, request_b);
+    assert!(
+        owner
+            .pi_ui_reply("wrong", &b, &request_a, Answer::Select("yes".into()))
+            .is_err()
+    );
+    let mut stale = owner.record_history.selection()?;
+    stale.epoch += 1;
+    owner.subscribers.insert(
+        "stale-pair".into(),
+        crate::flow::Subscription {
+            scope: stale,
+            run: a.clone(),
+        },
+    );
+    let error = owner
+        .pi_ui_reply("rollback", &a, &request_a, Answer::Select("yes".into()))
+        .unwrap_err();
+    assert!(!crate::flow::fatal(error.as_ref()));
+    assert!(matches!(first.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    assert!(matches!(second.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    owner.subscribers.clear();
+    owner.pi_ui_change(&a, Change::Withdraw { key: 1 })?;
+    assert!(matches!(
+        first.try_recv(),
+        Err(mpsc::TryRecvError::Disconnected)
+    ));
+    assert!(matches!(second.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    owner.pi_ui_reply("correct", &b, &request_b, Answer::Select("yes".into()))?;
+    assert!(matches!(second.try_recv()?, Answer::Select(value) if value == "yes"));
+    let first = pi_offer(&mut owner, &a, 2)?;
+    let request_a = last_view(&frames)?["pi_ui"]["pending"][0]["request"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let second = pi_offer(&mut owner, &b, 2)?;
+    let request_b = last_view(&frames)?["pi_ui"]["pending"][0]["request"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let before = sequence(&owner)?;
+    owner.transport.fail_next_emit();
+    let error = owner
+        .pi_ui_reply("fatal", &a, &request_a, Answer::Select("yes".into()))
+        .unwrap_err();
+    assert!(crate::flow::fatal(error.as_ref()));
+    assert_eq!(sequence(&owner)?, before + 1);
+    assert!(matches!(
+        first.try_recv(),
+        Err(mpsc::TryRecvError::Disconnected)
+    ));
+    assert!(matches!(second.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    owner.stop_run("stop-first", &a)?;
+    owner.agent_settled(&a, crate::agent::Outcome::Cancelled, false, true)?;
+    assert_eq!(
+        last_view(&frames)?["pi_ui"]["notices"][0]["message"],
+        "A notice"
+    );
+    assert!(matches!(
+        first.try_recv(),
+        Err(mpsc::TryRecvError::Disconnected)
+    ));
+    assert!(matches!(second.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    owner.pi_ui_reply("sibling", &b, &request_b, Answer::Select("yes".into()))?;
+    assert!(matches!(second.try_recv()?, Answer::Select(value) if value == "yes"));
+    assert_eq!(
+        owner.pi_ui.len(),
+        1,
+        "completed hidden Pi display must be released"
+    );
+    stop_owner(&mut owner);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn same_provider_codex_inputs_keep_sibling_waiters() -> Result<()> {
+    use metldr_codex_session::InputAnswer;
+    let (directory, mut owner, frames, [a, b]) = paired_owner("codex")?;
+    let (session, inputs) = codex_inputs(&directory).await?;
+    let input = &inputs[0];
+    let (answer_a, first) = mpsc::sync_channel(1);
+    owner.codex_input_offer(&a, input.id().clone(), input.prompt().clone(), answer_a)?;
+    let request_a = last_view(&frames)?["codex_input"]["pending"][0]["request"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (answer_b, second) = mpsc::sync_channel(1);
+    owner.codex_input_offer(&b, input.id().clone(), input.prompt().clone(), answer_b)?;
+    assert!(
+        matches!(first.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "first Codex waiter must survive sibling offer"
+    );
+    assert!(matches!(second.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    let view = last_view(&frames)?;
+    assert_eq!(view["codex_input"]["run"], b);
+    assert_eq!(view["codex_input"]["pending"].as_array().unwrap().len(), 1);
+    let request_b = view["codex_input"]["pending"][0]["request"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_ne!(request_a, request_b);
+    let answer = || crate::codex_input::Answer::Accept {
+        value: BTreeMap::new(),
+    };
+    assert!(
+        owner
+            .codex_input_reply("wrong", &b, &request_a, answer())
+            .is_err()
+    );
+    let mut stale = owner.record_history.selection()?;
+    stale.epoch += 1;
+    owner.subscribers.insert(
+        "stale-pair".into(),
+        crate::flow::Subscription {
+            scope: stale,
+            run: a.clone(),
+        },
+    );
+    let error = owner
+        .codex_input_reply("rollback", &a, &request_a, answer())
+        .unwrap_err();
+    assert!(!crate::flow::fatal(error.as_ref()));
+    assert!(matches!(first.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    assert!(matches!(second.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    owner.subscribers.clear();
+    owner.codex_input_withdraw(&a, input.id())?;
+    assert!(matches!(
+        first.try_recv(),
+        Err(mpsc::TryRecvError::Disconnected)
+    ));
+    assert!(matches!(second.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    owner.codex_input_reply("correct", &b, &request_b, answer())?;
+    assert!(matches!(second.try_recv()?, InputAnswer::Accept(value) if value.is_empty()));
+    let (answer_a, first) = mpsc::sync_channel(1);
+    owner.codex_input_offer(
+        &a,
+        inputs[1].id().clone(),
+        inputs[1].prompt().clone(),
+        answer_a,
+    )?;
+    let request_a = last_view(&frames)?["codex_input"]["pending"][0]["request"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (answer_b, second) = mpsc::sync_channel(1);
+    owner.codex_input_offer(
+        &b,
+        inputs[1].id().clone(),
+        inputs[1].prompt().clone(),
+        answer_b,
+    )?;
+    let request_b = last_view(&frames)?["codex_input"]["pending"][0]["request"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let before = sequence(&owner)?;
+    owner.transport.fail_next_emit();
+    let error = owner
+        .codex_input_reply("fatal", &a, &request_a, answer())
+        .unwrap_err();
+    assert!(crate::flow::fatal(error.as_ref()));
+    assert_eq!(sequence(&owner)?, before + 1);
+    assert!(matches!(
+        first.try_recv(),
+        Err(mpsc::TryRecvError::Disconnected)
+    ));
+    assert!(matches!(second.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    owner.stop_run("stop-first", &a)?;
+    owner.agent_settled(&a, crate::agent::Outcome::Cancelled, false, true)?;
+    assert!(matches!(
+        first.try_recv(),
+        Err(mpsc::TryRecvError::Disconnected)
+    ));
+    assert!(matches!(second.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    owner.codex_input_reply("sibling", &b, &request_b, answer())?;
+    assert!(matches!(second.try_recv()?, InputAnswer::Accept(value) if value.is_empty()));
+    stop_owner(&mut owner);
+    {
+        let (directory, mut original, a) = input_fixture("codex", false)?;
+        let b = add_native_sibling(&mut original, &a)?;
+        let c = add_native_sibling(&mut original, &a)?;
+        let (mut owner, frames) = import_owner(&directory, original, &a)?;
+        let (answer_a, replied) = mpsc::sync_channel(1);
+        owner.codex_input_offer(
+            &a,
+            inputs[2].id().clone(),
+            inputs[2].prompt().clone(),
+            answer_a,
+        )?;
+        let request = last_view(&frames)?["codex_input"]["pending"][0]["request"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        owner.codex_input_reply("empty-registered-owner", &a, &request, answer())?;
+        assert!(matches!(replied.try_recv()?, InputAnswer::Accept(value) if value.is_empty()));
+        let (answer_b, pending) = mpsc::sync_channel(1);
+        owner.codex_input_offer(
+            &b,
+            inputs[2].id().clone(),
+            inputs[2].prompt().clone(),
+            answer_b,
+        )?;
+        owner.disconnect_codex_input()?;
+        for run in [&a, &b] {
+            assert!(
+                owner.operations[run]
+                    .stop
+                    .load(std::sync::atomic::Ordering::Acquire)
+            );
+            assert_eq!(
+                owner.native_input_status(run, crate::agent_settings::Kind::Codex)?,
+                Some(Status::StopRequested)
+            );
+        }
+        assert!(matches!(
+            pending.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
+        assert!(owner.codex_input.is_empty());
+        assert!(
+            !owner.operations[&c]
+                .stop
+                .load(std::sync::atomic::Ordering::Acquire)
+        );
+        assert_eq!(
+            owner.native_input_status(&c, crate::agent_settings::Kind::Codex)?,
+            Some(Status::Running)
+        );
+        stop_owner(&mut owner);
+    }
+    let exit = session.close().await?;
+    assert!(!exit.forced && exit.code == Some(0));
     Ok(())
 }

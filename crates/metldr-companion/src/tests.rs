@@ -175,8 +175,8 @@ mod tests {
             codex_profile: None,
             opencode_profile: None,
             native_permissions: BTreeMap::new(),
-            pi_ui: None,
-            codex_input: None,
+            pi_ui: Default::default(),
+            codex_input: Default::default(),
             browser_approval: None,
             browser_io: None,
             browser_route: None,
@@ -309,8 +309,8 @@ mod tests {
             codex_profile: None,
             opencode_profile: None,
             native_permissions: BTreeMap::new(),
-            pi_ui: None,
-            codex_input: None,
+            pi_ui: Default::default(),
+            codex_input: Default::default(),
             browser_approval: None,
             browser_io: None,
             browser_route: None,
@@ -533,8 +533,8 @@ mod tests {
             codex_profile: None,
             opencode_profile: None,
             native_permissions: BTreeMap::new(),
-            pi_ui: None,
-            codex_input: None,
+            pi_ui: Default::default(),
+            codex_input: Default::default(),
             browser_approval: None,
             browser_io: None,
             browser_route: None,
@@ -710,7 +710,7 @@ mod tests {
                 },
             )
             .unwrap();
-        let request = owner.pi_ui.as_ref().unwrap().public().unwrap()["pending"][0]["request"]
+        let request = owner.pi_ui.get(run).unwrap().public(run).unwrap()["pending"][0]["request"]
             .as_str()
             .unwrap()
             .to_owned();

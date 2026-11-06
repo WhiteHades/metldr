@@ -138,7 +138,7 @@ impl Owner {
             Ok(())
         };
         self.cancel_browser_approval(run);
-        self.cancel_inputs(run, pending);
+        pending.cancel();
         result
     }
 
@@ -148,6 +148,6 @@ impl Owner {
         }
         let pending = self.detach_inputs(run);
         self.cancel_browser_approval(run);
-        self.cancel_inputs(run, pending);
+        pending.cancel();
     }
 }

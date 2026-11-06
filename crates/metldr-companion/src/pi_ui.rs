@@ -17,38 +17,37 @@ struct Pending {
     answer: SyncSender<Answer>,
 }
 
-#[derive(Clone)]
-pub(super) struct State {
-    pub(super) run: String,
+#[derive(Clone, Default)]
+pub(super) struct Active {
     pending: BTreeMap<String, Pending>,
     title: Option<String>,
     statuses: BTreeMap<String, String>,
     widgets: BTreeMap<String, Value>,
+}
+
+#[derive(Clone, Default)]
+pub(super) struct State {
+    active: Active,
     editor: Option<Value>,
     notices: Vec<Value>,
     notices_omitted: u64,
 }
 
 impl State {
-    fn new(run: &str) -> Self {
-        Self {
-            run: run.into(),
-            pending: BTreeMap::new(),
-            title: None,
-            statuses: BTreeMap::new(),
-            widgets: BTreeMap::new(),
-            editor: None,
-            notices: Vec::new(),
-            notices_omitted: 0,
-        }
+    pub(super) fn detach(&mut self) -> Active {
+        std::mem::take(&mut self.active)
     }
 
-    pub(super) fn public(&self) -> Result<Value> {
-        let value = json!({"run":self.run,
-            "pending":self.pending.iter().map(|(request,p)| json!({"request":request,"dialog":p.dialog})).collect::<Vec<_>>(),
-            "title":self.title,
-            "statuses":self.statuses.iter().map(|(key,text)| json!({"key":key,"text":text})).collect::<Vec<_>>(),
-            "widgets":self.widgets.iter().map(|(key,widget)| json!({"key":key,"lines":widget["lines"],"placement":widget["placement"]})).collect::<Vec<_>>(),
+    pub(super) fn restore(&mut self, active: Active) {
+        self.active = active;
+    }
+
+    pub(super) fn public(&self, run: &str) -> Result<Value> {
+        let value = json!({"run":run,
+            "pending":self.active.pending.iter().map(|(request,p)| json!({"request":request,"dialog":p.dialog})).collect::<Vec<_>>(),
+            "title":self.active.title,
+            "statuses":self.active.statuses.iter().map(|(key,text)| json!({"key":key,"text":text})).collect::<Vec<_>>(),
+            "widgets":self.active.widgets.iter().map(|(key,widget)| json!({"key":key,"lines":widget["lines"],"placement":widget["placement"]})).collect::<Vec<_>>(),
             "editor":self.editor,"notices":self.notices,"notices_omitted":self.notices_omitted});
         if serde_json::to_vec(&value)?.len() > 32768 {
             return Err("Pi UI display exceeds 32 KiB".into());
@@ -67,10 +66,10 @@ impl State {
             }
             Display::Status { key, text } => match text {
                 Some(text) => {
-                    self.statuses.insert(key, text);
+                    self.active.statuses.insert(key, text);
                 }
                 None => {
-                    self.statuses.remove(&key);
+                    self.active.statuses.remove(&key);
                 }
             },
             Display::Widget {
@@ -79,22 +78,22 @@ impl State {
                 placement,
             } => match lines {
                 Some(lines) => {
-                    self.widgets
+                    self.active
+                        .widgets
                         .insert(key, json!({"lines":lines,"placement":placement}));
                 }
                 None => {
-                    self.widgets.remove(&key);
+                    self.active.widgets.remove(&key);
                 }
             },
-            Display::Title(title) => self.title = Some(title),
+            Display::Title(title) => self.active.title = Some(title),
             Display::EditorText { revision, text } => {
                 self.editor = Some(json!({"revision":revision,"text":text}))
             }
         }
-        if self.statuses.len() > 16 || self.widgets.len() > 8 {
+        if self.active.statuses.len() > 16 || self.active.widgets.len() > 8 {
             return Err("Pi UI display has too many entries".into());
         }
-        self.public()?;
         Ok(())
     }
 }
@@ -119,11 +118,9 @@ impl Owner {
         if !active {
             return Ok(());
         }
-        let previous = self.pi_ui.clone();
+        let previous = self.pi_ui.get(run).cloned();
         let result = (|| -> Result<()> {
-            if self.pi_ui.as_ref().is_none_or(|ui| ui.run != run) {
-                self.pi_ui = Some(State::new(run));
-            }
+            self.pi_ui.entry(run.into()).or_default();
             match change {
                 Change::Offer {
                     key,
@@ -134,11 +131,13 @@ impl Owner {
                         return Ok(());
                     }
                     let request = next.id()?;
-                    let ui = self.pi_ui.as_mut().ok_or("missing Pi UI state")?;
-                    if ui.pending.len() >= 8 || ui.pending.values().any(|p| p.key == key) {
+                    let ui = self.pi_ui.get_mut(run).ok_or("missing Pi UI state")?;
+                    if ui.active.pending.len() >= 8
+                        || ui.active.pending.values().any(|p| p.key == key)
+                    {
                         return Err("invalid pending Pi UI offer".into());
                     }
-                    ui.pending.insert(
+                    ui.active.pending.insert(
                         request,
                         Pending {
                             key,
@@ -149,25 +148,36 @@ impl Owner {
                 }
                 Change::Withdraw { key } => {
                     self.pi_ui
-                        .as_mut()
+                        .get_mut(run)
                         .ok_or("missing Pi UI state")?
+                        .active
                         .pending
                         .retain(|_, p| p.key != key);
                 }
                 Change::Display(display) => self
                     .pi_ui
-                    .as_mut()
+                    .get_mut(run)
                     .ok_or("missing Pi UI state")?
                     .display(display)?,
             }
-            self.pi_ui.as_ref().ok_or("missing Pi UI state")?.public()?;
+            self.pi_ui
+                .get(run)
+                .ok_or("missing Pi UI state")?
+                .public(run)?;
             self.commit_native_input(run, crate::agent_settings::Kind::Pi, next)
         })();
         if let Err(error) = result {
             if crate::flow::fatal(error.as_ref()) {
                 return Err(error);
             }
-            self.pi_ui = previous;
+            match previous {
+                Some(state) => {
+                    self.pi_ui.insert(run.into(), state);
+                }
+                None => {
+                    self.pi_ui.remove(run);
+                }
+            }
             self.stop_native_record_inputs(
                 run,
                 "Pi UI could not be presented",
@@ -188,12 +198,12 @@ impl Owner {
         if !self.native_input_active(run, crate::agent_settings::Kind::Pi)? {
             return Err("Pi UI run is no longer accepting replies".into());
         }
-        let ui = self
-            .pi_ui
-            .as_ref()
-            .filter(|ui| ui.run == run)
-            .ok_or("stale Pi UI run")?;
-        let pending = ui.pending.get(request).ok_or("stale Pi UI request")?;
+        let ui = self.pi_ui.get(run).ok_or("stale Pi UI run")?;
+        let pending = ui
+            .active
+            .pending
+            .get(request)
+            .ok_or("stale Pi UI request")?;
         if !pending.dialog.accepts(&answer) {
             return Err("Pi UI answer was not offered".into());
         }
@@ -205,16 +215,18 @@ impl Owner {
         let next = self.native_input_state(run)?;
         let pending = self
             .pi_ui
-            .as_mut()
+            .get_mut(run)
             .ok_or("missing Pi UI state")?
+            .active
             .pending
             .remove(request)
             .ok_or("stale Pi UI request")?;
         if let Err(error) = self.commit_native_input(run, crate::agent_settings::Kind::Pi, next) {
             if !crate::flow::fatal(error.as_ref()) {
                 self.pi_ui
-                    .as_mut()
+                    .get_mut(run)
                     .ok_or("missing Pi UI state")?
+                    .active
                     .pending
                     .insert(request.into(), pending);
             }
@@ -227,13 +239,17 @@ impl Owner {
         }
     }
 
-    pub(super) fn clear_pi_ui(&mut self, run: &str) {
-        if let Some(ui) = self.pi_ui.as_mut().filter(|ui| ui.run == run) {
-            ui.pending.clear();
-            ui.title = None;
-            ui.statuses.clear();
-            ui.widgets.clear();
-        }
+    pub(super) fn prune_pi_ui(&mut self) {
+        let visible = self
+            .state
+            .view
+            .runs
+            .iter()
+            .find(|run| self.pi_ui.contains_key(&run.id))
+            .map(|run| run.id.as_str());
+        let operations = &self.operations;
+        self.pi_ui
+            .retain(|run, _| operations.contains_key(run) || Some(run.as_str()) == visible);
     }
 
     pub(super) fn disconnect_pi_ui(&mut self) -> Result<()> {

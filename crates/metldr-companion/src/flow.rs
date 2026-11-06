@@ -181,8 +181,8 @@ pub(super) struct Owner {
     pub(super) codex_profile: Option<crate::codex_model::Profile>,
     pub(super) opencode_profile: Option<crate::opencode_model::Profile>,
     pub(super) native_permissions: BTreeMap<String, PendingPermission>,
-    pub(super) pi_ui: Option<crate::pi_ui::State>,
-    pub(super) codex_input: Option<crate::codex_input::State>,
+    pub(super) pi_ui: BTreeMap<String, crate::pi_ui::State>,
+    pub(super) codex_input: BTreeMap<String, crate::codex_input::State>,
     pub(super) browser_approval: Option<crate::browser_owner::PendingApproval>,
     pub(super) browser_io: Option<crate::browser_io::Slot>,
     pub(super) browser_route: Option<crate::https_profile::Profile>,
@@ -241,6 +241,7 @@ impl Owner {
                 self.subscribers.remove(&request);
             }
         }
+        self.prune_pi_ui();
         Ok(())
     }
     pub(super) fn request(&mut self, request: Request) -> Result<()> {

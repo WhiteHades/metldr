@@ -94,8 +94,8 @@ pub(super) fn render(
     codex_profile: Option<&crate::codex_model::Profile>,
     opencode_profile: Option<&crate::opencode_model::Profile>,
     native_permissions: &std::collections::BTreeMap<String, crate::flow::PendingPermission>,
-    pi_ui: Option<&crate::pi_ui::State>,
-    codex_input: Option<&crate::codex_input::State>,
+    pi_ui: &BTreeMap<String, crate::pi_ui::State>,
+    codex_input: &BTreeMap<String, crate::codex_input::State>,
     browser_route: Option<&crate::https_profile::Profile>,
     responses_route: Option<&crate::https_profile::Profile>,
     google_route: Option<&crate::https_profile::Profile>,
@@ -104,14 +104,20 @@ pub(super) fn render(
     native_choices: Option<&crate::history::NativeChoices>,
 ) -> Result<Value> {
     let mut view = serde_json::to_value(&state.view)?;
-    view["pi_ui"] = pi_ui
-        .filter(|ui| state.view.runs.iter().any(|r| r.id == ui.run))
-        .map(crate::pi_ui::State::public)
+    view["pi_ui"] = state
+        .view
+        .runs
+        .iter()
+        .find_map(|run| pi_ui.get_key_value(&run.id))
+        .map(|(run, ui)| ui.public(run))
         .transpose()?
         .unwrap_or(Value::Null);
-    view["codex_input"] = codex_input
-        .filter(|input| state.view.runs.iter().any(|r| r.id == input.run))
-        .map(crate::codex_input::State::public)
+    view["codex_input"] = state
+        .view
+        .runs
+        .iter()
+        .find_map(|run| codex_input.get_key_value(&run.id))
+        .map(|(run, input)| input.public(run))
         .transpose()?
         .unwrap_or(Value::Null);
     view["fixture_available"] = json!(fixture_available);
