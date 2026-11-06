@@ -423,16 +423,11 @@ impl Owner {
             let previous = self.agent_runtime.states.get(&kind).copied();
             self.refresh_agent_runtime(kind);
             if previous != self.agent_runtime.states.get(&kind).copied() {
-                if self.record_history.is_some() {
-                    let current = self.state.view.runs.last().map(|run| run.id.clone());
-                    self.record_change(|edit, scope| {
-                        let state = edit.refresh_view(scope, current.as_deref())?;
-                        Ok(((), Some(state)))
-                    })?;
-                } else {
-                    self.persist(self.state.clone())?;
-                    self.publish()?;
-                }
+                let current = self.state.view.runs.last().map(|run| run.id.clone());
+                self.record_change(|edit, scope| {
+                    let state = edit.refresh_view(scope, current.as_deref())?;
+                    Ok(((), Some(state)))
+                })?;
             }
         }
         Ok(())
@@ -442,14 +437,17 @@ impl Owner {
 #[cfg(test)]
 mod checks {
     use super::*;
-    use crate::{flow::Owner, model::Store, store::Disk};
+    use crate::{flow::Owner, history::History};
     use std::{
         fs,
         sync::mpsc,
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    fn make_owner(disk: Disk, state: Store) -> Owner {
+    fn make_owner(directory: &std::path::Path) -> Owner {
+        let (disk, mut history) = History::load(directory.to_path_buf()).unwrap();
+        let scope = history.selection().unwrap();
+        let state = history.edit(|edit| edit.project(&scope, None)).unwrap();
         let (transport, _) = crate::transport::Transport::captured();
         let (tx, _) = mpsc::sync_channel(8);
         Owner {
@@ -475,7 +473,7 @@ mod checks {
             responses_route: None,
             google_route: None,
             chat_route: None,
-            record_history: None,
+            record_history: history,
             history_pins: Default::default(),
         }
     }
@@ -492,8 +490,7 @@ mod checks {
         ));
         fs::create_dir_all(&root).unwrap();
         let state_dir = root.join("state");
-        let (disk, state) = Disk::open(state_dir.clone()).unwrap();
-        let mut owner = make_owner(disk, state);
+        let mut owner = make_owner(&state_dir);
         let profile = Profile::Codex {
             executable: "/bin/sh".into(),
             workspace: root.clone(),
@@ -556,18 +553,17 @@ mod checks {
         assert!(owner.agent_save("stale:1", 0, profile).is_err());
         drop(owner);
 
-        let (disk, state) = Disk::open(state_dir.clone()).unwrap();
-        assert_eq!(state.agent_settings.slot(Kind::Codex).revision, 1);
-        let mut owner = make_owner(disk, state);
+        let mut owner = make_owner(&state_dir);
+        assert_eq!(owner.state.agent_settings.slot(Kind::Codex).revision, 1);
         owner.agent_remove("remove:1", Kind::Codex, 1).unwrap();
         drop(owner);
-        let (disk, state) = Disk::open(state_dir).unwrap();
+        let owner = make_owner(&state_dir);
         assert_eq!(
-            state.agent_settings.slot(Kind::Codex).selection,
+            owner.state.agent_settings.slot(Kind::Codex).selection,
             Selection::Removed
         );
-        assert_eq!(state.agent_settings.slot(Kind::Codex).revision, 2);
-        drop(disk);
+        assert_eq!(owner.state.agent_settings.slot(Kind::Codex).revision, 2);
+        drop(owner);
         fs::remove_dir_all(root).unwrap();
     }
 }

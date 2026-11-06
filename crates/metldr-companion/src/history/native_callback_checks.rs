@@ -8,7 +8,6 @@ use crate::{
     transport::Transport,
 };
 use metldr_conversation::Content;
-use redb::{ReadableDatabase, ReadableTableMetadata};
 use std::{
     collections::BTreeMap,
     fs,
@@ -55,7 +54,7 @@ fn owner(
             disk,
             state,
             browser_view: BTreeMap::new(),
-            record_history: Some(history),
+            record_history: history,
             history_pins: Default::default(),
             settings: Default::default(),
             agent_runtime: Default::default(),
@@ -104,9 +103,6 @@ fn actual_owner_native_callbacks_bind_persist_and_fail_closed() -> Result<()> {
         ("codex", "emit"),
         ("opencode", "none"),
         ("opencode", "corrupt"),
-        ("pi", "snapshot"),
-        ("codex", "snapshot"),
-        ("opencode", "snapshot"),
     ] {
         let directory = Directory::new()?;
         let disk = Disk::lock(directory.0.clone())?;
@@ -257,39 +253,13 @@ fn actual_owner_native_callbacks_bind_persist_and_fail_closed() -> Result<()> {
                     .expect("binding acknowledgement"),
             )
         };
-        if fault == "snapshot" {
-            let _archive = owner.record_history.take();
-            owner.disk.save(&owner.state)?;
-            let (result, reply) = ack(&mut owner);
-            result?;
-            assert_eq!(reply?, true);
-            match engine {
-                "pi" => owner.pi_activity(&run, activity("snapshot-tool"))?,
-                "codex" => owner.codex_activity(&run, activity("snapshot-tool"))?,
-                _ => owner.opencode_activity(&run, activity("snapshot-tool"))?,
-            }
-            let saved: crate::model::Store =
-                serde_json::from_slice(&fs::read(directory.0.join("snapshot.json"))?)?;
-            saved.validate()?;
-            assert!(serde_json::to_string(&saved.view.runs[0].output)?.contains("snapshot-tool"));
-            assert_ne!(fs::read(directory.0.join("snapshot.json"))?, snapshot);
-            assert!(!frames.lock().unwrap().is_empty());
-            owner
-                .operations
-                .remove(&run)
-                .unwrap()
-                .worker
-                .join()
-                .expect("owned callback worker");
-            continue;
-        }
         if fault == "emit" {
             owner.transport.fail_next_emit();
             let (result, ack) = ack(&mut owner);
             assert!(result.is_err());
             assert!(ack.is_err());
             assert!(frames.lock().unwrap().is_empty());
-            let saved = owner.record_history.as_mut().unwrap().edit(|edit| {
+            let saved = owner.record_history.edit(|edit| {
                 edit.current_execution(&selection, &run)
                     .and_then(|execution| edit.native_task(&execution, &run))
             })?;
@@ -309,7 +279,7 @@ fn actual_owner_native_callbacks_bind_persist_and_fail_closed() -> Result<()> {
                 .worker
                 .join()
                 .expect("owned callback worker");
-            drop(owner.record_history.take());
+            drop(owner.record_history);
             let mut reopened = History::open(&path, owner.disk.lease())?;
             let durable = reopened.edit(|edit| {
                 edit.current_execution(&selection, &run)
@@ -326,7 +296,7 @@ fn actual_owner_native_callbacks_bind_persist_and_fail_closed() -> Result<()> {
         }
         if fault == "corrupt" {
             let number = run.rsplit(':').next().unwrap().parse::<u64>()?;
-            let write = owner.record_history.as_ref().unwrap().db.begin_write()?;
+            let write = owner.record_history.db.begin_write()?;
             write
                 .open_table(RUN_ORDER)?
                 .remove((selection.conversation.as_str(), number))?;
@@ -373,7 +343,7 @@ fn actual_owner_native_callbacks_bind_persist_and_fail_closed() -> Result<()> {
         owner.tool_progress(&run, progress.clone())?;
         owner.tool_progress("stale-run", progress.clone())?;
         assert_eq!(frames.lock().unwrap().len(), published);
-        let saved = owner.record_history.as_mut().unwrap().edit(|edit| {
+        let saved = owner.record_history.edit(|edit| {
             edit.current_execution(&selection, &run)
                 .and_then(|execution| edit.native_task(&execution, &run))
         })?;
@@ -388,7 +358,7 @@ fn actual_owner_native_callbacks_bind_persist_and_fail_closed() -> Result<()> {
         assert_eq!(activities[0].call.as_ref().unwrap().id, "callback-tool-1");
         assert_eq!(activities[0].call.as_ref(), Some(&progress));
         for invalid in ["tool", "phase", "identity", "clear"] {
-            let result = owner.record_history.as_mut().unwrap().edit(|edit| {
+            let result = owner.record_history.edit(|edit| {
                 let mut task = edit
                     .current_execution(&selection, &run)
                     .and_then(|execution| edit.native_task(&execution, &run))?;
@@ -430,7 +400,7 @@ fn actual_owner_native_callbacks_bind_persist_and_fail_closed() -> Result<()> {
         ));
         owner.tool_progress(&run, late)?;
         assert_eq!(frames.lock().unwrap().len(), count);
-        owner.record_history.as_mut().unwrap().edit(|edit| {
+        owner.record_history.edit(|edit| {
             let mut record = edit
                 .current_execution(&selection, &run)
                 .and_then(|execution| edit.run(&execution, &run))?;
@@ -449,7 +419,7 @@ fn actual_owner_native_callbacks_bind_persist_and_fail_closed() -> Result<()> {
         result?;
         assert_eq!(stopped_ack?, false);
         assert_eq!(frames.lock().unwrap().len(), count);
-        drop(owner.record_history.take());
+        drop(owner.record_history);
         let mut reopened = History::open(&path, owner.disk.lease())?;
         let reopened_task = reopened.edit(|edit| {
             edit.current_execution(&selection, &run)
@@ -491,6 +461,7 @@ fn actual_owner_native_callbacks_bind_persist_and_fail_closed() -> Result<()> {
         }
         assert_eq!(fs::read(directory.0.join("snapshot.json"))?, snapshot);
         assert!(!frames.lock().unwrap().is_empty());
+        owner.record_history = reopened;
         if fault == "none" {
             let (stale, stale_ack) = {
                 let (tx, rx) = mpsc::sync_channel(1);

@@ -30,9 +30,6 @@ fn viewed_run(state: &Store) -> Option<String> {
 
 impl Owner {
     pub(super) fn refresh_saved_settings(&mut self) -> Result<()> {
-        if self.record_history.is_none() {
-            return Ok(());
-        }
         let run = viewed_run(&self.state);
         let previous_agents = serde_json::to_vec(&self.state.agent_settings)?;
         let previous_providers =
@@ -64,9 +61,6 @@ impl Owner {
     }
 
     pub(super) fn persist_settings(&mut self, next: Store) -> Result<()> {
-        if self.record_history.is_none() {
-            return self.persist(next);
-        }
         let providers = self.state.providers.clone();
         let agents = self.state.agent_settings.clone();
         let run = viewed_run(&self.state);

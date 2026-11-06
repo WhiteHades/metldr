@@ -5,6 +5,7 @@ use crate::{
     model::{Page, Run, Source, Status, Store},
     store::Disk,
 };
+use redb::ReadableDatabase;
 use std::{
     collections::BTreeMap,
     fs,
@@ -16,7 +17,15 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-fn with_owner(check: impl FnOnce(&mut Owner, Proposal)) {
+fn with_owner(codex: bool, check: impl FnOnce(&mut Owner, Proposal)) {
+    with_owner_seed(codex, |_, _| {}, check)
+}
+
+fn with_owner_seed(
+    codex: bool,
+    seed: impl FnOnce(&mut Store, &Proposal),
+    check: impl FnOnce(&mut Owner, Proposal),
+) {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let root = std::env::temp_dir().join(format!(
         "metldr-browser-{}-{}-{}",
@@ -43,20 +52,83 @@ fn with_owner(check: impl FnOnce(&mut Owner, Proposal)) {
     state.view.runs.push(Run {
         id: run.clone(),
         source,
-        kind: "answer".into(),
+        kind: if codex { "agent" } else { "answer" }.into(),
         question: Some("Fill the owned field".into()),
         status: Status::Running,
         output: Default::default(),
         error: None,
         corrections: Vec::new(),
     });
-    state.launches.insert(
-        run.clone(),
-        crate::agent_model::Launch::Fixture {
-            input_digest: "0".repeat(64),
+    if codex {
+        use crate::{
+            agent_model::{Launch, digest},
+            codex_model::{Binding as ThreadBinding, Profile, Workflow},
+        };
+        let workflow = state.id().unwrap();
+        let profile = Profile {
+            executable: "/tool/codex".into(),
+            workspace: "/work".into(),
+        };
+        let source = state.view.source.as_ref().unwrap().clone();
+        state.codex_workflows.insert(
+            workflow.clone(),
+            Workflow {
+                fingerprint: digest(&profile).unwrap(),
+                profile,
+                source,
+                revision: 1,
+                last_run: run.clone(),
+                binding: ThreadBinding::Pending,
+            },
+        );
+        state.launches.insert(
+            run.clone(),
+            Launch::Codex {
+                input_digest: "0".repeat(64),
+                workflow: workflow.clone(),
+                selection: None,
+                activity: vec![],
+            },
+        );
+    } else {
+        state.launches.insert(
+            run.clone(),
+            crate::agent_model::Launch::Fixture {
+                input_digest: "0".repeat(64),
+            },
+        );
+    }
+    let proposal = Proposal {
+        run: run.clone(),
+        tool_use_id: "tool-1".into(),
+        url: "http://127.0.0.1:1/article".into(),
+        binding: Binding {
+            tab: 7,
+            document: "document-1".into(),
+            target: "target-1".into(),
+            frame: "frame-1".into(),
+            session: "session-1".into(),
+            unique_context: "unique-1".into(),
+            grant_revision: 1,
         },
-    );
+        intent: Intent::Field {
+            field_id: "metldr-field".into(),
+            field_label: "Email address".into(),
+            previous_value: "Existing value".into(),
+            value: "Approved value".into(),
+        },
+    };
+    seed(&mut state, &proposal);
+    state.validate().unwrap();
     disk.save(&state).unwrap();
+    let original = fs::read(root.join("snapshot.json")).unwrap();
+    let mut history =
+        crate::history::History::import_new(&root.join("history.redb"), &original, disk.lease())
+            .unwrap();
+    let selection = history.selection().unwrap();
+    state = history
+        .edit(|edit| edit.project(&selection, Some(&run)))
+        .unwrap();
     let (tx, _) = mpsc::sync_channel(16);
     let mut owner = Owner {
         transport: crate::transport::Transport::stdio(),
@@ -89,30 +161,10 @@ fn with_owner(check: impl FnOnce(&mut Owner, Proposal)) {
         browser_io: None,
         browser_route: None,
         responses_route: None,
-        record_history: None,
+        record_history: history,
         history_pins: Default::default(),
         google_route: None,
         chat_route: None,
-    };
-    let proposal = Proposal {
-        run,
-        tool_use_id: "tool-1".into(),
-        url: owner.fixture.as_ref().unwrap().origin.clone() + "/article",
-        binding: Binding {
-            tab: 7,
-            document: "document-1".into(),
-            target: "target-1".into(),
-            frame: "frame-1".into(),
-            session: "session-1".into(),
-            unique_context: "unique-1".into(),
-            grant_revision: 1,
-        },
-        intent: Intent::Field {
-            field_id: "metldr-field".into(),
-            field_label: "Email address".into(),
-            previous_value: "Existing value".into(),
-            value: "Approved value".into(),
-        },
     };
     check(&mut owner, proposal);
     for (_, operation) in std::mem::take(&mut owner.operations) {
@@ -122,53 +174,26 @@ fn with_owner(check: impl FnOnce(&mut Owner, Proposal)) {
     fs::remove_dir_all(root).unwrap();
 }
 
-fn saved(owner: &Owner) -> Store {
-    let state: Store =
-        serde_json::from_slice(&fs::read(owner.disk.directory.join("snapshot.json")).unwrap())
-            .unwrap();
-    state.validate().unwrap();
-    state
+fn saved(owner: &mut Owner) -> Store {
+    let selection = owner.record_history.selection().unwrap();
+    owner
+        .record_history
+        .edit(|edit| {
+            let mut state = edit.project_latest(&selection)?;
+            let runs: Vec<_> = state.view.runs.iter().map(|run| run.id.as_str()).collect();
+            state.browser_actions = edit.browser_view(&selection, &runs)?;
+            Ok(state)
+        })
+        .unwrap()
 }
 
-fn bind_codex(owner: &mut Owner, run: &str) -> String {
-    use crate::{
-        agent_model::{Launch, digest},
-        codex_model::{Binding as ThreadBinding, Profile, Workflow},
-    };
-    let source = owner.state.view.source.as_ref().unwrap().clone();
-    let workflow = owner.state.id().unwrap();
-    let profile = Profile {
-        executable: "/tool/codex".into(),
-        workspace: "/work".into(),
-    };
-    owner.state.codex_workflows.insert(
-        workflow.clone(),
-        Workflow {
-            fingerprint: digest(&profile).unwrap(),
-            profile,
-            source,
-            revision: 1,
-            last_run: run.to_owned(),
-            binding: ThreadBinding::Pending,
-        },
-    );
-    owner.state.launches.insert(
-        run.to_owned(),
-        Launch::Codex {
-            input_digest: "0".repeat(64),
-            workflow: workflow.clone(),
-            selection: None,
-            activity: vec![],
-        },
-    );
-    owner.state.view.runs[0].kind = "agent".into();
-    workflow
+fn bind_codex(owner: &Owner) -> String {
+    owner.state.codex_workflows.keys().next().unwrap().clone()
 }
 
 #[test]
 fn native_reviews_keep_distinct_durable_nonces_and_revoke_exact_requests() {
-    with_owner(|owner, proposal| {
-        bind_codex(owner, &proposal.run);
+    with_owner(true, |owner, proposal| {
         let details = serde_json::json!({"agent":"codex","tool":"Command","title":"Run owned command","input":"owned command","options":[{"id":"0","name":"Allow once"}]});
         let (ack, first) = mpsc::sync_channel(1);
         owner
@@ -214,26 +239,25 @@ fn native_reviews_keep_distinct_durable_nonces_and_revoke_exact_requests() {
 
 #[test]
 fn codex_browser_follow_up_uses_the_verified_destination() {
-    with_owner(|owner, mut field| {
-        let workflow = bind_codex(owner, &field.run);
-        let source = serde_json::to_value(&owner.state.view.source).unwrap();
+    with_owner(true, |owner, mut field| {
+        let workflow = bind_codex(owner);
+        let mut state = saved(owner);
+        let source = serde_json::to_value(&state.view.source).unwrap();
         let mut navigation = field.clone();
         let destination = owner.fixture.as_ref().unwrap().origin.clone() + "/decoy";
         navigation.intent = Intent::Navigate {
             destination: destination.clone(),
         };
-        let proposed = owner.state.propose_browser(navigation).unwrap();
-        let approved = owner.state.decide_browser(&proposed.id, 1, true).unwrap();
-        let dispatched = owner
-            .state
+        let proposed = state.propose_browser(navigation).unwrap();
+        let approved = state.decide_browser(&proposed.id, 1, true).unwrap();
+        let dispatched = state
             .dispatch_browser(&proposed.id, approved.revision)
             .unwrap();
         let mut binding = field.binding.clone();
         binding.document = "destination-document".into();
         binding.unique_context = "destination-context".into();
         binding.grant_revision = 2;
-        owner
-            .state
+        state
             .settle_browser(
                 &proposed.id,
                 dispatched.revision,
@@ -245,21 +269,21 @@ fn codex_browser_follow_up_uses_the_verified_destination() {
             )
             .unwrap();
         for turn in 0..2 {
-            owner.state.view.runs.last_mut().unwrap().status = Status::Complete;
+            state.view.runs.last_mut().unwrap().status = Status::Complete;
             if let Some(crate::agent_model::Launch::Codex { selection, .. }) =
-                owner.state.launches.get_mut(&field.run)
+                state.launches.get_mut(&field.run)
             {
                 *selection = Some(crate::codex_model::Selection {
                     provider: "owned".into(),
                     model: "owned".into(),
                 });
             }
-            let run = owner.state.id().unwrap();
-            let mut record = owner.state.view.runs.last().unwrap().clone();
+            let run = state.id().unwrap();
+            let mut record = state.view.runs.last().unwrap().clone();
             record.id = run.clone();
             record.status = Status::Running;
-            owner.state.view.runs.push(record);
-            owner.state.launches.insert(
+            state.view.runs.push(record);
+            state.launches.insert(
                 run.clone(),
                 crate::agent_model::Launch::Codex {
                     input_digest: "0".repeat(64),
@@ -268,34 +292,25 @@ fn codex_browser_follow_up_uses_the_verified_destination() {
                     activity: vec![],
                 },
             );
-            owner
-                .state
-                .codex_workflows
-                .get_mut(&workflow)
-                .unwrap()
-                .last_run = run.clone();
+            state.codex_workflows.get_mut(&workflow).unwrap().last_run = run.clone();
             field.run = run;
             field.tool_use_id = format!("follow-up-{turn}");
             let mut stale = field.clone();
             stale.binding.document = "document-1".into();
             stale.binding.grant_revision = 1;
             stale.url = owner.fixture.as_ref().unwrap().origin.clone() + "/article";
-            assert!(owner.state.propose_browser(stale).is_err());
+            assert!(state.propose_browser(stale).is_err());
             field.binding = binding.clone();
             field.binding.grant_revision = 1;
             field.url = destination.clone();
-            let action = owner
-                .state
+            let action = state
                 .propose_browser(field.clone())
                 .expect("follow up must use the verified destination with a fresh grant");
-            owner.state.decide_browser(&action.id, 1, false).unwrap();
-            owner.state.validate().unwrap();
+            state.decide_browser(&action.id, 1, false).unwrap();
+            state.validate().unwrap();
         }
-        assert_eq!(
-            serde_json::to_value(&owner.state.view.source).unwrap(),
-            source
-        );
-        let mut unrelated = owner.state.clone();
+        assert_eq!(serde_json::to_value(&state.view.source).unwrap(), source);
+        let mut unrelated = state.clone();
         unrelated.view.runs.last_mut().unwrap().status = Status::Complete;
         if let Some(crate::agent_model::Launch::Codex { selection, .. }) =
             unrelated.launches.get_mut(&field.run)
@@ -332,7 +347,7 @@ fn codex_browser_follow_up_uses_the_verified_destination() {
             unrelated.propose_browser(field).is_err(),
             "another workflow must not inherit a destination"
         );
-        let mut reordered = owner.state.clone();
+        let mut reordered = state.clone();
         reordered.view.runs.swap(0, 1);
         assert!(reordered.validate().is_err());
     });
@@ -341,129 +356,132 @@ fn codex_browser_follow_up_uses_the_verified_destination() {
 #[test]
 fn native_browser_actions_keep_the_workflow_source_and_block_uncertain_recovery() {
     for pi in [false, true] {
-        with_owner(|owner, proposal| {
-            let workflow = bind_codex(owner, &proposal.run);
-            if pi {
-                use crate::agent_model::{Binding, Launch, Profile, Workflow, digest};
-                let old = owner.state.codex_workflows.remove(&workflow).unwrap();
-                let profile = Profile {
-                    executable: "/tool/pi".into(),
-                    workspace: "/work".into(),
-                    session_dir: "/sessions".into(),
-                    provider: "probe".into(),
-                    model: "probe".into(),
-                    offline: true,
-                };
-                owner.state.workflows.insert(
-                    workflow.clone(),
-                    Workflow {
-                        fingerprint: digest(&profile).unwrap(),
-                        profile,
-                        source: old.source,
-                        revision: 1,
-                        last_run: proposal.run.clone(),
-                        binding: Binding::Pending,
-                    },
-                );
-                owner.state.launches.insert(
-                    proposal.run.clone(),
-                    Launch::Pi {
-                        workflow,
-                        input_digest: "0".repeat(64),
-                        activity: vec![],
-                    },
-                );
-            }
-            let new_source = owner.state.id().unwrap();
-            let selected = owner.state.view.source.as_mut().unwrap();
-            selected.id = new_source;
-            selected.page.tab = 8;
-            selected.page.document = "another-document".into();
-            selected.page.url = owner.fixture.as_ref().unwrap().origin.clone() + "/other";
-            owner.state.validate().unwrap();
-            let mut retargeted = proposal.clone();
-            retargeted.tool_use_id = "another-tool".into();
-            retargeted.binding.tab = 8;
-            retargeted.binding.document = "another-document".into();
-            retargeted.url = owner.fixture.as_ref().unwrap().origin.clone() + "/other";
-            assert!(owner.state.propose_browser(retargeted).is_err());
-            let action = owner.state.propose_browser(proposal).unwrap();
-            assert_eq!(action.proposal.binding.tab, 7);
-            assert_eq!(action.proposal.binding.document, "document-1");
-            let approved = owner
-                .state
-                .decide_browser(&action.id, action.revision, true)
-                .unwrap();
-            let dispatched = owner
-                .state
-                .dispatch_browser(&action.id, approved.revision)
-                .unwrap();
-            owner
-                .state
-                .settle_browser(
-                    &action.id,
-                    dispatched.revision,
-                    Outcome::Uncertain {
-                        reason: "field observation was lost".into(),
-                    },
-                )
-                .unwrap();
-            owner
-                .agent_settled(
-                    &action.proposal.run,
-                    crate::agent::Outcome::Failed("browser effect is uncertain".into()),
-                    false,
-                    true,
-                )
-                .unwrap();
-            if pi {
-                assert!(
-                    owner
-                        .state
-                        .workflows
-                        .values()
-                        .next()
-                        .unwrap()
-                        .binding
-                        .resume_path()
-                        .is_err()
-                );
-            } else {
-                assert!(
-                    owner
-                        .state
-                        .codex_workflows
-                        .values()
-                        .next()
-                        .unwrap()
-                        .binding
-                        .resume()
-                        .is_err()
-                );
-            }
-        });
+        with_owner_seed(
+            true,
+            |state, proposal| {
+                if pi {
+                    use crate::agent_model::{Binding, Launch, Profile, Workflow, digest};
+                    let workflow = state.codex_workflows.keys().next().unwrap().clone();
+                    let old = state.codex_workflows.remove(&workflow).unwrap();
+                    let profile = Profile {
+                        executable: "/tool/pi".into(),
+                        workspace: "/work".into(),
+                        session_dir: "/sessions".into(),
+                        provider: "probe".into(),
+                        model: "probe".into(),
+                        offline: true,
+                    };
+                    state.workflows.insert(
+                        workflow.clone(),
+                        Workflow {
+                            fingerprint: digest(&profile).unwrap(),
+                            profile,
+                            source: old.source,
+                            revision: 1,
+                            last_run: proposal.run.clone(),
+                            binding: Binding::Pending,
+                        },
+                    );
+                    state.launches.insert(
+                        proposal.run.clone(),
+                        Launch::Pi {
+                            workflow,
+                            input_digest: "0".repeat(64),
+                            activity: vec![],
+                        },
+                    );
+                }
+                let new_source = state.id().unwrap();
+                let selected = state.view.source.as_mut().unwrap();
+                selected.id = new_source;
+                selected.page.tab = 8;
+                selected.page.document = "another-document".into();
+                selected.page.url = "http://127.0.0.1:1/other".into();
+            },
+            |owner, proposal| {
+                let mut retargeted = proposal.clone();
+                retargeted.tool_use_id = "another-tool".into();
+                retargeted.binding.tab = 8;
+                retargeted.binding.document = "another-document".into();
+                retargeted.url = "http://127.0.0.1:1/other".into();
+                let (ack, reply) = mpsc::sync_channel(1);
+                owner
+                    .browser_event(Event::Proposed {
+                        proposal: retargeted,
+                        ack,
+                        budget: None,
+                    })
+                    .unwrap();
+                assert!(reply.recv().unwrap().is_err());
+                let (action, reply) = propose(owner, proposal);
+                assert_eq!(action.proposal.binding.tab, 7);
+                assert_eq!(action.proposal.binding.document, "document-1");
+                owner
+                    .browser_decide(&action.id, action.revision, true)
+                    .unwrap();
+                let approved = reply.recv().unwrap().unwrap();
+                let dispatched = dispatch(owner, &approved).unwrap();
+                let (ack, reply) = mpsc::sync_channel(1);
+                owner
+                    .browser_event(Event::Observed {
+                        action: action.id,
+                        revision: dispatched.revision,
+                        outcome: Outcome::Uncertain {
+                            reason: "field observation was lost".into(),
+                        },
+                        ack,
+                    })
+                    .unwrap();
+                reply.recv().unwrap().unwrap();
+                owner
+                    .agent_settled(
+                        &action.proposal.run,
+                        crate::agent::Outcome::Failed("browser effect is uncertain".into()),
+                        false,
+                        true,
+                    )
+                    .unwrap();
+                let stored = saved(owner);
+                if pi {
+                    assert!(
+                        stored
+                            .workflows
+                            .values()
+                            .next()
+                            .unwrap()
+                            .binding
+                            .resume_path()
+                            .is_err()
+                    );
+                } else {
+                    assert!(
+                        stored
+                            .codex_workflows
+                            .values()
+                            .next()
+                            .unwrap()
+                            .binding
+                            .resume()
+                            .is_err()
+                    );
+                }
+            },
+        );
     }
 }
 
 #[test]
 fn saved_fixture_start_replays_but_cannot_retarget_https() {
-    with_owner(|owner, proposal| {
-        owner
-            .operations
-            .remove(&proposal.run)
-            .unwrap()
-            .worker
-            .join()
-            .unwrap();
-        let source = owner.state.view.source.as_ref().unwrap().id.clone();
-        let text = "Fill the owned field";
-        let scope = crate::tests::owner_scope(owner);
-        let digest = crate::agent_model::digest(&serde_json::json!({
-            "source":source,"text":text,"origin":&owner.fixture.as_ref().unwrap().origin,"model":crate::https_profile::FIXTURE_MODEL
-        }))
-        .unwrap();
-        let run = owner
-            .state
+    #[derive(Clone, Copy)]
+    enum RouteKind {
+        Messages,
+        Responses,
+        Google,
+        Chat,
+    }
+
+    fn seed(state: &mut Store, proposal: &Proposal, launch: crate::agent_model::Launch) {
+        let run = state
             .view
             .runs
             .iter_mut()
@@ -471,262 +489,300 @@ fn saved_fixture_start_replays_but_cannot_retarget_https() {
             .unwrap();
         run.kind = "browser".into();
         run.status = Status::Complete;
-        owner
-            .state
+        state
             .starts
             .insert("saved-request".into(), proposal.run.clone());
-        owner.state.launches.insert(
-            proposal.run.clone(),
-            crate::agent_model::Launch::Messages {
-                input_digest: digest,
-                model: crate::https_profile::FIXTURE_MODEL.into(),
-            },
-        );
-        owner.disk.save(&owner.state).unwrap();
-        owner.state = saved(owner);
-        owner.browser_route = Some(
-            crate::https_profile::Config::Fixture
-                .bind(owner.fixture.as_ref().map(|fixture| fixture.address))
-                .unwrap(),
-        );
-        owner
-            .browser_start("saved-request", &scope, &source, text, None)
-            .unwrap();
-        assert!(owner.operations.is_empty());
-        let profile = crate::https_profile::Config::Https {
-            endpoint: "https://example.com/v1/messages".into(),
-            model: "resolved-model".into(),
-            revision: 1,
-            credential_env: "METLDR_UNRESOLVED_TEST_KEY".into(),
-            trust_ca: None,
+        state.launches.insert(proposal.run.clone(), launch);
+    }
+
+    fn route_public(kind: RouteKind, binding: &crate::https_profile::Binding) -> serde_json::Value {
+        match kind {
+            RouteKind::Messages => binding.public(),
+            RouteKind::Responses => binding.public_responses(),
+            RouteKind::Google => binding.public_google(),
+            RouteKind::Chat => binding.public_chat_completions(),
         }
-        .bind(owner.fixture.as_ref().map(|fixture| fixture.address))
-        .unwrap();
-        let crate::https_profile::Profile::Https { binding, .. } = &profile else {
-            unreachable!()
-        };
-        let binding = binding.clone();
-        owner.browser_route = Some(profile);
-        assert!(
-            owner
-                .browser_start("saved-request", &scope, &source, text, None)
-                .is_err()
-        );
-        assert!(
-            owner
-                .browser_start(
-                    "saved-request",
-                    &scope,
-                    &source,
-                    text,
-                    Some(&"0".repeat(64))
-                )
-                .is_err()
-        );
-        assert!(owner.operations.is_empty());
-        let digest = crate::agent_model::digest(&serde_json::json!({
-            "source":source,"text":text,"origin":&owner.fixture.as_ref().unwrap().origin,"route":binding.public()
-        }))
-        .unwrap();
-        owner.state.launches.insert(
-            proposal.run.clone(),
-            crate::agent_model::Launch::ConfiguredMessages {
-                input_digest: digest,
-                binding: binding.clone(),
-            },
-        );
-        owner.disk.save(&owner.state).unwrap();
-        owner.state = saved(owner);
-        owner
-            .browser_start(
-                "saved-request",
+    }
+
+    fn set_route(
+        owner: &mut Owner,
+        kind: RouteKind,
+        profile: Option<crate::https_profile::Profile>,
+    ) {
+        match kind {
+            RouteKind::Messages => owner.browser_route = profile,
+            RouteKind::Responses => owner.responses_route = profile,
+            RouteKind::Google => owner.google_route = profile,
+            RouteKind::Chat => owner.chat_route = profile,
+        }
+    }
+
+    fn start(
+        owner: &mut Owner,
+        kind: RouteKind,
+        request: &str,
+        fingerprint: Option<&str>,
+    ) -> crate::Result<()> {
+        let scope = crate::tests::owner_scope(owner);
+        let text = "Fill the owned field";
+        let source = owner.state.view.source.as_ref().unwrap().id.clone();
+        match kind {
+            RouteKind::Messages => owner.browser_start(request, &scope, &source, text, fingerprint),
+            RouteKind::Responses => owner.responses_start(
+                request,
                 &scope,
                 &source,
                 text,
-                Some(&binding.fingerprint),
-            )
-            .unwrap();
-        assert!(owner.operations.is_empty());
-        assert_eq!(saved(owner).view.runs.len(), 1);
-        let profile = crate::https_profile::Config::Https {
-            endpoint: "https://example.com/v1/responses".into(),
-            model: "configured-alias".into(),
-            revision: 1,
-            credential_env: "METLDR_UNRESOLVED_TEST_KEY".into(),
-            trust_ca: None,
+                fingerprint.expect("Responses uses a fingerprint"),
+            ),
+            RouteKind::Google => owner.google_start(
+                request,
+                &scope,
+                &source,
+                text,
+                fingerprint.expect("Google uses a fingerprint"),
+            ),
+            RouteKind::Chat => owner.chat_start(
+                request,
+                &scope,
+                &source,
+                text,
+                fingerprint.expect("Chat uses a fingerprint"),
+            ),
         }
-        .bind_responses(owner.fixture.as_ref().map(|fixture| fixture.address))
-        .unwrap();
+    }
+
+    fn public(owner: &Owner) -> serde_json::Value {
+        crate::public_view::render(
+            &owner.state,
+            None,
+            None,
+            None,
+            &owner.native_permissions,
+            owner.pi_ui.as_ref(),
+            owner.codex_input.as_ref(),
+            owner.browser_route.as_ref(),
+            owner.responses_route.as_ref(),
+            owner.google_route.as_ref(),
+            owner.chat_route.as_ref(),
+            owner.fixture.is_some(),
+            None,
+        )
+        .unwrap()
+    }
+
+    let address = Some("127.0.0.1:1".parse().unwrap());
+    let text = "Fill the owned field";
+    let origin = "http://127.0.0.1:1";
+    with_owner_seed(
+        false,
+        move |state, proposal| {
+            let source = state.view.source.as_ref().unwrap().id.clone();
+            let digest = crate::agent_model::digest(&serde_json::json!({
+                "source":source,"text":text,"origin":origin,"model":crate::https_profile::FIXTURE_MODEL
+            }))
+            .unwrap();
+            seed(
+                state,
+                proposal,
+                crate::agent_model::Launch::Messages {
+                    input_digest: digest,
+                    model: crate::https_profile::FIXTURE_MODEL.into(),
+                },
+            );
+        },
+        |owner, proposal| {
+            let scope = crate::tests::owner_scope(owner);
+            let source = owner.state.view.source.as_ref().unwrap().id.clone();
+            let fixture = crate::https_profile::Config::Fixture.bind(address).unwrap();
+            owner.browser_route = Some(fixture);
+            owner
+                .operations
+                .remove(&proposal.run)
+                .unwrap()
+                .worker
+                .join()
+                .unwrap();
+            owner
+                .browser_start("saved-request", &scope, &source, text, None)
+                .unwrap();
+            let https = crate::https_profile::Config::Https {
+                endpoint: "https://example.com/v1/messages".into(),
+                model: "resolved-model".into(),
+                revision: 1,
+                credential_env: "METLDR_UNRESOLVED_TEST_KEY".into(),
+                trust_ca: None,
+            }
+            .bind(address)
+            .unwrap();
+            owner.browser_route = Some(https);
+            assert!(
+                !public(owner)
+                    .to_string()
+                    .contains("METLDR_UNRESOLVED_TEST_KEY")
+            );
+            assert!(
+                owner
+                    .browser_start("saved-request", &scope, &source, text, None)
+                    .is_err()
+            );
+            assert!(
+                owner
+                    .browser_start(
+                        "saved-request",
+                        &scope,
+                        &source,
+                        text,
+                        Some(&"0".repeat(64)),
+                    )
+                    .is_err()
+            );
+            assert!(owner.operations.is_empty());
+        },
+    );
+
+    let routes = [
+        (
+            RouteKind::Messages,
+            "METLDR_UNRESOLVED_TEST_KEY",
+            crate::https_profile::Config::Https {
+                endpoint: "https://example.com/v1/messages".into(),
+                model: "resolved-model".into(),
+                revision: 1,
+                credential_env: "METLDR_UNRESOLVED_TEST_KEY".into(),
+                trust_ca: None,
+            }
+            .bind(address)
+            .unwrap(),
+        ),
+        (
+            RouteKind::Responses,
+            "METLDR_UNRESOLVED_RESPONSES_KEY",
+            crate::https_profile::Config::Https {
+                endpoint: "https://example.com/v1/responses".into(),
+                model: "configured-alias".into(),
+                revision: 1,
+                credential_env: "METLDR_UNRESOLVED_RESPONSES_KEY".into(),
+                trust_ca: None,
+            }
+            .bind_responses(address)
+            .unwrap(),
+        ),
+        (
+            RouteKind::Google,
+            "METLDR_UNRESOLVED_GOOGLE_KEY",
+            crate::https_profile::Config::Https {
+                endpoint: "https://example.com/v1/interactions".into(),
+                model: "configured-google".into(),
+                revision: 1,
+                credential_env: "METLDR_UNRESOLVED_GOOGLE_KEY".into(),
+                trust_ca: None,
+            }
+            .bind_google(address)
+            .unwrap(),
+        ),
+        (
+            RouteKind::Chat,
+            "METLDR_UNRESOLVED_CHAT_KEY",
+            crate::https_profile::Config::Https {
+                endpoint: "https://example.com/v1/chat/completions".into(),
+                model: "configured-chat".into(),
+                revision: 1,
+                credential_env: "METLDR_UNRESOLVED_CHAT_KEY".into(),
+                trust_ca: None,
+            }
+            .bind_chat_completions(address)
+            .unwrap(),
+        ),
+    ];
+
+    for (kind, credential_env, profile) in routes {
         let crate::https_profile::Profile::Https { binding, .. } = &profile else {
             unreachable!()
         };
         let binding = binding.clone();
-        owner.responses_route = Some(profile);
-        assert!(
-            owner
-                .responses_start("other-request", &scope, &source, text, &"0".repeat(64))
-                .is_err()
-        );
-        assert!(owner.operations.is_empty());
-        let digest = crate::agent_model::digest(&serde_json::json!({
-            "source":source,"text":text,"origin":&owner.fixture.as_ref().unwrap().origin,"route":binding.public_responses()
-        }))
-        .unwrap();
-        owner.state.launches.insert(
-            proposal.run.clone(),
-            crate::agent_model::Launch::ConfiguredResponses {
-                input_digest: digest,
-                binding: binding.clone(),
+        let public_route = route_public(kind, &binding);
+        let seed_binding = binding.clone();
+        let seed_route = public_route.clone();
+        with_owner_seed(
+            false,
+            move |state, proposal| {
+                let source = state.view.source.as_ref().unwrap().id.clone();
+                let digest = crate::agent_model::digest(&serde_json::json!({
+                    "source":source,"text":text,"origin":origin,"route":seed_route
+                }))
+                .unwrap();
+                let launch = match kind {
+                    RouteKind::Messages => crate::agent_model::Launch::ConfiguredMessages {
+                        input_digest: digest,
+                        binding: seed_binding.clone(),
+                    },
+                    RouteKind::Responses => crate::agent_model::Launch::ConfiguredResponses {
+                        input_digest: digest,
+                        binding: seed_binding.clone(),
+                    },
+                    RouteKind::Google => crate::agent_model::Launch::ConfiguredGoogle {
+                        input_digest: digest,
+                        binding: seed_binding.clone(),
+                    },
+                    RouteKind::Chat => crate::agent_model::Launch::ConfiguredChat {
+                        input_digest: digest,
+                        binding: seed_binding.clone(),
+                    },
+                };
+                seed(state, proposal, launch);
             },
-        );
-        owner.disk.save(&owner.state).unwrap();
-        owner.state = saved(owner);
-        owner
-            .responses_start("saved-request", &scope, &source, text, &binding.fingerprint)
-            .unwrap();
-        assert!(owner.operations.is_empty());
-        owner.responses_route = None;
-        let public = crate::public_view::render(
-            &owner.state,
-            None,
-            None,
-            None,
-            &owner.native_permissions,
-            owner.pi_ui.as_ref(),
-            owner.codex_input.as_ref(),
-            owner.browser_route.as_ref(),
-            None,
-            None,
-            None,
-            owner.fixture.is_some(),
-            None,
-        )
-        .unwrap();
-        assert!(public["responses_route"].is_null());
-        assert_eq!(public["runs"][0]["route"], binding.public_responses());
-        assert_eq!(saved(owner).view.runs.len(), 1);
-        let profile = crate::https_profile::Config::Https {
-            endpoint: "https://example.com/v1/interactions".into(),
-            model: "configured-google".into(),
-            revision: 1,
-            credential_env: "METLDR_UNRESOLVED_GOOGLE_KEY".into(),
-            trust_ca: None,
-        }
-        .bind_google(owner.fixture.as_ref().map(|fixture| fixture.address))
-        .unwrap();
-        let crate::https_profile::Profile::Https {
-            binding: google, ..
-        } = &profile
-        else {
-            unreachable!()
-        };
-        let google = google.clone();
-        owner.google_route = Some(profile);
-        assert!(
-            owner
-                .google_start("stale-google", &scope, &source, text, &"0".repeat(64))
-                .is_err()
-        );
-        assert!(owner.operations.is_empty());
-        let digest = crate::agent_model::digest(&serde_json::json!({
-            "source":source,"text":text,"origin":&owner.fixture.as_ref().unwrap().origin,"route":google.public_google()
-        }))
-        .unwrap();
-        owner.state.launches.insert(
-            proposal.run.clone(),
-            crate::agent_model::Launch::ConfiguredGoogle {
-                input_digest: digest,
-                binding: google.clone(),
-            },
-        );
-        owner.disk.save(&owner.state).unwrap();
-        owner.state = saved(owner);
-        owner
-            .google_start("saved-request", &scope, &source, text, &google.fingerprint)
-            .unwrap();
-        assert!(owner.operations.is_empty());
-        owner.google_route = None;
-        let public = crate::public_view::render(
-            &owner.state,
-            None,
-            None,
-            None,
-            &owner.native_permissions,
-            owner.pi_ui.as_ref(),
-            owner.codex_input.as_ref(),
-            owner.browser_route.as_ref(),
-            None,
-            None,
-            None,
-            owner.fixture.is_some(),
-            None,
-        )
-        .unwrap();
-        assert!(public["google_route"].is_null());
-        assert_eq!(public["runs"][0]["route"], google.public_google());
-        assert!(!public.to_string().contains("METLDR_UNRESOLVED_GOOGLE_KEY"));
-        assert_eq!(saved(owner).view.runs.len(), 1);
-        let profile = crate::https_profile::Config::Https {
-            endpoint: "https://example.com/v1/chat/completions".into(),
-            model: "configured-chat".into(),
-            revision: 1,
-            credential_env: "METLDR_UNRESOLVED_CHAT_KEY".into(),
-            trust_ca: None,
-        }
-        .bind_chat_completions(owner.fixture.as_ref().map(|fixture| fixture.address))
-        .unwrap();
-        let crate::https_profile::Profile::Https { binding: chat, .. } = &profile else {
-            unreachable!()
-        };
-        let chat = chat.clone();
-        owner.chat_route = Some(profile);
-        assert!(
-            owner
-                .chat_start("stale-chat", &scope, &source, text, &"0".repeat(64))
-                .is_err()
-        );
-        assert!(owner.operations.is_empty());
-        let digest = crate::agent_model::digest(&serde_json::json!({
-            "source":source,"text":text,"origin":&owner.fixture.as_ref().unwrap().origin,"route":chat.public_chat_completions()
-        }))
-        .unwrap();
-        owner.state.launches.insert(
-            proposal.run.clone(),
-            crate::agent_model::Launch::ConfiguredChat {
-                input_digest: digest,
-                binding: chat.clone(),
-            },
-        );
-        owner.disk.save(&owner.state).unwrap();
-        owner.state = saved(owner);
-        owner
-            .chat_start("saved-request", &scope, &source, text, &chat.fingerprint)
-            .unwrap();
-        assert!(owner.operations.is_empty());
-        owner.chat_route = None;
-        let public = crate::public_view::render(
-            &owner.state,
-            None,
-            None,
-            None,
-            &owner.native_permissions,
-            owner.pi_ui.as_ref(),
-            owner.codex_input.as_ref(),
-            owner.browser_route.as_ref(),
-            None,
-            None,
-            None,
-            owner.fixture.is_some(),
-            None,
-        )
-        .unwrap();
-        assert!(public["chat_route"].is_null());
-        assert_eq!(public["runs"][0]["route"], chat.public_chat_completions());
-        assert!(!public.to_string().contains("METLDR_UNRESOLVED_CHAT_KEY"));
-        assert_eq!(saved(owner).view.runs.len(), 1);
-    });
-}
+            move |owner, proposal| {
+                set_route(owner, kind, Some(profile));
+                owner
+                    .operations
+                    .remove(&proposal.run)
+                    .unwrap()
+                    .worker
+                    .join()
+                    .unwrap();
+                let stale = "0".repeat(64);
+                assert!(start(owner, kind, "saved-request", Some(&stale)).is_err());
+                start(owner, kind, "saved-request", Some(&binding.fingerprint)).unwrap();
+                assert!(owner.operations.is_empty());
 
+                set_route(owner, kind, None);
+                let view = public(owner);
+                let route_field = match kind {
+                    RouteKind::Messages => "browser_route",
+                    RouteKind::Responses => "responses_route",
+                    RouteKind::Google => "google_route",
+                    RouteKind::Chat => "chat_route",
+                };
+                assert!(view[route_field].is_null());
+                assert_eq!(view["runs"][0]["route"], public_route);
+                assert!(!view.to_string().contains(credential_env));
+                let saved = saved(owner);
+                assert_eq!(saved.view.runs.len(), 1);
+                let saved_binding = match (kind, &saved.launches[&proposal.run]) {
+                    (
+                        RouteKind::Messages,
+                        crate::agent_model::Launch::ConfiguredMessages { binding, .. },
+                    )
+                    | (
+                        RouteKind::Responses,
+                        crate::agent_model::Launch::ConfiguredResponses { binding, .. },
+                    )
+                    | (
+                        RouteKind::Google,
+                        crate::agent_model::Launch::ConfiguredGoogle { binding, .. },
+                    )
+                    | (
+                        RouteKind::Chat,
+                        crate::agent_model::Launch::ConfiguredChat { binding, .. },
+                    ) => binding,
+                    _ => panic!("saved launch protocol differs"),
+                };
+                assert_eq!(saved_binding.fingerprint, binding.fingerprint);
+            },
+        );
+    }
+}
 fn propose(
     owner: &mut Owner,
     p: Proposal,
@@ -740,7 +796,7 @@ fn propose(
         })
         .unwrap();
     assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
-    let action = owner.state.browser_actions.values().next().unwrap().clone();
+    let action = owner.browser_view.values().next().unwrap().clone();
     assert_eq!(saved(owner).browser_actions[&action.id], action);
     (action, rx)
 }
@@ -758,7 +814,7 @@ fn dispatch(owner: &mut Owner, action: &Action) -> std::result::Result<Action, S
 }
 
 fn cached(owner: &mut Owner, proposal: Proposal, expected: &Action) {
-    let before = fs::read(owner.disk.directory.join("snapshot.json")).unwrap();
+    let before = fs::read(owner.disk.directory.join("history.redb")).unwrap();
     let (ack, rx) = mpsc::sync_channel(1);
     owner
         .browser_event(Event::Proposed {
@@ -769,15 +825,16 @@ fn cached(owner: &mut Owner, proposal: Proposal, expected: &Action) {
         .unwrap();
     assert_eq!(rx.recv().unwrap().unwrap(), *expected);
     assert_eq!(
-        fs::read(owner.disk.directory.join("snapshot.json")).unwrap(),
+        fs::read(owner.disk.directory.join("history.redb")).unwrap(),
         before
     );
+    assert_eq!(saved(owner).browser_actions[&expected.id], *expected);
 }
 
 #[test]
 fn browser_review_budget_tracks_only_the_saved_pending_approval() {
     for decision in [Some(true), Some(false), None] {
-        with_owner(|owner, proposal| {
+        with_owner(false, |owner, proposal| {
             let budget = crate::browser_owner::Budget::new(std::time::Duration::from_secs(30));
             let (ack, rx) = mpsc::sync_channel(1);
             owner
@@ -820,7 +877,7 @@ fn browser_review_budget_tracks_only_the_saved_pending_approval() {
             assert!(budget.review_elapsed().is_none());
         });
     }
-    with_owner(|owner, proposal| {
+    with_owner(false, |owner, proposal| {
         let budget = crate::browser_owner::Budget::new(std::time::Duration::ZERO);
         let (ack, rx) = mpsc::sync_channel(1);
         owner
@@ -838,7 +895,7 @@ fn browser_review_budget_tracks_only_the_saved_pending_approval() {
 
 #[test]
 fn browser_owner_saves_approval_dispatch_and_observation_before_acknowledging() {
-    with_owner(|owner, proposal| {
+    with_owner(false, |owner, proposal| {
         let (pending, rx) = propose(owner, proposal.clone());
         cached(owner, proposal.clone(), &pending);
         assert!(owner.browser_decide(&pending.id, 2, true).is_err());
@@ -889,18 +946,15 @@ fn browser_owner_saves_approval_dispatch_and_observation_before_acknowledging() 
             }
         ));
         cached(owner, proposal.clone(), &verified);
-        assert_eq!(
-            owner.state.propose_browser(proposal.clone()).unwrap(),
-            verified
-        );
+        let mut state = saved(owner);
+        assert_eq!(state.propose_browser(proposal.clone()).unwrap(), verified);
         let mut changed = proposal;
         let Intent::Field { value, .. } = &mut changed.intent else {
             unreachable!()
         };
         value.push('!');
-        assert!(owner.state.propose_browser(changed).is_err());
-        let mut changed = owner
-            .state
+        assert!(state.propose_browser(changed).is_err());
+        let mut changed = state
             .browser_actions
             .values()
             .next()
@@ -911,10 +965,10 @@ fn browser_owner_saves_approval_dispatch_and_observation_before_acknowledging() 
             unreachable!()
         };
         previous_value.push('!');
-        assert!(owner.state.propose_browser(changed).is_err());
-        assert_eq!(owner.state.browser_actions.len(), 1);
+        assert!(state.propose_browser(changed).is_err());
+        assert_eq!(state.browser_actions.len(), 1);
         let projected = crate::public_view::render(
-            &owner.state,
+            &state,
             None,
             None,
             None,
@@ -939,12 +993,29 @@ fn browser_owner_saves_approval_dispatch_and_observation_before_acknowledging() 
             "Existing value"
         );
     });
-    with_owner(|owner, proposal| {
+    with_owner(false, |owner, proposal| {
         let (pending, rx) = propose(owner, proposal);
         owner.browser_decide(&pending.id, 1, true).unwrap();
         let approved = rx.recv().unwrap().unwrap();
-        let obstruction = owner.disk.directory.join("snapshot.next");
-        fs::create_dir(&obstruction).unwrap();
+        let number = approved
+            .id
+            .rsplit(':')
+            .next()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap();
+        {
+            let write = owner.record_history.db.begin_write().unwrap();
+            assert!(
+                write
+                    .open_table(crate::history::schema::ACTION_ORDER)
+                    .unwrap()
+                    .remove((approved.proposal.run.as_str(), number, approved.id.as_str()))
+                    .unwrap()
+                    .is_some()
+            );
+            write.commit().unwrap();
+        }
         let (ack, rx) = mpsc::sync_channel(1);
         assert!(
             owner
@@ -956,17 +1027,19 @@ fn browser_owner_saves_approval_dispatch_and_observation_before_acknowledging() 
                 .is_err()
         );
         assert!(rx.recv().unwrap().is_err());
-        assert_eq!(
-            saved(owner).browser_actions[&approved.id].state,
-            Phase::Approved
-        );
-        fs::remove_dir(obstruction).unwrap();
+        let read = owner.record_history.db.begin_read().unwrap();
+        let actions = read.open_table(crate::history::schema::ACTIONS).unwrap();
+        let durable: crate::history::schema::Record<Action> = crate::history::schema::decode(
+            actions.get(approved.id.as_str()).unwrap().unwrap().value(),
+        )
+        .unwrap();
+        assert_eq!(durable.value.state, Phase::Approved);
     });
 }
 
 #[test]
 fn browser_proposal_requires_bounded_previous_value() {
-    with_owner(|owner, mut proposal| {
+    with_owner(false, |owner, mut proposal| {
         let mut serialized = serde_json::to_value(&proposal).unwrap();
         let Intent::Field { previous_value, .. } = &mut proposal.intent else {
             unreachable!()
@@ -984,7 +1057,7 @@ fn browser_proposal_requires_bounded_previous_value() {
 
 #[test]
 fn navigation_requires_durable_destination_before_a_new_field_proposal() {
-    with_owner(|owner, mut field| {
+    with_owner(false, |owner, mut field| {
         let original = serde_json::to_value(&owner.state.view.source).unwrap();
         let mut legacy = serde_json::to_value(&field).unwrap();
         let members = legacy.as_object_mut().unwrap().remove("intent").unwrap();
@@ -1010,11 +1083,11 @@ fn navigation_requires_durable_destination_before_a_new_field_proposal() {
         target.document = "destination-document".into();
         target.unique_context = "destination-context".into();
         target.grant_revision = 2;
+        let mut state = saved(owner);
         let mut wrong = target.clone();
         wrong.grant_revision = 3;
         assert!(
-            owner
-                .state
+            state
                 .settle_browser(
                     &dispatched.id,
                     dispatched.revision,
@@ -1041,18 +1114,16 @@ fn navigation_requires_durable_destination_before_a_new_field_proposal() {
             .unwrap();
         let settled = rx.recv().unwrap().unwrap();
         assert_eq!(saved(owner).browser_actions[&settled.id], settled);
+        let mut state = saved(owner);
         field.tool_use_id = "destination-field".into();
-        assert!(owner.state.propose_browser(field.clone()).is_err());
+        assert!(state.propose_browser(field.clone()).is_err());
         field.binding = target;
         field.url = destination;
-        let pending_field = owner.state.propose_browser(field).unwrap();
-        owner.state.validate().unwrap();
-        assert_eq!(
-            serde_json::to_value(&owner.state.view.source).unwrap(),
-            original
-        );
-        assert_eq!(owner.state.propose_browser(navigation).unwrap(), settled);
-        let mut corrupted = owner.state.clone();
+        let pending_field = state.propose_browser(field).unwrap();
+        state.validate().unwrap();
+        assert_eq!(serde_json::to_value(&state.view.source).unwrap(), original);
+        assert_eq!(state.propose_browser(navigation).unwrap(), settled);
+        let mut corrupted = state.clone();
         corrupted
             .browser_actions
             .get_mut(&settled.id)
@@ -1061,13 +1132,13 @@ fn navigation_requires_durable_destination_before_a_new_field_proposal() {
             .binding
             .grant_revision = 2;
         assert!(corrupted.validate().is_err());
-        owner.state.browser_actions.remove(&pending_field.id);
+        state.browser_actions.remove(&pending_field.id);
     });
 }
 
 #[test]
 fn browser_owner_stop_prevents_dispatch_and_preserves_uncertainty_after_dispatch() {
-    with_owner(|owner, proposal| {
+    with_owner(false, |owner, proposal| {
         let (pending, rx) = propose(owner, proposal);
         owner.browser_decide(&pending.id, 1, false).unwrap();
         let declined = rx.recv().unwrap().unwrap();
@@ -1081,7 +1152,7 @@ fn browser_owner_stop_prevents_dispatch_and_preserves_uncertainty_after_dispatch
         assert!(dispatch(owner, &declined).is_err());
     });
     for after_approval in [false, true] {
-        with_owner(|owner, proposal| {
+        with_owner(false, |owner, proposal| {
             let run = proposal.run.clone();
             let (pending, rx) = propose(owner, proposal);
             let candidate = if after_approval {
@@ -1103,7 +1174,7 @@ fn browser_owner_stop_prevents_dispatch_and_preserves_uncertainty_after_dispatch
             ));
         });
     }
-    with_owner(|owner, proposal| {
+    with_owner(false, |owner, proposal| {
         let run = proposal.run.clone();
         let (pending, rx) = propose(owner, proposal);
         owner.browser_decide(&pending.id, 1, true).unwrap();
@@ -1128,7 +1199,7 @@ fn browser_owner_stop_prevents_dispatch_and_preserves_uncertainty_after_dispatch
 #[test]
 fn browser_restart_never_replays_approved_or_dispatched_actions() {
     for phase in 0..3 {
-        with_owner(|owner, proposal| {
+        with_owner(false, |owner, proposal| {
             let (pending, rx) = propose(owner, proposal);
             if phase > 0 {
                 owner.browser_decide(&pending.id, 1, true).unwrap();
@@ -1162,7 +1233,7 @@ fn browser_restart_never_replays_approved_or_dispatched_actions() {
             restored.validate().unwrap();
         });
     }
-    with_owner(|owner, _| {
+    with_owner(false, |owner, _| {
         let old = serde_json::to_value(&owner.state).unwrap();
         assert!(old.get("browser_actions").is_none());
         let restored: Store = serde_json::from_value(old).unwrap();
@@ -1174,7 +1245,7 @@ fn browser_restart_never_replays_approved_or_dispatched_actions() {
 fn browser_transport_correlates_replies_and_fails_closed_on_detach() {
     use crate::browser_io::{Call, Operation, Slot, WireReply};
     use serde_json::json;
-    with_owner(|owner, proposal| {
+    with_owner(false, |owner, proposal| {
         let run = proposal.run;
         let (slot, mut events) = Slot::new(run.clone(), 7);
         owner.browser_io = Some(slot);

@@ -173,68 +173,37 @@ impl Owner {
         if self.duplicate(scope, id, &digest)? {
             return Ok(());
         }
-        if self.record_history.is_some() {
-            self.require_conversation(scope)?;
-        }
-        if !self.operations.is_empty()
-            || (self.record_history.is_none() && self.state.view.runs.len() >= 16)
-        {
-            return Err("another run is active or prototype capacity reached".into());
+        self.require_conversation(scope)?;
+        if !self.operations.is_empty() {
+            return Err("another run is active".into());
         }
         if text.trim().is_empty() || text.len() > 1024 {
             return Err("invalid browser task instruction".into());
         }
-        let (run, source) = if self.record_history.is_some() {
-            self.record_change(|edit, _| {
-                let source = edit
-                    .selected_source(scope)?
-                    .filter(|source| source.id == source_id)
-                    .ok_or("browser task source is stale")?;
-                let run = edit.id()?;
-                edit.admit(
-                    scope,
-                    id,
-                    Run {
-                        id: run.clone(),
-                        source: source.id.clone(),
-                        kind: "browser".into(),
-                        question: Some(text.into()),
-                        status: Status::Running,
-                        output: metldr_conversation::Content::native(),
-                        error: None,
-                        corrections: Vec::new(),
-                    },
-                    route.launch(digest),
-                )?;
-                let projection = edit.project(scope, Some(&run))?;
-                Ok(((run, source), Some(projection)))
-            })?
-        } else {
-            let source = self
-                .state
-                .view
-                .source
-                .as_ref()
-                .filter(|s| s.id == source_id)
-                .ok_or("browser task source is stale")?
-                .clone();
-            let mut next = self.state.clone();
-            let run = next.id()?;
-            next.view.runs.push(Run {
-                id: run.clone(),
-                source: source.id.clone(),
-                kind: "browser".into(),
-                question: Some(text.into()),
-                status: Status::Running,
-                output: metldr_conversation::Content::native(),
-                error: None,
-                corrections: Vec::new(),
-            });
-            next.starts.insert(id.into(), run.clone());
-            next.launches.insert(run.clone(), route.launch(digest));
-            self.commit(next)?;
-            (run, source)
-        };
+        let (run, source) = self.record_change(|edit, _| {
+            let source = edit
+                .selected_source(scope)?
+                .filter(|source| source.id == source_id)
+                .ok_or("browser task source is stale")?;
+            let run = edit.id()?;
+            edit.admit(
+                scope,
+                id,
+                Run {
+                    id: run.clone(),
+                    source: source.id.clone(),
+                    kind: "browser".into(),
+                    question: Some(text.into()),
+                    status: Status::Running,
+                    output: metldr_conversation::Content::native(),
+                    error: None,
+                    corrections: Vec::new(),
+                },
+                route.launch(digest),
+            )?;
+            let projection = edit.project(scope, Some(&run))?;
+            Ok(((run, source), Some(projection)))
+        })?;
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = stop.clone();
         let client = Client {

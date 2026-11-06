@@ -141,7 +141,7 @@ pub(super) fn run() -> Result<()> {
         google_route,
         chat_route,
         transport,
-        record_history: Some(history),
+        record_history: history,
         history_pins: Default::default(),
     };
     owner.persist_records(|edit, scope| {

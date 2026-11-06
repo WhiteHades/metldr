@@ -70,10 +70,7 @@ impl Owner {
         &mut self,
         change: impl FnOnce(&mut Edit<'_>, &Selection) -> Result<(T, RecordProjection)>,
     ) -> Result<(T, bool)> {
-        let mut history = self
-            .record_history
-            .take()
-            .ok_or("record history is unavailable")?;
+        let (history, view) = self.view_parts();
         let result = (|| {
             let selection = history.selection()?;
             history.edit(|edit| {
@@ -106,16 +103,15 @@ impl Owner {
                         let choices = edit.native_choices(
                             &current,
                             state.view.source.as_ref(),
-                            &self.native_fingerprints()?,
+                            &view.native_fingerprints()?,
                         )?;
-                        self.preflight_records(&state, &browser_view, &current, &choices)?;
+                        view.preflight(&state, &browser_view, &current, &choices)?;
                         Ok((state, browser_view))
                     })
                     .transpose()?;
                 Ok((result, projection, publish, current != selection))
             })
         })();
-        self.record_history = Some(history);
         let (result, projection, changed, selection_changed) = result?;
         if let Some((state, browser_view)) = projection {
             self.state = state;
@@ -141,75 +137,21 @@ impl Owner {
         if self.duplicate(scope, id, &input_digest)? {
             return Ok(());
         }
-        if self.record_history.is_some() {
-            self.require_conversation(scope)?;
-        }
+        self.require_conversation(scope)?;
         if !self.operations.is_empty() {
             return Err("another run is active".into());
         }
-        let (run, body) = if self.record_history.is_some() {
-            self.record_change(|edit, _| {
-                let (kind, question) = match start {
-                    ConversationAction::Summarize { page } => {
-                        check_fixture_page(&page, &origin)?;
-                        edit.new_source(scope, page)?;
-                        ("summary", None)
-                    }
-                    ConversationAction::Ask { source, text } => {
-                        check_question(&text)?;
-                        if edit
-                            .selected_source(scope)?
-                            .is_none_or(|saved| saved.id != source)
-                        {
-                            return Err("source is not current saved source".into());
-                        }
-                        ("answer", Some(text))
-                    }
-                    _ => return Err("invalid fixture command".into()),
-                };
-                let source = edit.selected_source(scope)?.ok_or("no selected source")?;
-                let context = edit.fixture_context(scope, &source.id)?;
-                let body = fixture_body(&source, kind, question.as_deref(), context.iter())?;
-                let run = edit.id()?;
-                edit.admit(
-                    scope,
-                    id,
-                    Run {
-                        id: run.clone(),
-                        source: source.id,
-                        kind: kind.into(),
-                        question,
-                        status: Status::Running,
-                        output: Default::default(),
-                        error: None,
-                        corrections: Vec::new(),
-                    },
-                    Launch::Fixture { input_digest },
-                )?;
-                Ok(((run.clone(), body), Some(edit.project(scope, Some(&run))?)))
-            })?
-        } else {
-            // shortcut: remove snapshot admission when all production callers migrate to records.
-            if self.state.view.runs.len() >= 16 {
-                return Err("prototype run capacity reached".into());
-            }
-            let mut next = self.state.clone();
+        let (run, body) = self.record_change(|edit, _| {
             let (kind, question) = match start {
                 ConversationAction::Summarize { page } => {
                     check_fixture_page(&page, &origin)?;
-                    let source_id = next.id()?;
-                    next.view.source = Some(Source {
-                        id: source_id,
-                        page,
-                    });
+                    edit.new_source(scope, page)?;
                     ("summary", None)
                 }
                 ConversationAction::Ask { source, text } => {
                     check_question(&text)?;
-                    if next
-                        .view
-                        .source
-                        .as_ref()
+                    if edit
+                        .selected_source(scope)?
                         .is_none_or(|saved| saved.id != source)
                     {
                         return Err("source is not current saved source".into());
@@ -218,35 +160,27 @@ impl Owner {
                 }
                 _ => return Err("invalid fixture command".into()),
             };
-            let source = next
-                .view
-                .source
-                .as_ref()
-                .ok_or("no selected source")?
-                .clone();
-            let context = next.view.runs.iter().filter(|run| {
-                run.source == source.id
-                    && run.status == Status::Complete
-                    && matches!(next.launches.get(&run.id), Some(Launch::Fixture { .. }))
-            });
-            let body = fixture_body(&source, kind, question.as_deref(), context)?;
-            let run = next.id()?;
-            next.view.runs.push(Run {
-                id: run.clone(),
-                source: source.id,
-                kind: kind.into(),
-                question,
-                status: Status::Running,
-                output: Default::default(),
-                error: None,
-                corrections: Vec::new(),
-            });
-            next.starts.insert(id.into(), run.clone());
-            next.launches
-                .insert(run.clone(), Launch::Fixture { input_digest });
-            self.commit(next)?;
-            (run, body)
-        };
+            let source = edit.selected_source(scope)?.ok_or("no selected source")?;
+            let context = edit.fixture_context(scope, &source.id)?;
+            let body = fixture_body(&source, kind, question.as_deref(), context.iter())?;
+            let run = edit.id()?;
+            edit.admit(
+                scope,
+                id,
+                Run {
+                    id: run.clone(),
+                    source: source.id,
+                    kind: kind.into(),
+                    question,
+                    status: Status::Running,
+                    output: Default::default(),
+                    error: None,
+                    corrections: Vec::new(),
+                },
+                Launch::Fixture { input_digest },
+            )?;
+            Ok(((run.clone(), body), Some(edit.project(scope, Some(&run))?)))
+        })?;
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = stop.clone();
         let worker_run = run.clone();
@@ -270,7 +204,7 @@ impl Owner {
         self.emit(self.started_reply(id, scope, &run)?)
     }
 
-    pub(super) fn stop_record(&mut self, id: &str, run: &str) -> Result<()> {
+    pub(super) fn stop_run(&mut self, id: &str, run: &str) -> Result<()> {
         let terminal = self.record_change(|edit, scope| {
             let execution = edit.current_execution(scope, run)?;
             Ok((edit.run(&execution, run)?.status.terminal(), None))

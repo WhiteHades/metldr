@@ -1,6 +1,6 @@
 use super::{History, fixture, migrate, schema};
 use crate::Result;
-use redb::{ReadableDatabase, ReadableTable, ReadableTableMetadata};
+use redb::{ReadableDatabase, ReadableTableMetadata};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{
@@ -251,7 +251,7 @@ fn crash_recovery_at_every_phase() -> Result<()> {
         drop(meta);
         drop(read);
 
-        let mut write = history.db.begin_write()?;
+        let write = history.db.begin_write()?;
         {
             let mut meta = write.open_table(schema::META)?;
             meta.insert("cutover_sentinel", b"preserved".as_slice())?;

@@ -86,8 +86,6 @@ impl Owner {
         let input = Input::parse(command)?;
         let workflow = self
             .record_history
-            .as_mut()
-            .ok_or("record history is unavailable")?
             .edit(|edit| edit.native_request_workflow(scope, request))?
             .ok_or("saved native request is absent")?;
         let fingerprint = match (&workflow, input.kind) {
@@ -117,80 +115,33 @@ impl Owner {
             (NativeProfile::Opencode(profile), Kind::Opencode) => digest(profile)?,
             _ => return Err("native command and profile differ".into()),
         };
-        let (source, prior) = if let Some(history) = &mut self.record_history {
-            history.edit(|edit| {
-                if let Some(workflow) = edit.native_request_workflow(scope, request)? {
-                    let source = workflow.source().clone();
-                    if matches!(input.origin, Origin::Source(id) if id != source.id) {
-                        return Err("source differs from the original native request".into());
-                    }
-                    return Ok((source, None));
+        let (source, prior) = self.record_history.edit(|edit| {
+            if let Some(workflow) = edit.native_request_workflow(scope, request)? {
+                let source = workflow.source().clone();
+                if matches!(input.origin, Origin::Source(id) if id != source.id) {
+                    return Err("source differs from the original native request".into());
                 }
-                edit.require_selection(scope)?;
-                match input.origin {
-                    Origin::Source(source) => Ok((
-                        edit.selected_source(scope)?
-                            .filter(|saved| saved.id == source)
-                            .ok_or("source is not the current saved native source")?,
-                        None,
-                    )),
-                    Origin::Workflow(workflow, _) => {
-                        let value = edit.native_workflow(scope, workflow)?;
-                        Ok((value.source().clone(), Some(value)))
-                    }
-                }
-            })?
-        } else {
+                return Ok((source, None));
+            }
+            edit.require_selection(scope)?;
             match input.origin {
-                Origin::Source(source) => {
-                    let saved = self
-                        .state
-                        .starts
-                        .get(request)
-                        .and_then(|run| self.state.launches.get(run))
-                        .map(|launch| NativeWorkflow::from_store(&self.state, launch))
-                        .transpose()?;
-                    let source = saved
-                        .as_ref()
-                        .map(NativeWorkflow::source)
-                        .filter(|s| s.id == source)
-                        .or_else(|| self.state.view.source.as_ref().filter(|s| s.id == source))
-                        .ok_or("source is not current or the original saved native source")?;
-                    (source.clone(), None)
-                }
+                Origin::Source(source) => Ok((
+                    edit.selected_source(scope)?
+                        .filter(|saved| saved.id == source)
+                        .ok_or("source is not the current saved native source")?,
+                    None,
+                )),
                 Origin::Workflow(workflow, _) => {
-                    let value = match input.kind {
-                        Kind::Pi => self
-                            .state
-                            .workflows
-                            .get(workflow)
-                            .cloned()
-                            .map(NativeWorkflow::Pi),
-                        Kind::Codex => self
-                            .state
-                            .codex_workflows
-                            .get(workflow)
-                            .cloned()
-                            .map(NativeWorkflow::Codex),
-                        Kind::Opencode => self
-                            .state
-                            .opencode_workflows
-                            .get(workflow)
-                            .cloned()
-                            .map(NativeWorkflow::OpenCode),
-                    }
-                    .ok_or("unknown native workflow")?;
-                    (value.source().clone(), Some(value))
+                    let value = edit.native_workflow(scope, workflow)?;
+                    Ok((value.source().clone(), Some(value)))
                 }
             }
-        };
+        })?;
         let input_digest = input.digest(command, &fingerprint, &source)?;
         if self.duplicate(scope, request, &input_digest)? {
             return Ok(None);
         }
-        if self.record_history.is_some() {
-            self.require_conversation(scope)?;
-        }
+        self.require_conversation(scope)?;
         if !self.operations.is_empty() {
             return Err("another run is active".into());
         }
@@ -208,72 +159,29 @@ impl Owner {
             Origin::Workflow(workflow, _) => Some(workflow),
             Origin::Source(_) => None,
         };
-        if self.record_history.is_some() {
-            self.record_change(|edit, _| {
-                let workflow = match existing {
-                    Some(workflow) => workflow.to_owned(),
-                    None => edit.id()?,
-                };
-                let run = edit.id()?;
-                let (value, record, launch) =
-                    records(value, &workflow, &run, input.text, input_digest)?;
-                edit.admit_native(scope, request, record, launch, value.clone())?;
-                let execution = edit.current_execution(scope, &run)?;
-                let target = edit.native_initial_target(&execution, &run)?;
-                let projection = edit.project(scope, Some(&run))?;
-                Ok((
-                    Some(Admission {
-                        run,
-                        workflow,
-                        value,
-                        text: input.text.into(),
-                        target,
-                    }),
-                    Some(projection),
-                ))
-            })
-        } else {
-            // shortcut: remove snapshot admission with the remaining snapshot callers at record cutover.
-            if self.state.view.runs.len() >= 16 {
-                return Err("prototype run capacity reached".into());
-            }
-            let mut next = self.state.clone();
-            if existing.is_some() {
-                let previous = match &value {
-                    NativeWorkflow::Pi(w) => &w.last_run,
-                    NativeWorkflow::Codex(w) => &w.last_run,
-                    NativeWorkflow::OpenCode(w) => &w.last_run,
-                };
-                if !next
-                    .view
-                    .runs
-                    .iter()
-                    .any(|run| run.id == *previous && run.status.terminal())
-                {
-                    return Err("native workflow still has active work".into());
-                }
-            }
+        self.record_change(|edit, _| {
             let workflow = match existing {
                 Some(workflow) => workflow.to_owned(),
-                None => next.id()?,
+                None => edit.id()?,
             };
-            let run = next.id()?;
+            let run = edit.id()?;
             let (value, record, launch) =
                 records(value, &workflow, &run, input.text, input_digest)?;
-            value.install(&workflow, &mut next);
-            next.view.runs.push(record);
-            next.starts.insert(request.into(), run.clone());
-            next.launches.insert(run.clone(), launch);
-            let target = next.native_browser_target(&run)?;
-            self.commit(next)?;
-            Ok(Some(Admission {
-                run,
-                workflow,
-                value,
-                text: input.text.into(),
-                target,
-            }))
-        }
+            edit.admit_native(scope, request, record, launch, value.clone())?;
+            let execution = edit.current_execution(scope, &run)?;
+            let target = edit.native_initial_target(&execution, &run)?;
+            let projection = edit.project(scope, Some(&run))?;
+            Ok((
+                Some(Admission {
+                    run,
+                    workflow,
+                    value,
+                    text: input.text.into(),
+                    target,
+                }),
+                Some(projection),
+            ))
+        })
     }
 }
 

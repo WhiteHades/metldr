@@ -553,7 +553,7 @@ fn saved_recovery_is_atomic_idempotent_and_preserves_workflow_heads() -> Result<
     let mut maxed = profile(&rollback)?;
     maxed.sequence = u64::MAX;
     {
-        let mut write = rollback.db.begin_write()?;
+        let write = rollback.db.begin_write()?;
         let mut metadata = write.open_table(META)?;
         metadata.insert("profile", encode(&maxed)?.as_slice())?;
         drop(metadata);

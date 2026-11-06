@@ -1,7 +1,6 @@
 use crate::{
     Result,
     flow::{Owner, PendingPermission},
-    model::Status,
 };
 use serde_json::{Value, json};
 use std::sync::mpsc;
@@ -138,13 +137,10 @@ impl Owner {
                 ack,
             );
         }
-        let result = if self.record_history.is_some() {
-            self.commit_native_input(run, kind.ok_or("invalid native permission agent")?, next)
-        } else {
-            self.commit(next)
-        };
+        let result =
+            self.commit_native_input(run, kind.ok_or("invalid native permission agent")?, next);
         if let Err(error) = result {
-            if self.record_history.is_some() && crate::native_input_records::fatal(error.as_ref()) {
+            if crate::native_input_records::fatal(error.as_ref()) {
                 return Err(error);
             }
             let ack = self
@@ -171,29 +167,19 @@ impl Owner {
         else {
             return Ok(());
         };
-        let kind = if self.record_history.is_some() {
-            Some(
-                match self.native_permissions[&request].details["agent"].as_str() {
-                    Some("codex") => crate::agent_settings::Kind::Codex,
-                    Some("opencode") => crate::agent_settings::Kind::Opencode,
-                    _ => return Err("invalid native permission agent".into()),
-                },
-            )
-        } else {
-            None
+        let kind = match self.native_permissions[&request].details["agent"].as_str() {
+            Some("codex") => crate::agent_settings::Kind::Codex,
+            Some("opencode") => crate::agent_settings::Kind::Opencode,
+            _ => return Err("invalid native permission agent".into()),
         };
         let next = self.native_input_state(run)?;
         let pending = self
             .native_permissions
             .remove(&request)
             .ok_or("resolved native permission disappeared")?;
-        let result = if let Some(kind) = kind {
-            self.commit_native_input(run, kind, next)
-        } else {
-            self.commit(next)
-        };
+        let result = self.commit_native_input(run, kind, next);
         if let Err(error) = result {
-            if self.record_history.is_some() && crate::native_input_records::fatal(error.as_ref()) {
+            if crate::native_input_records::fatal(error.as_ref()) {
                 return Err(error);
             }
             self.native_permissions.insert(request, pending);
@@ -244,14 +230,9 @@ impl Owner {
             .native_permissions
             .remove(&index)
             .ok_or("stale native permission request")?;
-        let result = if self.record_history.is_some() {
-            self.commit_native_input(run, kind, next)
-        } else {
-            self.commit(next)
-        };
+        let result = self.commit_native_input(run, kind, next);
         if let Err(error) = result {
-            if self.record_history.is_none() || !crate::native_input_records::fatal(error.as_ref())
-            {
+            if !crate::native_input_records::fatal(error.as_ref()) {
                 self.native_permissions.insert(index, pending);
             }
             return Err(error);
@@ -288,82 +269,33 @@ impl Owner {
         reason: &str,
         ack: mpsc::SyncSender<Option<String>>,
     ) -> Result<()> {
-        if self.record_history.is_some() {
-            if !self.operations.contains_key(run) {
-                let _ = ack.try_send(None);
-                return Ok(());
-            }
-            let state = self.native_input_state(run)?;
-            let kind = match state.launches.get(run) {
-                Some(crate::agent_model::Launch::Pi { .. }) => crate::agent_settings::Kind::Pi,
-                Some(crate::agent_model::Launch::Codex { .. }) => {
-                    crate::agent_settings::Kind::Codex
-                }
-                Some(crate::agent_model::Launch::OpenCode { .. }) => {
-                    crate::agent_settings::Kind::Opencode
-                }
-                _ => {
-                    let _ = ack.try_send(None);
-                    return Ok(());
-                }
-            };
-            if !self.native_input_active(run, kind)? {
-                let _ = ack.try_send(None);
-                return Ok(());
-            }
-            let result = self.stop_native_record_inputs(
-                run,
-                "native permission request failed",
-                Some(reason),
-                true,
-            );
+        if !self.operations.contains_key(run) {
             let _ = ack.try_send(None);
-            return result;
-        }
-        if !self.operations.contains_key(run)
-            || self
-                .state
-                .view
-                .runs
-                .iter()
-                .find(|r| r.id == run)
-                .is_none_or(|r| r.status != Status::Running)
-        {
-            let _ = ack.send(None);
             return Ok(());
         }
-        let mut next = self.state.clone();
-        let record = next
-            .view
-            .runs
-            .iter_mut()
-            .find(|r| r.id == run)
-            .ok_or("missing native run")?;
-        record.status = Status::StopRequested;
-        record.error = Some(reason.chars().take(200).collect());
-        if let Err(error) = next.prevent_browser(run, "native permission request failed") {
-            if error.downcast_ref::<std::io::Error>().is_some() {
-                let _ = ack.send(None);
-                return Err(error);
+        let state = self.native_input_state(run)?;
+        let kind = match state.launches.get(run) {
+            Some(crate::agent_model::Launch::Pi { .. }) => crate::agent_settings::Kind::Pi,
+            Some(crate::agent_model::Launch::Codex { .. }) => crate::agent_settings::Kind::Codex,
+            Some(crate::agent_model::Launch::OpenCode { .. }) => {
+                crate::agent_settings::Kind::Opencode
             }
-        }
-        let pending = self.take_native_permissions(run);
-        if let Err(error) = self.commit(next) {
-            self.native_permissions.extend(pending);
-            if let Some(op) = self.operations.get(run) {
-                op.stop.store(true, std::sync::atomic::Ordering::Release);
+            _ => {
+                let _ = ack.try_send(None);
+                return Ok(());
             }
-            let _ = ack.send(None);
-            return Err(error);
+        };
+        if !self.native_input_active(run, kind)? {
+            let _ = ack.try_send(None);
+            return Ok(());
         }
-        if let Some(op) = self.operations.get(run) {
-            op.stop.store(true, std::sync::atomic::Ordering::Release);
-        }
-        self.cancel_browser_approval(run);
-        let _ = ack.send(None);
-        for (_, pending) in pending {
-            let _ = pending.ack.send(None);
-        }
-        Ok(())
+        let result = self.stop_native_record_inputs(
+            run,
+            "native permission request failed",
+            Some(reason),
+            true,
+        );
+        let _ = ack.try_send(None);
+        result
     }
 }

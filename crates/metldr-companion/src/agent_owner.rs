@@ -17,24 +17,14 @@ impl Owner {
         id: &str,
         input_digest: &str,
     ) -> Result<bool> {
-        if let Some(history) = &mut self.record_history {
-            let Some(started) = history.edit(|edit| edit.duplicate(scope, id, input_digest))?
-            else {
-                return Ok(false);
-            };
-            let run = started.run;
-            self.emit(self.started_reply(id, scope, &run)?)?;
-            return Ok(true);
-        }
-        let Some(run) = self.state.starts.get(id) else {
+        let Some(started) = self
+            .record_history
+            .edit(|edit| edit.duplicate(scope, id, input_digest))?
+        else {
             return Ok(false);
         };
-        let launch = self.state.launches.get(run).ok_or("missing saved launch")?;
-        let saved=launch.input_digest().ok_or("legacy start identity has no verifiable input or route; inspect its saved view instead")?;
-        if saved != input_digest {
-            return Err("request identity already names a different input or route".into());
-        }
-        self.emit(self.started_reply(id, scope, run)?)?;
+        let run = started.run;
+        self.emit(self.started_reply(id, scope, &run)?)?;
         Ok(true)
     }
 
@@ -187,131 +177,49 @@ impl Owner {
             .worker
             .join()
             .map_err(|_| "agent worker panicked")?;
-        if self.record_history.is_some() {
-            let pending = self.detach_inputs(run);
-            let saved = self.record_execution(run, |edit, execution| {
-                let uncertain = edit.finish_browser(execution, run)?;
-                let mut task = edit.native_task(execution, run)?;
-                crate::native_correction::finish(
-                    &mut task.run,
-                    "The run ended before the correction was sent.",
-                    "The run ended without a correction reply. Delivery is unknown.",
-                )?;
-                let correction_uncertain = task.run.corrections.iter().any(|receipt| {
-                    matches!(
-                        receipt.state,
-                        crate::native_correction::Phase::Uncertain { .. }
-                    )
-                });
-                if !released || disconnected || uncertain || correction_uncertain {
-                    match &mut task.workflow {
-                        crate::history::NativeWorkflow::Pi(w) => w.binding.block_recovery(),
-                        crate::history::NativeWorkflow::Codex(w) => w.binding.block_recovery(),
-                        crate::history::NativeWorkflow::OpenCode(w) => w.binding.block_recovery(),
-                    }
-                }
-                task.run.status = if disconnected {
-                    Status::Interrupted
-                } else {
-                    match &result {
-                        Outcome::Complete => Status::Complete,
-                        Outcome::Cancelled => Status::Cancelled,
-                        Outcome::Failed(_) => Status::Failed,
-                    }
-                };
-                if let Outcome::Failed(error) = &result {
-                    task.run.error = Some(error.chars().take(200).collect());
-                }
-                edit.put_native(execution, task)?;
-                Ok(())
-            });
-            if let Err(error) = saved {
-                self.restore_inputs(pending);
-                return Err(error);
-            }
-            self.cancel_browser_approval(run);
-            self.cancel_inputs(run, pending);
-            return Ok(());
-        }
-        let mut next = self.state.clone();
-        next.finish_browser(run)?;
-        let record = next
-            .view
-            .runs
-            .iter_mut()
-            .find(|r| r.id == run)
-            .ok_or("Pi settlement without run")?;
-        crate::native_correction::finish(
-            record,
-            "The run ended before the correction was sent.",
-            "The run ended without a correction reply. Delivery is unknown.",
-        )?;
-        let correction_uncertain = record.corrections.iter().any(|receipt| {
-            matches!(
-                receipt.state,
-                crate::native_correction::Phase::Uncertain { .. }
-            )
-        });
-        let uncertain = next.browser_actions.values().any(|action| {
-            action.proposal.run == run
-                && matches!(
-                    &action.state,
-                    crate::browser_action::Phase::Settled {
-                        outcome: crate::browser_action::Outcome::Uncertain { .. }
-                    }
+        let pending = self.detach_inputs(run);
+        let saved = self.record_execution(run, |edit, execution| {
+            let uncertain = edit.finish_browser(execution, run)?;
+            let mut task = edit.native_task(execution, run)?;
+            crate::native_correction::finish(
+                &mut task.run,
+                "The run ended before the correction was sent.",
+                "The run ended without a correction reply. Delivery is unknown.",
+            )?;
+            let correction_uncertain = task.run.corrections.iter().any(|receipt| {
+                matches!(
+                    receipt.state,
+                    crate::native_correction::Phase::Uncertain { .. }
                 )
-        });
-        if (!released || disconnected || uncertain || correction_uncertain)
-            && let Some(launch) = next.launches.get(run)
-        {
-            match launch {
-                Launch::Pi { workflow, .. } => next
-                    .workflows
-                    .get_mut(workflow)
-                    .ok_or("missing Pi workflow at settlement")?
-                    .binding
-                    .block_recovery(),
-                Launch::Codex { workflow, .. } => next
-                    .codex_workflows
-                    .get_mut(workflow)
-                    .ok_or("missing Codex workflow at settlement")?
-                    .binding
-                    .block_recovery(),
-                Launch::OpenCode { workflow, .. } => next
-                    .opencode_workflows
-                    .get_mut(workflow)
-                    .ok_or("missing OpenCode workflow at settlement")?
-                    .binding
-                    .block_recovery(),
-                _ => (),
+            });
+            if !released || disconnected || uncertain || correction_uncertain {
+                match &mut task.workflow {
+                    crate::history::NativeWorkflow::Pi(w) => w.binding.block_recovery(),
+                    crate::history::NativeWorkflow::Codex(w) => w.binding.block_recovery(),
+                    crate::history::NativeWorkflow::OpenCode(w) => w.binding.block_recovery(),
+                }
             }
+            task.run.status = if disconnected {
+                Status::Interrupted
+            } else {
+                match &result {
+                    Outcome::Complete => Status::Complete,
+                    Outcome::Cancelled => Status::Cancelled,
+                    Outcome::Failed(_) => Status::Failed,
+                }
+            };
+            if let Outcome::Failed(error) = &result {
+                task.run.error = Some(error.chars().take(200).collect());
+            }
+            edit.put_native(execution, task)?;
+            Ok(())
+        });
+        if let Err(error) = saved {
+            self.restore_inputs(pending);
+            return Err(error);
         }
         self.cancel_browser_approval(run);
-        self.clear_pi_ui(run);
-        self.clear_codex_input(run);
-        let permissions = self.take_native_permissions(run);
-        let record = next
-            .view
-            .runs
-            .iter_mut()
-            .find(|r| r.id == run)
-            .ok_or("Pi settlement without run")?;
-        record.status = if disconnected {
-            Status::Interrupted
-        } else {
-            match &result {
-                Outcome::Complete => Status::Complete,
-                Outcome::Cancelled => Status::Cancelled,
-                Outcome::Failed(_) => Status::Failed,
-            }
-        };
-        if let Outcome::Failed(error) = result {
-            record.error = Some(error.chars().take(200).collect());
-        }
-        self.commit(next)?;
-        for (_, permission) in permissions {
-            let _ = permission.ack.send(None);
-        }
+        self.cancel_inputs(run, pending);
         Ok(())
     }
 }

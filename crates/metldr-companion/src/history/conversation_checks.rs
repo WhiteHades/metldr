@@ -4,7 +4,7 @@ use crate::{
     agent_model::Launch,
     model::{Run, Status},
 };
-use redb::{ReadableDatabase, ReadableTable, ReadableTableMetadata};
+use redb::{ReadableDatabase, ReadableTableMetadata};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeSet,

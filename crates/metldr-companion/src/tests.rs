@@ -1,18 +1,20 @@
 pub(crate) fn owner_scope(owner: &crate::flow::Owner) -> crate::history::Selection {
-    if let Some(history) = &owner.record_history {
-        return history.selection().expect("record history selection");
-    }
-    let store = owner.state.view.store.clone();
-    crate::history::Selection {
-        store: store.clone(),
-        conversation: format!("{store}:1"),
-        epoch: 1,
-    }
+    owner
+        .record_history
+        .selection()
+        .expect("record history selection")
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{CONFIG_MAX, FRAME_MAX, flow::*, model::*, native::*, store::*};
+    use crate::{
+        CONFIG_MAX, FRAME_MAX,
+        flow::*,
+        history::{History, Selection},
+        model::*,
+        native::*,
+        store::*,
+    };
     use serde_json::json;
     use std::{
         collections::BTreeMap,
@@ -22,6 +24,25 @@ mod tests {
         thread,
         time::{SystemTime, UNIX_EPOCH},
     };
+
+    fn import_history(disk: &Disk, state: &Store, name: &str) -> History {
+        History::import_new(
+            &disk.directory.join(name),
+            &serde_json::to_vec(state).unwrap(),
+            disk.lease(),
+        )
+        .unwrap()
+    }
+
+    fn saved_run(owner: &mut Owner, run: &str) -> Run {
+        owner
+            .record_history
+            .edit(|edit| {
+                let execution = edit.execution(run)?;
+                edit.run(&execution, run)
+            })
+            .unwrap()
+    }
 
     #[test]
     fn codex_input_answers_are_closed_and_prompt_validated() {
@@ -68,6 +89,7 @@ mod tests {
         let (disk, mut state) = Disk::open(output.join("state")).unwrap();
         let source = state.id().unwrap();
         let run = state.id().unwrap();
+        let sibling = state.id().unwrap();
         state.view.source = Some(Source {
             id: source.clone(),
             page: Page {
@@ -95,8 +117,22 @@ mod tests {
                 input_digest: "0".repeat(64),
             },
         );
+        let mut sibling_record = state.view.runs[0].clone();
+        sibling_record.id = sibling.clone();
+        sibling_record.status = Status::Running;
+        sibling_record.output = Default::default();
+        state.view.runs.push(sibling_record);
+        state
+            .starts
+            .insert("fixture:sibling".into(), sibling.clone());
+        state
+            .launches
+            .insert(sibling.clone(), state.launches[&run].clone());
         state.validate().unwrap();
         disk.save(&state).unwrap();
+        let mut history = import_history(&disk, &state, "history.redb");
+        let scope = history.selection().unwrap();
+        let state = history.edit(|edit| edit.project(&scope, None)).unwrap();
         let (tx, rx) = mpsc::sync_channel(2);
         let worker_tx = tx.clone();
         let worker_run = run.clone();
@@ -147,25 +183,9 @@ mod tests {
             responses_route: None,
             google_route: None,
             chat_route: None,
-            record_history: None,
+            record_history: history,
             history_pins: Default::default(),
         };
-        let sibling = owner.state.id().unwrap();
-        let mut sibling_record = owner.state.view.runs[0].clone();
-        sibling_record.id = sibling.clone();
-        sibling_record.status = Status::Running;
-        sibling_record.output = Default::default();
-        owner.state.view.runs.push(sibling_record);
-        owner
-            .state
-            .starts
-            .insert("fixture:sibling".into(), sibling.clone());
-        owner
-            .state
-            .launches
-            .insert(sibling.clone(), owner.state.launches[&run].clone());
-        owner.state.validate().unwrap();
-        owner.disk.save(&owner.state).unwrap();
         owner.operations.insert(
             sibling.clone(),
             Operation {
@@ -193,25 +213,23 @@ mod tests {
         owner.settled(&sibling, Ok(()), false).unwrap();
         assert_eq!(owner.operations.len(), 1);
         assert_eq!(owner.operations[&run].worker.thread().id(), worker);
-        assert_eq!(owner.state.view.runs[0].status, Status::StopRequested);
-        assert_eq!(owner.state.view.runs[1].status, Status::Complete);
+        assert_eq!(saved_run(&mut owner, &run).status, Status::StopRequested);
+        assert_eq!(saved_run(&mut owner, &sibling).status, Status::Complete);
         let Event::Text { run: id, change } = rx.recv().unwrap() else {
             panic!("chunk must precede settlement");
         };
         owner.text(&id, change).unwrap();
-        assert_eq!(owner.state.view.runs[0].status, Status::StopRequested);
-        assert_eq!(owner.state.view.runs[0].output.text(), "Pending in flight");
-        let snapshot = owner.disk.directory.join("snapshot.json");
-        fs::copy(&snapshot, output.join("stopping-snapshot.json")).unwrap();
+        let stopping = saved_run(&mut owner, &run);
+        assert_eq!(stopping.status, Status::StopRequested);
+        assert_eq!(stopping.output.text(), "Pending in flight");
         let Event::Settled { run: id, result } = rx.recv().unwrap() else {
             panic!("settlement must follow the queued chunk");
         };
         owner.settled(&id, result, false).unwrap();
         assert!(owner.operations.is_empty());
-        assert_eq!(owner.state.view.runs[0].status, Status::Cancelled);
-        let before = fs::read(&snapshot).unwrap();
-        assert_eq!(before, serde_json::to_vec(&owner.state).unwrap());
-        fs::copy(&snapshot, output.join("before-late-output.json")).unwrap();
+        let before = saved_run(&mut owner, &run);
+        assert_eq!(before.status, Status::Cancelled);
+        let sequence = owner.record_history.edit(|edit| edit.sequence()).unwrap();
         // Inject directly: this worker cannot send a chunk after its own settlement.
         owner
             .text(
@@ -219,12 +237,16 @@ mod tests {
                 metldr_conversation::Change::FlatAppend("must not appear".into()),
             )
             .unwrap();
-        assert_eq!(before, serde_json::to_vec(&owner.state).unwrap());
-        assert_eq!(before, fs::read(&snapshot).unwrap());
-        fs::copy(&snapshot, output.join("after-late-output.json")).unwrap();
+        assert_eq!(
+            serde_json::to_value(&before).unwrap(),
+            serde_json::to_value(saved_run(&mut owner, &run)).unwrap()
+        );
+        assert_eq!(
+            sequence,
+            owner.record_history.edit(|edit| edit.sequence()).unwrap()
+        );
         drop(owner);
-        fs::remove_dir_all(output.join("state")).unwrap();
-        eprintln!("terminal output evidence: {}", output.display());
+        fs::remove_dir_all(output).unwrap();
     }
 
     #[test]
@@ -295,7 +317,7 @@ mod tests {
             responses_route: None,
             google_route: None,
             chat_route: None,
-            record_history: Some(history),
+            record_history: history,
             history_pins: Default::default(),
         };
         let capture = || Command::Conversation {
@@ -407,6 +429,8 @@ mod tests {
         let source_id = state.id().unwrap();
         let workflow = state.id().unwrap();
         let run = state.id().unwrap();
+        let second_workflow = state.id().unwrap();
+        let second_run = state.id().unwrap();
         let profile = crate::agent_model::Profile {
             executable: std::env::current_exe().unwrap(),
             workspace: output.clone(),
@@ -440,7 +464,7 @@ mod tests {
             workflow.clone(),
             crate::agent_model::Workflow {
                 fingerprint: crate::agent_model::digest(&profile).unwrap(),
-                profile,
+                profile: profile.clone(),
                 source,
                 revision: 1,
                 last_run: run.clone(),
@@ -455,11 +479,38 @@ mod tests {
                 activity: vec![],
             },
         );
+        let mut second_record = state.view.runs[0].clone();
+        second_record.id = second_run.clone();
+        second_record.question = Some("Second active run".into());
+        state.view.runs.push(second_record);
+        state.workflows.insert(
+            second_workflow.clone(),
+            crate::agent_model::Workflow {
+                fingerprint: crate::agent_model::digest(&profile).unwrap(),
+                profile: profile.clone(),
+                source: state.view.source.as_ref().unwrap().clone(),
+                revision: 1,
+                last_run: second_run.clone(),
+                binding: crate::agent_model::Binding::Pending,
+            },
+        );
+        state.launches.insert(
+            second_run.clone(),
+            crate::agent_model::Launch::Pi {
+                input_digest: "1".repeat(64),
+                workflow: second_workflow,
+                activity: vec![],
+            },
+        );
         state.validate().unwrap();
         disk.save(&state).unwrap();
+        let mut history = import_history(&disk, &state, "history.redb");
+        let scope: Selection = history.selection().unwrap();
+        let state = history.edit(|edit| edit.project(&scope, None)).unwrap();
         let (transport, frames) = crate::transport::Transport::captured();
         let (tx, _) = mpsc::sync_channel(1);
         let stop = Arc::new(AtomicBool::new(false));
+        let second_stop = Arc::new(AtomicBool::new(false));
         let mut owner = Owner {
             transport,
             disk,
@@ -490,7 +541,7 @@ mod tests {
             responses_route: None,
             google_route: None,
             chat_route: None,
-            record_history: None,
+            record_history: history,
             history_pins: Default::default(),
         };
 
@@ -505,9 +556,15 @@ mod tests {
             },
         );
         assert_eq!(request, format!("{}:{nonce}", owner.state.view.store));
-        let snapshot = fs::read_to_string(owner.disk.directory.join("snapshot.json")).unwrap();
-        let saved: serde_json::Value = serde_json::from_str(&snapshot).unwrap();
-        assert_eq!(saved["next"], nonce + 1);
+        assert_eq!(owner.state.next, nonce + 1);
+        assert_eq!(
+            owner
+                .record_history
+                .edit(|edit| edit.project(&scope, None))
+                .unwrap()
+                .next,
+            nonce + 1
+        );
         let output_frames = frames.lock().unwrap().clone();
         let mut reader = output_frames.as_slice();
         let mut replies = Vec::new();
@@ -550,11 +607,17 @@ mod tests {
         assert!(
             matches!(received.recv().unwrap(), crate::agent::ui::Answer::Text(value) if value == exact)
         );
-        assert!(
-            !fs::read_to_string(owner.disk.directory.join("snapshot.json"))
-                .unwrap()
-                .contains(exact)
-        );
+        for saved in [
+            saved_run(&mut owner, &run),
+            saved_run(&mut owner, &second_run),
+        ] {
+            assert!(
+                !serde_json::to_vec(&saved)
+                    .unwrap()
+                    .windows(exact.len())
+                    .any(|window| window == exact.as_bytes())
+            );
+        }
 
         let (disconnect_request, abandoned) = offer_pi_ui(
             &mut owner,
@@ -581,11 +644,21 @@ mod tests {
             Err(mpsc::TryRecvError::Disconnected)
         ));
 
-        owner.state.view.runs[0].status = Status::Running;
-        stop.store(false, std::sync::atomic::Ordering::Release);
+        owner
+            .agent_settled(&run, crate::agent::Outcome::Cancelled, false, true)
+            .unwrap();
+        owner.operations.insert(
+            second_run.clone(),
+            Operation {
+                stop: second_stop.clone(),
+                worker: thread::spawn(|| {}),
+                correction: None,
+            },
+        );
+
         let (stop_request, queued) = offer_pi_ui(
             &mut owner,
-            &run,
+            &second_run,
             3,
             crate::agent::ui::Dialog::Confirm {
                 title: "Stop check".into(),
@@ -595,13 +668,13 @@ mod tests {
         owner
             .pi_ui_reply(
                 "queued-answer",
-                &run,
+                &second_run,
                 &stop_request,
                 crate::agent::ui::Answer::Confirm(true),
             )
             .unwrap();
-        owner.stop_run("stop", &run).unwrap();
-        assert!(stop.load(std::sync::atomic::Ordering::Acquire));
+        owner.stop_run("stop", &second_run).unwrap();
+        assert!(second_stop.load(std::sync::atomic::Ordering::Acquire));
         assert!(matches!(
             queued.try_recv(),
             Ok(crate::agent::ui::Answer::Confirm(true))
@@ -610,7 +683,7 @@ mod tests {
             owner
                 .pi_ui_reply(
                     "after-stop",
-                    &run,
+                    &second_run,
                     &stop_request,
                     crate::agent::ui::Answer::Confirm(true),
                 )

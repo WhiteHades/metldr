@@ -6,13 +6,11 @@ use serde_json::json;
 use std::{
     collections::BTreeMap,
     io,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-        mpsc::SyncSender,
-    },
+    sync::{Arc, atomic::AtomicBool, mpsc::SyncSender},
     thread::JoinHandle,
 };
+
+mod view;
 
 pub(super) enum Event {
     CorrectionReady {
@@ -145,7 +143,7 @@ pub(super) struct Subscription {
 pub(super) struct Owner {
     pub(super) transport: crate::transport::Transport,
     pub(super) disk: Disk,
-    pub(super) record_history: Option<crate::history::History>,
+    pub(super) record_history: crate::history::History,
     pub(super) history_pins: crate::history_io::Pins,
     pub(super) settings: crate::provider_settings::Runtime,
     pub(super) agent_runtime: crate::agent_settings::Runtime,
@@ -170,37 +168,6 @@ pub(super) struct Owner {
 }
 
 impl Owner {
-    pub(super) fn native_fingerprints(
-        &self,
-    ) -> Result<BTreeMap<crate::agent_settings::Kind, String>> {
-        use crate::agent_settings::Kind;
-        Ok([
-            (
-                Kind::Pi,
-                self.pi_profile
-                    .as_ref()
-                    .map(crate::agent_model::digest)
-                    .transpose()?,
-            ),
-            (
-                Kind::Codex,
-                self.codex_profile
-                    .as_ref()
-                    .map(crate::agent_model::digest)
-                    .transpose()?,
-            ),
-            (
-                Kind::Opencode,
-                self.opencode_profile
-                    .as_ref()
-                    .map(crate::agent_model::digest)
-                    .transpose()?,
-            ),
-        ]
-        .into_iter()
-        .filter_map(|(kind, fingerprint)| fingerprint.map(|value| (kind, value)))
-        .collect())
-    }
     pub(super) fn emit(&mut self, value: serde_json::Value) -> Result<()> {
         self.transport.emit(value)
     }
@@ -210,139 +177,23 @@ impl Owner {
         kind: &str,
         ended: bool,
     ) -> Result<()> {
-        let reply = self.view_reply(&self.state, request, kind, ended)?;
-        self.emit(reply)
-    }
-    fn view_reply(
-        &self,
-        state: &Store,
-        request: Option<&str>,
-        kind: &str,
-        ended: bool,
-    ) -> Result<serde_json::Value> {
-        let browser_actions = if self.record_history.is_some() {
-            &self.browser_view
-        } else {
-            &state.browser_actions
-        };
-        let selection = self
-            .record_history
-            .as_ref()
-            .map(|history| history.selection())
-            .transpose()?;
-        let choices = self
-            .record_history
-            .as_ref()
-            .zip(selection.as_ref())
-            .map(|(history, scope)| {
-                history.native_choices(
-                    scope,
-                    state.view.source.as_ref(),
-                    &self.native_fingerprints()?,
-                )
-            })
-            .transpose()?;
-        self.view_reply_with_browser_actions(
-            state,
+        let (history, view) = self.view_parts();
+        let selection = history.selection()?;
+        let choices = history.native_choices(
+            &selection,
+            view.state.view.source.as_ref(),
+            &view.native_fingerprints()?,
+        )?;
+        let reply = view.reply(
+            view.state,
             request,
             kind,
             ended,
-            Some(browser_actions),
-            selection.as_ref(),
-            choices.as_ref(),
-        )
-    }
-    fn view_reply_with_browser_actions(
-        &self,
-        state: &Store,
-        request: Option<&str>,
-        kind: &str,
-        ended: bool,
-        browser_actions: Option<&BTreeMap<String, crate::browser_action::Action>>,
-        selection: Option<&crate::history::Selection>,
-        choices: Option<&crate::history::NativeChoices>,
-    ) -> Result<serde_json::Value> {
-        let mut view = crate::public_view::render(
-            state,
-            self.pi_profile.as_ref(),
-            self.codex_profile.as_ref(),
-            self.opencode_profile.as_ref(),
-            &self.native_permissions,
-            self.pi_ui.as_ref(),
-            self.codex_input.as_ref(),
-            self.browser_route.as_ref(),
-            self.responses_route.as_ref(),
-            self.google_route.as_ref(),
-            self.chat_route.as_ref(),
-            self.fixture.is_some(),
-            choices,
+            view.browser_actions,
+            &selection,
+            &choices,
         )?;
-        if let Some(actions) = browser_actions {
-            if actions.is_empty() {
-                view.as_object_mut()
-                    .ok_or("invalid public view")?
-                    .remove("browser_actions");
-            } else {
-                view["browser_actions"] = crate::public_view::browser_actions(actions);
-            }
-        }
-        view["selection"] = serde_json::to_value(selection.map(crate::history_io::Scope::from))?;
-        view["native_correction"] = self.correction_public(state);
-        view["provider_settings"] = self.settings.public(&state.providers);
-        view["agent_settings"] = self.agent_runtime.public(
-            &state.agent_settings,
-            !self.operations.is_empty() || self.settings.job.is_some(),
-        );
-        let mut reply = json!({"v":crate::WIRE_VERSION,"request":request,"kind":kind,"view":view,"ended":ended});
-        crate::tool_report::fit_wire(&mut reply)?;
-        Ok(reply)
-    }
-    pub(super) fn commit(&mut self, next: Store) -> Result<()> {
-        self.persist(next)?;
-        self.publish()
-    }
-    pub(super) fn persist(&mut self, mut next: Store) -> Result<()> {
-        if self.record_history.is_some() {
-            return Err(
-                io::Error::other("snapshot persistence cannot write record history").into(),
-            );
-        }
-        next.view.sequence = self
-            .state
-            .view
-            .sequence
-            .checked_add(1)
-            .ok_or("view sequence capacity reached")?;
-        next.seal_outputs()?;
-        crate::tool_report::fit_store(&mut next)?;
-        next.validate()?;
-        self.preflight(&next)?;
-        self.disk.save(&next)?;
-        self.state = next;
-        Ok(())
-    }
-    pub(super) fn preflight(&self, state: &Store) -> Result<()> {
-        // Required message metadata must fit even with a maximum length request ID.
-        self.view_reply(state, Some(&"x".repeat(96)), "view", false)?;
-        Ok(())
-    }
-    pub(super) fn preflight_records(
-        &self,
-        state: &Store,
-        browser_actions: &BTreeMap<String, crate::browser_action::Action>,
-        selection: &crate::history::Selection,
-        choices: &crate::history::NativeChoices,
-    ) -> Result<()> {
-        self.view_reply_with_browser_actions(
-            state,
-            Some(&"x".repeat(96)),
-            "view",
-            false,
-            Some(browser_actions),
-            Some(selection),
-            Some(choices),
-        )?;
-        Ok(())
+        self.emit(reply)
     }
     pub(super) fn publish(&mut self) -> Result<()> {
         self.reply_view(None, "changed", false)?;
@@ -458,9 +309,6 @@ impl Owner {
             Command::View => self.reply_view(Some(id), "view", true),
             Command::Conversation { scope, action } => {
                 scope.validate()?;
-                if self.record_history.is_none() {
-                    return Err("record history is unavailable".into());
-                }
                 let expected = crate::history::Selection {
                     store: scope.store,
                     conversation: scope.conversation,
@@ -531,10 +379,8 @@ impl Owner {
                 approve,
             } => {
                 self.require_conversation(scope)?;
-                if let Some(history) = &mut self.record_history {
-                    history
-                        .edit(|edit| edit.current_action_execution(scope, &action).map(|_| ()))?;
-                }
+                self.record_history
+                    .edit(|edit| edit.current_action_execution(scope, &action).map(|_| ()))?;
                 self.browser_decide(&action, revision, approve)?;
                 self.reply_view(Some(id), "view", true)
             }
@@ -572,9 +418,7 @@ impl Owner {
             }
             ConversationAction::Watch { run } => {
                 self.require_conversation(scope)?;
-                if self.record_history.is_some() {
-                    self.record_change(|edit, _| Ok(((), Some(edit.project(scope, Some(&run))?))))?;
-                }
+                self.record_change(|edit, _| Ok(((), Some(edit.project(scope, Some(&run))?))))?;
                 let status = self
                     .state
                     .view
@@ -620,11 +464,7 @@ impl Owner {
     }
 
     pub(super) fn require_conversation(&self, expected: &crate::history::Selection) -> Result<()> {
-        let current = self
-            .record_history
-            .as_ref()
-            .ok_or("record history is unavailable")?
-            .selection()?;
+        let current = self.record_history.selection()?;
         if current != *expected {
             return Err("history selection changed".into());
         }
@@ -637,9 +477,8 @@ impl Owner {
         run: &str,
     ) -> Result<()> {
         self.require_conversation(expected)?;
-        if let Some(history) = self.record_history.as_mut() {
-            history.edit(|edit| edit.current_execution(expected, run).map(|_| ()))?;
-        }
+        self.record_history
+            .edit(|edit| edit.current_execution(expected, run).map(|_| ()))?;
         Ok(())
     }
 
@@ -655,80 +494,22 @@ impl Owner {
     }
 
     pub(super) fn reply_stop(&mut self, id: &str, kind: &str, run: &str) -> Result<()> {
-        let scope = self
-            .record_history
-            .as_ref()
-            .map(|history| history.selection())
-            .transpose()?;
-        self.emit(json!({"v":crate::WIRE_VERSION,"request":id,"kind":kind,"scope":scope.as_ref().map(crate::history_io::Scope::from),"run":run}))
-    }
-
-    pub(super) fn stop_run(&mut self, id: &str, run: &str) -> Result<()> {
-        if self.record_history.is_some() {
-            return self.stop_record(id, run);
-        }
-        let position = self
-            .state
-            .view
-            .runs
-            .iter()
-            .position(|r| r.id == run)
-            .ok_or("unknown run")?;
-        if self.state.view.runs[position].status.terminal() {
-            return self.reply_stop(id, "already_terminal", run);
-        }
-        let mut next = self.state.clone();
-        next.view.runs[position].status = Status::StopRequested;
-        next.prevent_browser(run, "user stopped before dispatch")?;
-        let permissions = self.take_native_permissions(run);
-        let pi_ui = self.pi_ui.clone();
-        let codex_input = self.codex_input.clone();
-        self.clear_pi_ui(run);
-        self.clear_codex_input(run);
-        if let Err(error) = self.commit(next) {
-            self.native_permissions.extend(permissions);
-            self.pi_ui = pi_ui;
-            self.codex_input = codex_input;
-            return Err(error);
-        }
-        if let Some(operation) = self.operations.get(run) {
-            operation.stop.store(true, Ordering::Release);
-        }
-        self.cancel_browser_approval(run);
-        drop(pi_ui);
-        drop(codex_input);
-        for (_, permission) in permissions {
-            let _ = permission.ack.send(None);
-        }
-        self.reply_stop(id, "stopping", run)
+        let scope = self.record_history.selection()?;
+        self.emit(json!({"v":crate::WIRE_VERSION,"request":id,"kind":kind,"scope":crate::history_io::Scope::from(&scope),"run":run}))
     }
 
     pub(super) fn text(&mut self, run: &str, change: Change) -> Result<()> {
         if matches!(change, Change::Artifact(_)) {
             return Err("artifact references require a committed table record".into());
         }
-        if self.record_history.is_some() {
-            self.record_execution(run, |edit, execution| {
-                let mut record = edit.run(execution, run)?;
-                if record.status.terminal() || !record.output.change(change)? {
-                    return Ok(());
-                }
-                edit.put_run(execution, record)?;
-                Ok(())
-            })?;
-            return Ok(());
-        }
-        let mut next = self.state.clone();
-        let Some(record) = next.view.runs.iter_mut().find(|r| r.id == run) else {
-            return Err("provider returned unknown run".into());
-        };
-        if record.status.terminal() {
-            return Ok(());
-        }
-        if !record.output.change(change)? {
-            return Ok(());
-        }
-        self.commit(next)
+        self.record_execution(run, |edit, execution| {
+            let mut record = edit.run(execution, run)?;
+            if record.status.terminal() || !record.output.change(change)? {
+                return Ok(());
+            }
+            edit.put_run(execution, record)?;
+            Ok(())
+        })
     }
     pub(super) fn settled(
         &mut self,
@@ -748,50 +529,25 @@ impl Owner {
             .worker
             .join()
             .map_err(|_| "provider worker panicked")?;
-        if self.record_history.is_some() {
-            self.record_execution(run, |edit, execution| {
-                edit.finish_browser(execution, run)?;
-                let mut record = edit.run(execution, run)?;
-                record.status = if result.is_ok() {
-                    Status::Complete
-                } else if disconnected {
-                    Status::Interrupted
-                } else if record.status == Status::StopRequested {
-                    Status::Cancelled
-                } else {
-                    Status::Failed
-                };
-                if record.status == Status::Failed {
-                    record.error =
-                        Some(result.err().unwrap_or_default().chars().take(200).collect());
-                }
-                edit.put_run(execution, record)?;
-                Ok(())
-            })?;
-            self.cancel_browser_approval(run);
-            return Ok(());
-        }
-        let mut next = self.state.clone();
-        next.finish_browser(run)?;
+        self.record_execution(run, |edit, execution| {
+            edit.finish_browser(execution, run)?;
+            let mut record = edit.run(execution, run)?;
+            record.status = if result.is_ok() {
+                Status::Complete
+            } else if disconnected {
+                Status::Interrupted
+            } else if record.status == Status::StopRequested {
+                Status::Cancelled
+            } else {
+                Status::Failed
+            };
+            if record.status == Status::Failed {
+                record.error = Some(result.err().unwrap_or_default().chars().take(200).collect());
+            }
+            edit.put_run(execution, record)?;
+            Ok(())
+        })?;
         self.cancel_browser_approval(run);
-        let record = next
-            .view
-            .runs
-            .iter_mut()
-            .find(|r| r.id == run)
-            .ok_or("settlement without run")?;
-        record.status = if result.is_ok() {
-            Status::Complete
-        } else if disconnected {
-            Status::Interrupted
-        } else if record.status == Status::StopRequested {
-            Status::Cancelled
-        } else {
-            Status::Failed
-        };
-        if record.status == Status::Failed {
-            record.error = Some(result.err().unwrap_or_default().chars().take(200).collect());
-        }
-        self.commit(next)
+        Ok(())
     }
 }

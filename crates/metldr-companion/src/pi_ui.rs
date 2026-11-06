@@ -101,16 +101,14 @@ impl State {
 
 impl Owner {
     pub(super) fn pi_ui_change(&mut self, run: &str, change: Change) -> Result<()> {
-        if self.record_history.is_some() {
-            let status = self.native_input_status(run, crate::agent_settings::Kind::Pi)?;
-            if status.is_none()
-                || (status == Some(Status::StopRequested)
-                    && self.operations.get(run).is_none_or(|operation| {
-                        !operation.stop.load(std::sync::atomic::Ordering::Acquire)
-                    }))
-            {
-                return Ok(());
-            }
+        let status = self.native_input_status(run, crate::agent_settings::Kind::Pi)?;
+        if status.is_none()
+            || (status == Some(Status::StopRequested)
+                && self.operations.get(run).is_none_or(|operation| {
+                    !operation.stop.load(std::sync::atomic::Ordering::Acquire)
+                }))
+        {
+            return Ok(());
         }
         let mut next = self.native_input_state(run)?;
         let active = self.operations.contains_key(run)
@@ -169,29 +167,13 @@ impl Owner {
             if crate::native_input_records::fatal(error.as_ref()) {
                 return Err(error);
             }
-            if self.record_history.is_some() {
-                self.pi_ui = previous;
-                self.stop_native_record_inputs(
-                    run,
-                    "Pi UI could not be presented",
-                    Some(&error.to_string()),
-                    true,
-                )?;
-                return Ok(());
-            }
-            if let Some(op) = self.operations.get(run) {
-                op.stop.store(true, std::sync::atomic::Ordering::Release);
-            }
             self.pi_ui = previous;
-            let mut next = self.state.clone();
-            if let Some(record) = next.view.runs.iter_mut().find(|r| r.id == run) {
-                record.status = Status::StopRequested;
-                record.error = Some(error.to_string().chars().take(200).collect());
-            }
-            next.prevent_browser(run, "Pi UI could not be presented")?;
-            self.cancel_browser_approval(run);
-            self.clear_pi_ui(run);
-            self.commit(next)?;
+            self.stop_native_record_inputs(
+                run,
+                "Pi UI could not be presented",
+                Some(&error.to_string()),
+                true,
+            )?;
         }
         Ok(())
     }
@@ -257,47 +239,19 @@ impl Owner {
     pub(super) fn disconnect_pi_ui(&mut self) -> Result<()> {
         let runs: Vec<_> = self.operations.keys().cloned().collect();
         for run in runs {
-            if let Some(history) = &mut self.record_history {
-                let pi = history.edit(|edit| {
-                    let Some(execution) = edit.native_execution(&run)? else {
-                        return Ok(false);
-                    };
-                    Ok(matches!(
-                        edit.native_task(&execution, &run)?.launch,
-                        crate::agent_model::Launch::Pi { .. }
-                    ))
-                })?;
-                if pi {
-                    self.stop_native_record_inputs(
-                        &run,
-                        "Pi controller disconnected",
-                        None,
-                        false,
-                    )?;
-                }
+            let pi = self.record_history.edit(|edit| {
+                let Some(execution) = edit.native_execution(&run)? else {
+                    return Ok(false);
+                };
+                Ok(matches!(
+                    edit.native_task(&execution, &run)?.launch,
+                    crate::agent_model::Launch::Pi { .. }
+                ))
+            })?;
+            if !pi {
                 continue;
             }
-            if !matches!(
-                self.state.launches.get(&run),
-                Some(crate::agent_model::Launch::Pi { .. })
-            ) {
-                continue;
-            }
-            // Stop must be visible to the worker before its reply channels disappear.
-            self.operations[&run]
-                .stop
-                .store(true, std::sync::atomic::Ordering::Release);
-            let mut next = self.state.clone();
-            if let Some(record) = next.view.runs.iter_mut().find(|r| r.id == run)
-                && !record.status.terminal()
-            {
-                record.status = Status::StopRequested;
-            }
-            next.prevent_browser(&run, "Pi controller disconnected")?;
-            self.cancel_browser_approval(&run);
-            self.cancel_native_permissions(&run);
-            self.clear_pi_ui(&run);
-            self.persist(next)?;
+            self.stop_native_record_inputs(&run, "Pi controller disconnected", None, false)?;
         }
         Ok(())
     }

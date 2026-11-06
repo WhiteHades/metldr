@@ -40,8 +40,6 @@ impl Owner {
         }
         let launch = self
             .record_history
-            .as_mut()
-            .ok_or("record history is unavailable")?
             .edit(|edit| edit.request_launch(scope, request))?;
         let Some(launch) = launch else {
             return Ok(false);

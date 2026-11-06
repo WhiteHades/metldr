@@ -109,11 +109,10 @@ impl Owner {
         ack: SyncSender<std::result::Result<ArtifactId, String>>,
     ) -> Result<()> {
         let result = (|| {
-            if self.record_history.is_none()
-                || self
-                    .operations
-                    .get(run)
-                    .is_none_or(|active| active.stop.load(Ordering::Acquire))
+            if self
+                .operations
+                .get(run)
+                .is_none_or(|active| active.stop.load(Ordering::Acquire))
             {
                 return Err("presentation has no active history owner".into());
             }

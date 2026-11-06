@@ -53,8 +53,6 @@ mod transport;
 mod wire;
 
 #[cfg(test)]
-mod browser_checks;
-#[cfg(test)]
 mod tests;
 
 pub fn run() -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {

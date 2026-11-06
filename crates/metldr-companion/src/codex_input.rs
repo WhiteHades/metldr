@@ -174,19 +174,15 @@ impl Owner {
                 let _ = fallback_answer.try_send(InputAnswer::Cancel);
                 return Err(error);
             }
-            if self.record_history.is_some() {
-                self.codex_input = previous;
-                self.stop_native_record_inputs(
-                    run,
-                    "Codex input could not be presented",
-                    Some(&error.to_string()),
-                    true,
-                )?;
-                let _ = fallback_answer.try_send(InputAnswer::Cancel);
-                return Ok(());
-            }
             self.codex_input = previous;
-            return self.fail_codex_input(run, fallback_answer, Some(&error.to_string()));
+            self.stop_native_record_inputs(
+                run,
+                "Codex input could not be presented",
+                Some(&error.to_string()),
+                true,
+            )?;
+            let _ = fallback_answer.try_send(InputAnswer::Cancel);
+            return Ok(());
         }
         Ok(())
     }
@@ -197,24 +193,9 @@ impl Owner {
         answer: SyncSender<InputAnswer>,
         error: Option<&str>,
     ) -> Result<()> {
-        if self.record_history.is_some() {
-            self.stop_native_record_inputs(run, "Codex input could not be presented", error, true)?;
-            let _ = answer.try_send(InputAnswer::Cancel);
-            return Ok(());
-        }
-        if let Some(operation) = self.operations.get(run) {
-            operation
-                .stop
-                .store(true, std::sync::atomic::Ordering::Release);
-        }
+        self.stop_native_record_inputs(run, "Codex input could not be presented", error, true)?;
         let _ = answer.try_send(InputAnswer::Cancel);
-        self.clear_codex_input(run);
-        let mut next = self.state.clone();
-        if let Some(record) = next.view.runs.iter_mut().find(|r| r.id == run) {
-            record.status = crate::model::Status::StopRequested;
-            record.error = Some("Codex input could not be presented".into());
-        }
-        self.commit(next)
+        Ok(())
     }
 
     pub(super) fn codex_input_reply(
@@ -281,25 +262,21 @@ impl Owner {
             .extract_if(.., |_, pending| &pending.key == key)
             .collect();
         let empty = self.codex_input.take_if(|state| state.pending.is_empty());
-        if self.record_history.is_some() {
-            if let Err(error) =
-                self.commit_native_input(run, crate::agent_settings::Kind::Codex, next)
-            {
-                if !crate::native_input_records::fatal(error.as_ref()) {
-                    if let Some(state) = empty {
-                        self.codex_input = Some(state);
-                    }
-                    self.codex_input
-                        .as_mut()
-                        .ok_or("missing Codex input state")?
-                        .pending
-                        .extend(removed);
+        if let Err(error) = self.commit_native_input(run, crate::agent_settings::Kind::Codex, next)
+        {
+            if !crate::native_input_records::fatal(error.as_ref()) {
+                if let Some(state) = empty {
+                    self.codex_input = Some(state);
                 }
-                return Err(error);
+                self.codex_input
+                    .as_mut()
+                    .ok_or("missing Codex input state")?
+                    .pending
+                    .extend(removed);
             }
-            return Ok(());
+            return Err(error);
         }
-        self.publish()
+        Ok(())
     }
 
     pub(super) fn clear_codex_input(&mut self, run: &str) {
@@ -316,31 +293,10 @@ impl Owner {
         let Some(run) = self.codex_input.as_ref().map(|state| state.run.clone()) else {
             return Ok(());
         };
-        let Some(operation) = self.operations.get(&run) else {
+        if !self.operations.contains_key(&run) {
             self.clear_codex_input(&run);
             return self.publish();
-        };
-        if self.record_history.is_some() {
-            return self.stop_native_record_inputs(
-                &run,
-                "Codex controller disconnected",
-                None,
-                false,
-            );
         }
-        operation
-            .stop
-            .store(true, std::sync::atomic::Ordering::Release);
-        let mut next = self.state.clone();
-        if let Some(record) = next.view.runs.iter_mut().find(|r| r.id == run)
-            && !record.status.terminal()
-        {
-            record.status = crate::model::Status::StopRequested;
-        }
-        next.prevent_browser(&run, "Codex controller disconnected")?;
-        self.cancel_browser_approval(&run);
-        self.cancel_native_permissions(&run);
-        self.clear_codex_input(&run);
-        self.persist(next)
+        self.stop_native_record_inputs(&run, "Codex controller disconnected", None, false)
     }
 }
