@@ -12,21 +12,14 @@ pub use client::{
     Presentation, PresentationContent, PresentationConversation, PresentationInvocation,
     PresentationProgress,
 };
-pub use metldr_browser_tools::Invocation;
 use metldr_browser_tools::decode_call;
+pub use metldr_browser_tools::{Invocation, Prompt};
 pub use metldr_conversation::TextEvent;
 use serde_json::{Value, json};
 use std::sync::atomic::AtomicBool;
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 const TEXT_MAX: usize = 8_192;
-
-pub struct Prompt<'a> {
-    pub instruction: &'a str,
-    pub title: &'a str,
-    pub url: &'a str,
-    pub text: &'a str,
-}
 
 pub struct Conversation {
     client: Client,

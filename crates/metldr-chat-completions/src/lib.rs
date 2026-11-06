@@ -11,7 +11,7 @@ mod stream_checks;
 
 pub use client::Client;
 use metldr_browser_tools::Call;
-pub use metldr_browser_tools::Invocation;
+pub use metldr_browser_tools::{Invocation, Prompt};
 pub use metldr_conversation::TextEvent;
 use serde_json::{Value, json};
 use std::{
@@ -21,13 +21,6 @@ use std::{
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 const REQUEST_MAX: usize = 131_072;
-
-pub struct Prompt<'a> {
-    pub instruction: &'a str,
-    pub title: &'a str,
-    pub url: &'a str,
-    pub text: &'a str,
-}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Usage {

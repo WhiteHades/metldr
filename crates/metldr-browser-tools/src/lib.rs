@@ -3,6 +3,13 @@
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 use serde_json::{Value, json};
 
+pub struct Prompt<'a> {
+    pub instruction: &'a str,
+    pub title: &'a str,
+    pub url: &'a str,
+    pub text: &'a str,
+}
+
 pub const FIELD_TOOL: &str = "set_field_value";
 pub const OBSERVE_TOOL: &str = "observe_page";
 pub const NAVIGATE_TOOL: &str = "navigate_page";
