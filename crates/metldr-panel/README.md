@@ -8,6 +8,8 @@ The generated `metldr_panel.js` exports `start_panel` and `accept_panel`. Initia
 
 The UI bridge exposes `active_run()` after a fresh snapshot. Its handle observes the saved task through ordered events and stops only that task. The agent adapter uses `connectAgent()` to attach without submitting another request. Detaching a view releases its subscription while native work continues. Detach the agent and free the active handle when closing its view. Reconnecting requires a fresh handle. Update the extension and companion together.
 
+`ui_bridge/run.rs` owns the shared run driver and delivers typed `Event` values to a Rust callback. `Core::stream` uses that callback for saved run updates. The JavaScript entry points adapt the callback with bounded JSON encoding and report consumer failures through the same run error handling. Admission, Stop, session checks and uncertain receipts remain in the Rust owner.
+
 The chat entry at `chat.html` uses the established components through the Rust bridge. Saved tables remain separate from message text and reopen in the conversation. Browser actions, native approvals, input requests, tool activity and run details come from Rust. Review saved work preserves an edited draft through deliberate reload after an uncertain connection. The current `panel.html` entry remains available while the remaining interface migration is unfinished.
 
 The chat adapter treats each Rust message snapshot as the complete ordered message list. It replaces old activity as well as text, so corrections cannot leave stale activity in the conversation. Agent clones keep the same behavior.
