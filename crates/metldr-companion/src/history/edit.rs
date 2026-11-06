@@ -203,14 +203,26 @@ fn record<T: DeserializeOwned>(
 
 impl Edit<'_> {
     pub(crate) fn execution(&self, run: &str) -> Result<Execution> {
+        self.execution_kind(run).map(|(execution, _)| execution)
+    }
+
+    pub(crate) fn native_execution(&self, run: &str) -> Result<Option<Execution>> {
+        self.execution_kind(run)
+            .map(|(execution, kind)| (kind == "agent").then_some(execution))
+    }
+
+    fn execution_kind(&self, run: &str) -> Result<(Execution, String)> {
         self.checked((|| {
             let header = self.saved_run_header(run)?.ok_or("unknown history run")?;
             self.saved_conversation(&header.conversation)?;
-            Ok(Execution {
-                store: self.profile.store.clone(),
-                conversation: header.conversation,
-                run: run.into(),
-            })
+            Ok((
+                Execution {
+                    store: self.profile.store.clone(),
+                    conversation: header.conversation,
+                    run: run.into(),
+                },
+                header.kind,
+            ))
         })())
     }
 

@@ -667,6 +667,12 @@ fn actual_owner_conversation_switch_waits_for_work_and_preserves_retry() -> Resu
             crate::model::ConversationAction::Watch { run: run.clone() },
         ),
     })?;
+    owner.disconnect_pi_ui()?;
+    assert!(
+        !owner.operations[&run]
+            .stop
+            .load(std::sync::atomic::Ordering::Acquire)
+    );
     let before = serde_json::to_value(profile(history(&owner))?)?;
     let live = serde_json::to_value(&owner.state)?;
     let retry = change(

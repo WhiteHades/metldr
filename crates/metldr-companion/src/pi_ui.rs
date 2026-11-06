@@ -257,12 +257,17 @@ impl Owner {
     pub(super) fn disconnect_pi_ui(&mut self) -> Result<()> {
         let runs: Vec<_> = self.operations.keys().cloned().collect();
         for run in runs {
-            if self.record_history.is_some() {
-                let state = self.native_input_state(&run)?;
-                if matches!(
-                    state.launches.get(&run),
-                    Some(crate::agent_model::Launch::Pi { .. })
-                ) {
+            if let Some(history) = &mut self.record_history {
+                let pi = history.edit(|edit| {
+                    let Some(execution) = edit.native_execution(&run)? else {
+                        return Ok(false);
+                    };
+                    Ok(matches!(
+                        edit.native_task(&execution, &run)?.launch,
+                        crate::agent_model::Launch::Pi { .. }
+                    ))
+                })?;
+                if pi {
                     self.stop_native_record_inputs(
                         &run,
                         "Pi controller disconnected",
