@@ -22,13 +22,10 @@ fn matches_kind(launch: &Launch, kind: Kind) -> bool {
 
 impl Owner {
     pub(super) fn native_input_state(&mut self, run: &str) -> Result<Store> {
-        if let Some(history) = &mut self.record_history {
-            return history.edit(|edit| {
-                let execution = edit.execution(run)?;
-                edit.project_execution(&execution)
-            });
-        }
-        Ok(self.state.clone())
+        self.record_history.edit(|edit| {
+            let execution = edit.execution(run)?;
+            edit.project_execution(&execution)
+        })
     }
 
     pub(super) fn native_input_active(&mut self, run: &str, kind: Kind) -> Result<bool> {
@@ -47,29 +44,14 @@ impl Owner {
             if !self.operations.contains_key(run) {
                 return Ok(None);
             }
-            if let Some(history) = &mut self.record_history {
-                return history.edit(|edit| {
-                    let execution = edit.execution(run)?;
-                    let task = edit.native_task(&execution, run)?;
-                    Ok(
-                        (!task.run.status.terminal() && matches_kind(&task.launch, kind))
-                            .then_some(task.run.status),
-                    )
-                });
-            }
-            Ok(self
-                .state
-                .view
-                .runs
-                .iter()
-                .find(|r| r.id == run && !r.status.terminal())
-                .filter(|_| {
-                    self.state
-                        .launches
-                        .get(run)
-                        .is_some_and(|launch| matches_kind(launch, kind))
-                })
-                .map(|r| r.status))
+            self.record_history.edit(|edit| {
+                let execution = edit.execution(run)?;
+                let task = edit.native_task(&execution, run)?;
+                Ok(
+                    (!task.run.status.terminal() && matches_kind(&task.launch, kind))
+                        .then_some(task.run.status),
+                )
+            })
         })();
         if result.as_ref().is_err_and(|error| fatal(error.as_ref())) {
             self.abort_native_inputs(run);
@@ -79,9 +61,6 @@ impl Owner {
 
     pub(super) fn commit_native_input(&mut self, run: &str, kind: Kind, next: Store) -> Result<()> {
         let result = (|| {
-            if self.record_history.is_none() {
-                return self.commit(next);
-            }
             let status = next
                 .view
                 .runs

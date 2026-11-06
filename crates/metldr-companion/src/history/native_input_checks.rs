@@ -99,7 +99,7 @@ fn make_owner_with_binding(
         disk,
         state,
         browser_view: BTreeMap::new(),
-        record_history: Some(history),
+        record_history: history,
         history_pins: Default::default(),
         settings: Default::default(),
         agent_runtime: Default::default(),
@@ -131,7 +131,7 @@ fn make_owner_with_binding(
 }
 
 fn sequence(owner: &Owner) -> Result<u64> {
-    let history = owner.record_history.as_ref().unwrap();
+    let history = &owner.record_history;
     let read = history.db.begin_read()?;
     let meta = read.open_table(META)?;
     let profile = meta.get("profile")?.unwrap();
@@ -196,7 +196,7 @@ async fn codex_input_replies_and_withdrawals_preserve_owned_waiters() -> Result<
         .as_str()
         .unwrap()
         .to_owned();
-    let mut stale = owner.record_history.as_ref().unwrap().selection()?;
+    let mut stale = owner.record_history.selection()?;
     stale.epoch += 1;
     let subscription = crate::flow::Subscription {
         scope: stale,
@@ -303,7 +303,7 @@ fn native_corrections_fence_duplicates_stop_and_uncertain_session_reuse() -> Res
     use crate::native_correction::{Phase, Target, channel};
     for (dispatch, restart) in [(true, false), (false, false), (false, true), (true, true)] {
         let (directory, mut owner, _, run) = make_owner_with_binding("pi", true)?;
-        let scope = owner.record_history.as_ref().unwrap().selection()?;
+        let scope = owner.record_history.selection()?;
         let (slot, receiver) = channel(&run, &owner.tx);
         owner.operations.get_mut(&run).unwrap().correction = Some(slot);
         owner.correction_ready(&run, Target::Pi)?;
@@ -313,7 +313,7 @@ fn native_corrections_fence_duplicates_stop_and_uncertain_session_reuse() -> Res
         owner.correct_native("correction-1", &scope, &run, "Keep the exact correction.")?;
         assert_eq!(sequence(&owner)?, admitted);
         assert!(receiver.take()?.is_none());
-        let admitted_task = owner.record_history.as_mut().unwrap().edit(|edit| {
+        let admitted_task = owner.record_history.edit(|edit| {
             edit.current_execution(&scope, &run)
                 .and_then(|execution| edit.native_task(&execution, &run))
         })?;
@@ -340,11 +340,11 @@ fn native_corrections_fence_duplicates_stop_and_uncertain_session_reuse() -> Res
         }
         if restart {
             stop_owner(&mut owner);
-            drop(owner.record_history.take());
+            drop(owner.record_history);
             let mut reopened =
                 History::open(&directory.0.join("history.redb"), owner.disk.lease())?;
             reopened.edit(|edit| edit.recover(&scope))?;
-            owner.record_history = Some(reopened);
+            owner.record_history = reopened;
         } else {
             owner.stop_run("stop-correction", &run)?;
             let (ack, reply) = mpsc::sync_channel(1);
@@ -352,7 +352,7 @@ fn native_corrections_fence_duplicates_stop_and_uncertain_session_reuse() -> Res
             assert!(!reply.recv()?);
             owner.agent_settled(&run, crate::agent::Outcome::Cancelled, false, true)?;
         }
-        let saved = owner.record_history.as_mut().unwrap().edit(|edit| {
+        let saved = owner.record_history.edit(|edit| {
             edit.current_execution(&scope, &run)
                 .and_then(|execution| edit.native_task(&execution, &run))
         })?;
@@ -417,7 +417,7 @@ fn native_input_settlement_publishes_retained_pi_display_without_pending_replies
             "complete" => {
                 owner.agent_settled(&run, crate::agent::Outcome::Complete, false, true)?
             }
-            "stop" => owner.stop_record("stop-visible-input", &run)?,
+            "stop" => owner.stop_run("stop-visible-input", &run)?,
             _ => owner.stop_native_record_inputs(&run, "input failed", None, true)?,
         }
         let bytes = frames.lock().unwrap().clone();
@@ -515,8 +515,8 @@ fn native_input_records_reserve_publish_cancel_and_keep_payloads_volatile() -> R
         original_snapshot
     );
     assert_eq!(sequence(&owner)?, first_sequence + 34);
-    let scope = owner.record_history.as_ref().unwrap().selection()?;
-    let saved = owner.record_history.as_mut().unwrap().edit(|edit| {
+    let scope = owner.record_history.selection()?;
+    let saved = owner.record_history.edit(|edit| {
         edit.current_execution(&scope, &run)
             .and_then(|execution| edit.native_task(&execution, &run))
     })?;
@@ -547,7 +547,7 @@ fn native_input_records_reserve_publish_cancel_and_keep_payloads_volatile() -> R
             .stop
             .load(std::sync::atomic::Ordering::Acquire)
     );
-    let stopped = owner.record_history.as_mut().unwrap().edit(|edit| {
+    let stopped = owner.record_history.edit(|edit| {
         edit.current_execution(&scope, &run)
             .and_then(|execution| edit.native_task(&execution, &run))
     })?;
@@ -565,8 +565,8 @@ fn native_input_records_reserve_publish_cancel_and_keep_payloads_volatile() -> R
     stop_owner(&mut owner);
 
     let (_directory, mut stale, _, run) = make_owner("pi")?;
-    let scope = stale.record_history.as_ref().unwrap().selection()?;
-    stale.record_history.as_mut().unwrap().edit(|edit| {
+    let scope = stale.record_history.selection()?;
+    stale.record_history.edit(|edit| {
         let mut task = edit
             .current_execution(&scope, &run)
             .and_then(|execution| edit.native_task(&execution, &run))?;
@@ -619,7 +619,7 @@ fn native_input_records_reserve_publish_cancel_and_keep_payloads_volatile() -> R
         answer.try_recv(),
         Err(mpsc::TryRecvError::Disconnected)
     ));
-    drop(failed.record_history.take());
+    drop(failed.record_history);
     let mut reopened = History::open(&directory.0.join("history.redb"), failed.disk.lease())?;
     assert_eq!(reopened.selection()?.epoch, 1);
     let scope = reopened.selection()?;
@@ -632,10 +632,13 @@ fn native_input_records_reserve_publish_cancel_and_keep_payloads_volatile() -> R
             .status,
         Status::Running
     );
-    let read = reopened.db.begin_read()?;
-    let meta = read.open_table(META)?;
-    let profile = meta.get("profile")?.unwrap();
-    assert_eq!(decode::<Profile>(profile.value())?.next, reserved);
+    {
+        let read = reopened.db.begin_read()?;
+        let meta = read.open_table(META)?;
+        let profile = meta.get("profile")?.unwrap();
+        assert_eq!(decode::<Profile>(profile.value())?.next, reserved);
+    }
+    failed.record_history = reopened;
     stop_owner(&mut failed);
 
     // A stale/missing run row is a fatal history failure before an answer can be delivered.
@@ -647,13 +650,8 @@ fn native_input_records_reserve_publish_cancel_and_keep_payloads_volatile() -> R
         .to_owned();
     let before = sequence(&corrupt)?;
     let number = run.rsplit(':').next().unwrap().parse::<u64>()?;
-    let conversation = corrupt
-        .record_history
-        .as_ref()
-        .unwrap()
-        .selection()?
-        .conversation;
-    let write = corrupt.record_history.as_ref().unwrap().db.begin_write()?;
+    let conversation = corrupt.record_history.selection()?.conversation;
+    let write = corrupt.record_history.db.begin_write()?;
     assert!(
         write
             .open_table(RUN_ORDER)?
@@ -774,12 +772,10 @@ fn native_input_records_reserve_publish_cancel_and_keep_payloads_volatile() -> R
             .stop
             .load(std::sync::atomic::Ordering::Acquire)
     );
-    let scope = duplicate.record_history.as_ref().unwrap().selection()?;
+    let scope = duplicate.record_history.selection()?;
     assert_eq!(
         duplicate
             .record_history
-            .as_mut()
-            .unwrap()
             .edit(|edit| edit
                 .current_execution(&scope, &run)
                 .and_then(|execution| edit.native_task(&execution, &run)))?
@@ -826,7 +822,7 @@ fn select_other_fixture(history: &mut History) -> Result<super::Selection> {
 #[test]
 fn offscreen_native_input_keeps_selected_state_and_recovers_its_owner() -> Result<()> {
     let (directory, mut owner, frames, run) = make_owner("codex")?;
-    let history = owner.record_history.as_mut().unwrap();
+    let history = &mut owner.record_history;
     let original = history.selection()?;
     let execution = history.edit(|edit| edit.current_execution(&original, &run))?;
     assert!(
@@ -909,7 +905,7 @@ fn offscreen_native_input_keeps_selected_state_and_recovers_its_owner() -> Resul
             .iter()
             .all(|reply| matches!(reply.try_recv(), Err(mpsc::TryRecvError::Empty)))
     );
-    let history = owner.record_history.as_mut().unwrap();
+    let history = &mut owner.record_history;
     let write = history.db.begin_write()?;
     let conversation = write
         .open_table(CONVERSATIONS)?
@@ -929,7 +925,7 @@ fn offscreen_native_input_keeps_selected_state_and_recovers_its_owner() -> Resul
         .insert(execution.conversation(), conversation.as_slice())?;
     write.commit()?;
     stop_owner(&mut owner);
-    drop(owner.record_history.take());
+    drop(owner.record_history);
     let mut history = History::open(&directory.0.join("history.redb"), owner.disk.lease())?;
     history.edit(|edit| edit.recover(&selected))?;
     let task = history.edit(|edit| edit.native_task(&execution, &run))?;
@@ -951,7 +947,7 @@ fn offscreen_native_input_keeps_selected_state_and_recovers_its_owner() -> Resul
 #[test]
 fn offscreen_pi_disconnect_stops_and_cancels_its_own_input() -> Result<()> {
     let (_directory, mut owner, frames, run) = make_owner("pi")?;
-    let history = owner.record_history.as_mut().unwrap();
+    let history = &mut owner.record_history;
     let execution = history.edit(|edit| edit.execution(&run))?;
     let selected = select_other_fixture(history)?;
     owner.state = history.edit(|edit| edit.project_latest(&selected))?;
@@ -968,8 +964,6 @@ fn offscreen_pi_disconnect_stops_and_cancels_its_own_input() -> Result<()> {
     );
     let task = owner
         .record_history
-        .as_mut()
-        .unwrap()
         .edit(|edit| edit.native_task(&execution, &run))?;
     assert_eq!(task.run.status, Status::StopRequested);
     assert!(matches!(

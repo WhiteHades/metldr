@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     agent_model::Launch,
     https_profile::Binding,
-    model::{Page, View},
+    model::{Page, Store, View},
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -71,12 +71,44 @@ fn add(
     );
 }
 
+fn stored_context(
+    state: &Store,
+    source: &Source,
+    protocol: Protocol,
+    fingerprint: &str,
+) -> Vec<Run> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(".tmp")
+        .join(format!(
+            "page-context-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed),
+        ));
+    let (disk, _) = crate::store::Disk::open(directory.clone()).unwrap();
+    disk.save(state).unwrap();
+    let mut history = crate::history::History::import_new(
+        &directory.join("history.redb"),
+        &serde_json::to_vec(state).unwrap(),
+        disk.lease(),
+    )
+    .unwrap();
+    let scope = history.selection().unwrap();
+    let result = history.edit(|edit| edit.text_context(&scope, &source.id, protocol, fingerprint));
+    drop(history);
+    drop(disk);
+    std::fs::remove_dir_all(directory).unwrap();
+    result.unwrap()
+}
+
 #[test]
 fn context_contains_only_completed_same_source_and_provider_selection_answers() {
     let mut state = state();
     let source = state.view.source.as_ref().unwrap().clone();
     let current = "a".repeat(64);
     let different = "b".repeat(64);
+    let other_source = format!("{}:2", state.view.store);
     for (protocol, fingerprint, status, page, text) in [
         (
             Protocol::Messages,
@@ -110,7 +142,7 @@ fn context_contains_only_completed_same_source_and_provider_selection_answers() 
             Protocol::Messages,
             &current,
             Status::Complete,
-            "other-page",
+            other_source.as_str(),
             "Other page",
         ),
     ] {
@@ -119,7 +151,7 @@ fn context_contains_only_completed_same_source_and_provider_selection_answers() 
     let prompt = Prompt::Answer {
         text: "How many units?".into(),
     };
-    let history = legacy_context(&state, &source, Protocol::Messages, &current);
+    let history = stored_context(&state, &source, Protocol::Messages, &current);
     let context: Value = serde_json::from_str(&input(&history, &source, &prompt).unwrap()).unwrap();
     assert_eq!(
         context,
@@ -144,7 +176,7 @@ fn context_limit_drops_whole_old_turns_and_preserves_latest_order() {
             format!("turn{at}:{}", "x".repeat(8186)),
         );
     }
-    let history = legacy_context(&state, &source, Protocol::Messages, &fingerprint);
+    let history = stored_context(&state, &source, Protocol::Messages, &fingerprint);
     let encoded = input(&history, &source, &Prompt::Summary).unwrap();
     assert!(encoded.len() <= INPUT_MAX);
     let context: Value = serde_json::from_str(&encoded).unwrap();
@@ -170,7 +202,7 @@ fn context_retains_at_most_six_complete_turns() {
             format!("turn{at}"),
         );
     }
-    let history = legacy_context(&state, &source, Protocol::Messages, &fingerprint);
+    let history = stored_context(&state, &source, Protocol::Messages, &fingerprint);
     let encoded = input(&history, &source, &Prompt::Summary).unwrap();
     let context: Value = serde_json::from_str(&encoded).unwrap();
     let history = context["history"].as_array().unwrap();

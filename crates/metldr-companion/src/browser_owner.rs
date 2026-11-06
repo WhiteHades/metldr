@@ -48,32 +48,17 @@ impl PendingApproval {
 
 impl Owner {
     pub(super) fn saved_browser_action(&mut self, id: &str) -> Result<Action> {
-        if let Some(history) = self.record_history.as_mut() {
-            return history.edit(|edit| {
-                let execution = edit.action_execution(id)?;
-                edit.browser_action(&execution, id)
-            });
-        }
-        self.state
-            .browser_actions
-            .get(id)
-            .cloned()
-            .ok_or_else(|| "unknown browser action".into())
+        self.record_history.edit(|edit| {
+            let execution = edit.action_execution(id)?;
+            edit.browser_action(&execution, id)
+        })
     }
 
     fn saved_browser_tool(&mut self, run: &str, tool: &str) -> Result<Option<Action>> {
-        if let Some(history) = self.record_history.as_mut() {
-            return history.edit(|edit| {
-                let execution = edit.execution(run)?;
-                edit.browser_by_tool(&execution, run, tool)
-            });
-        }
-        Ok(self
-            .state
-            .browser_actions
-            .values()
-            .find(|action| action.proposal.run == run && action.proposal.tool_use_id == tool)
-            .cloned())
+        self.record_history.edit(|edit| {
+            let execution = edit.execution(run)?;
+            edit.browser_by_tool(&execution, run, tool)
+        })
     }
 
     fn browser_operation(&self, run: &str) -> Result<()> {
@@ -112,17 +97,11 @@ impl Owner {
                     if budget.as_ref().is_some_and(Budget::expired) {
                         return Err("browser tool deadline expired before proposal".into());
                     }
-                    if self.record_history.is_some() {
-                        let run = proposal.run.clone();
-                        return self.record_execution(&run, |edit, execution| {
-                            let (action, created) = edit.propose_browser(execution, proposal)?;
-                            Ok((action, created))
-                        });
-                    }
-                    let mut next = self.state.clone();
-                    let action = next.propose_browser(proposal)?;
-                    self.commit(next)?;
-                    Ok((action, true))
+                    let run = proposal.run.clone();
+                    self.record_execution(&run, |edit, execution| {
+                        let (action, created) = edit.propose_browser(execution, proposal)?;
+                        Ok((action, created))
+                    })
                 })();
                 match result {
                     Ok((action, false)) => {
@@ -153,17 +132,10 @@ impl Owner {
                 let result = (|| -> Result<Action> {
                     let record = self.saved_browser_action(&action)?;
                     self.browser_operation(&record.proposal.run)?;
-                    if self.record_history.is_some() {
-                        let run = record.proposal.run.clone();
-                        return self.record_execution(&run, |edit, execution| {
-                            edit.dispatch_browser(execution, &action, revision)
-                        });
-                    }
-                    let mut next = self.state.clone();
-                    let record = next.dispatch_browser(&action, revision)?;
-                    // The worker receives permission only after the dispatch record is durable.
-                    self.commit(next)?;
-                    Ok(record)
+                    let run = record.proposal.run.clone();
+                    self.record_execution(&run, |edit, execution| {
+                        edit.dispatch_browser(execution, &action, revision)
+                    })
                 })();
                 reply(ack, result)
             }
@@ -178,16 +150,10 @@ impl Owner {
                     if !self.operations.contains_key(&record.proposal.run) {
                         return Err("browser result came from a stale operation".into());
                     }
-                    if self.record_history.is_some() {
-                        let run = record.proposal.run.clone();
-                        return self.record_execution(&run, |edit, execution| {
-                            edit.settle_browser(execution, &action, revision, outcome)
-                        });
-                    }
-                    let mut next = self.state.clone();
-                    let record = next.settle_browser(&action, revision, outcome)?;
-                    self.commit(next)?;
-                    Ok(record)
+                    let run = record.proposal.run.clone();
+                    self.record_execution(&run, |edit, execution| {
+                        edit.settle_browser(execution, &action, revision, outcome)
+                    })
                 })();
                 reply(ack, result)
             }
@@ -206,17 +172,10 @@ impl Owner {
             .filter(|p| p.action == action)
             .ok_or("browser action is not awaiting this approval")?;
         self.browser_operation(&pending.run)?;
-        let record = if self.record_history.is_some() {
-            let run = pending.run.clone();
-            self.record_execution(&run, |edit, execution| {
-                edit.decide_browser(execution, action, revision, approve)
-            })?
-        } else {
-            let mut next = self.state.clone();
-            let record = next.decide_browser(action, revision, approve)?;
-            self.commit(next)?;
-            record
-        };
+        let run = pending.run.clone();
+        let record = self.record_execution(&run, |edit, execution| {
+            edit.decide_browser(execution, action, revision, approve)
+        })?;
         if let Some(pending) = self.browser_approval.take() {
             pending.reply(Ok(record));
         }

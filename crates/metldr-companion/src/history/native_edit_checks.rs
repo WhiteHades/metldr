@@ -5,7 +5,7 @@ use crate::{
     model::{Run, Status},
 };
 use metldr_conversation::{Change, Content, Ending, MessageKey};
-use redb::{ReadableDatabase, ReadableTable, ReadableTableMetadata};
+use redb::{ReadableDatabase, ReadableTableMetadata};
 use std::{
     fs,
     path::PathBuf,

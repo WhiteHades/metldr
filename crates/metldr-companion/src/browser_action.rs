@@ -1,7 +1,4 @@
-use crate::{
-    Result,
-    model::{Status, Store},
-};
+use crate::{Result, model::Store};
 use serde::{Deserialize, Serialize};
 
 mod control;
@@ -236,6 +233,7 @@ fn bounded(value: &str, max: usize) -> bool {
     !value.is_empty() && value.len() <= max && !value.chars().any(char::is_control)
 }
 
+#[cfg(test)]
 impl Store {
     pub(super) fn propose_browser(&mut self, proposal: Proposal) -> Result<Action> {
         proposal.validate()?;
@@ -349,24 +347,6 @@ impl Store {
         Ok(action)
     }
 
-    pub(super) fn prevent_browser(&mut self, run: &str, reason: &str) -> Result<()> {
-        let ids: Vec<_> = self
-            .browser_actions
-            .values()
-            .filter(|a| {
-                a.proposal.run == run && matches!(a.state, Phase::Pending | Phase::Approved)
-            })
-            .map(|a| a.id.clone())
-            .collect();
-        for id in ids {
-            if let Some(action) = self.browser_actions[&id].prevent(reason)? {
-                self.browser_actions.insert(id, action);
-            }
-        }
-        Ok(())
-    }
-
-    #[cfg(test)]
     pub(super) fn interrupt_browser(&mut self) -> Result<bool> {
         let ids: Vec<_> = self
             .browser_actions
@@ -385,30 +365,12 @@ impl Store {
         Ok(!ids.is_empty())
     }
 
-    pub(super) fn finish_browser(&mut self, run: &str) -> Result<()> {
-        let ids: Vec<_> = self
-            .browser_actions
-            .values()
-            .filter(|a| a.proposal.run == run && !matches!(a.state, Phase::Settled { .. }))
-            .map(|a| a.id.clone())
-            .collect();
-        for id in ids {
-            if let Some(action) = self.browser_actions[&id].finish(
-                "worker ended before dispatch",
-                "worker ended without a verified browser result",
-            )? {
-                self.browser_actions.insert(id, action);
-            }
-        }
-        Ok(())
-    }
-
     fn browser_run(&self, run: &str) -> Result<()> {
         if !self
             .view
             .runs
             .iter()
-            .any(|r| r.id == run && r.status == Status::Running)
+            .any(|r| r.id == run && r.status == crate::model::Status::Running)
         {
             return Err("browser run is not active".into());
         }

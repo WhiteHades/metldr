@@ -107,7 +107,7 @@ fn make_owner(directory: &Directory) -> crate::Result<(Owner, String)> {
             disk,
             state,
             browser_view: Default::default(),
-            record_history: Some(history),
+            record_history: history,
             history_pins: Default::default(),
             settings: Default::default(),
             agent_runtime: Default::default(),
@@ -224,7 +224,7 @@ fn approve_dispatch_settle(
 }
 
 fn saved_action(owner: &mut Owner, id: &str) -> crate::Result<crate::browser_action::Action> {
-    let history = owner.record_history.as_mut().unwrap();
+    let history = &mut owner.record_history;
     let selection = history.selection()?;
     history.edit(|edit| {
         edit.current_action_execution(&selection, id)
@@ -320,7 +320,7 @@ fn actual_owner_browser_lifecycle_is_record_durable_and_fails_closed() -> crate:
     let oldest = saved_action(&mut owner, &nav.id)?;
     assert_eq!(oldest, nav);
     let history_path = owner.disk.directory.join("history.redb");
-    drop(owner.record_history.take());
+    drop(owner.record_history);
     let mut history = History::open(&history_path, owner.disk.lease())?;
     let scope = history.selection()?;
     let (latest, target) = history.edit(|edit| {
@@ -335,7 +335,7 @@ fn actual_owner_browser_lifecycle_is_record_durable_and_fails_closed() -> crate:
     assert_eq!(latest, run);
     assert_eq!(target.document, binding.document);
     assert_eq!(target.url, destination);
-    owner.record_history = Some(history);
+    owner.record_history = history;
 
     navigation.tool_use_id = "stale-grant".into();
     navigation.intent = field();
@@ -484,7 +484,7 @@ fn actual_owner_browser_lifecycle_is_record_durable_and_fails_closed() -> crate:
         .join()
         .map_err(|_| "fixture worker panicked")?;
     let history_path = failed_owner.disk.directory.join("history.redb");
-    drop(failed_owner.record_history.take());
+    drop(failed_owner.record_history);
     let mut reopened = History::open(&history_path, failed_owner.disk.lease())?;
     let selection = reopened.selection()?;
     let durable = reopened
@@ -516,7 +516,7 @@ fn actual_owner_browser_lifecycle_is_record_durable_and_fails_closed() -> crate:
     let approved = reply.recv()?.unwrap();
     let number = action.rsplit(':').next().unwrap().parse::<u64>()?;
     {
-        let history = corrupt.record_history.as_ref().unwrap();
+        let history = &corrupt.record_history;
         let write = history.db.begin_write()?;
         assert!(
             write

@@ -308,6 +308,7 @@ pub(super) enum ConversationAction {
 }
 
 impl Store {
+    #[cfg(test)]
     pub(super) fn seal_outputs(&mut self) -> Result<bool> {
         let mut changed = false;
         for run in &mut self.view.runs {

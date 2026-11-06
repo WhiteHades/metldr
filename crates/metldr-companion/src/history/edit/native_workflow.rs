@@ -12,23 +12,6 @@ pub(crate) enum NativeWorkflow {
 }
 
 impl NativeWorkflow {
-    pub(crate) fn from_store(state: &Store, launch: &Launch) -> Result<Self> {
-        match launch {
-            Launch::Pi { workflow, .. } => state.workflows.get(workflow).cloned().map(Self::Pi),
-            Launch::Codex { workflow, .. } => state
-                .codex_workflows
-                .get(workflow)
-                .cloned()
-                .map(Self::Codex),
-            Launch::OpenCode { workflow, .. } => state
-                .opencode_workflows
-                .get(workflow)
-                .cloned()
-                .map(Self::OpenCode),
-            _ => return Err("callback has no native launch".into()),
-        }
-        .ok_or_else(|| "callback native workflow is absent".into())
-    }
     pub(super) fn pending(&self) -> bool {
         matches!(
             self,

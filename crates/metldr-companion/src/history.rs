@@ -22,6 +22,8 @@ mod summary;
 mod upgrade;
 
 #[cfg(test)]
+mod browser_checks;
+#[cfg(test)]
 mod browser_owner_checks;
 #[cfg(test)]
 mod checks;
@@ -84,7 +86,7 @@ impl History {
     }
 
     #[cfg(test)]
-    fn import_new(path: &Path, original: &[u8], lease: Arc<File>) -> Result<Self> {
+    pub(crate) fn import_new(path: &Path, original: &[u8], lease: Arc<File>) -> Result<Self> {
         let prepared = import::Prepared::new(original)?;
         let history = Self::file(path, true, lease)?;
         prepared.write(&history.db, original)?;

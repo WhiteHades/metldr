@@ -1,11 +1,6 @@
 use super::{Command, LIMIT, Phase, Receipt, Target};
-use crate::{
-    Result,
-    flow::Owner,
-    history::Selection,
-    model::{Status, Store},
-};
-use serde_json::{Value, json};
+use crate::{Result, flow::Owner, history::Selection, model::Status};
+use serde_json::json;
 use std::sync::{atomic::Ordering, mpsc::SyncSender};
 
 impl Owner {
@@ -105,7 +100,7 @@ impl Owner {
     }
 
     pub(crate) fn correction_ready(&mut self, run: &str, target: Target) -> Result<()> {
-        if self.record_history.is_none() || !self.native_input_active(run, target.kind())? {
+        if !self.native_input_active(run, target.kind())? {
             return Ok(());
         }
         let slot = self
@@ -194,21 +189,5 @@ impl Owner {
             return Ok(());
         }
         self.record_execution(run, |edit, execution| edit.refresh_execution(execution))
-    }
-
-    pub(crate) fn correction_public(&self, state: &Store) -> Value {
-        let Some((op, run, slot)) = state.view.runs.iter().find_map(|run| {
-            if run.status.terminal() {
-                return None;
-            }
-            let op = self.operations.get(&run.id)?;
-            Some((op, run, op.correction.as_ref()?))
-        }) else {
-            return Value::Null;
-        };
-        json!({"run":run.id,"available":self.record_history.is_some()
-            && slot.ready.is_some() && !op.stop.load(Ordering::Acquire)
-            && run.status == Status::Running && run.corrections.len() < LIMIT
-            && run.corrections.last().is_none_or(|r| !r.state.unresolved())})
     }
 }

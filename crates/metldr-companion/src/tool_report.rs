@@ -1,8 +1,6 @@
-use crate::{Result, agent_model::Launch, model::Store};
+use crate::{Result, agent_model::Launch};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-
-const PREVIEW_BUDGET: usize = 8_192;
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -84,18 +82,6 @@ impl Preview {
         result.truncated |= incomplete;
         Some(result)
     }
-
-    fn limit(&mut self, limit: usize) {
-        if self.text.len() <= limit {
-            return;
-        }
-        let mut end = limit;
-        while !self.text.is_char_boundary(end) {
-            end -= 1;
-        }
-        self.text.truncate(end);
-        self.truncated = true;
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -147,15 +133,6 @@ impl Call {
                 .into_iter()
                 .zip([256, 1_024, 2_048])
                 .all(|(preview, limit)| preview.as_ref().is_none_or(|p| p.text.len() <= limit))
-    }
-
-    fn limit(&mut self, limit: usize) {
-        for preview in [&mut self.title, &mut self.input, &mut self.output]
-            .into_iter()
-            .flatten()
-        {
-            preview.limit(limit);
-        }
     }
 }
 
@@ -229,55 +206,6 @@ impl crate::flow::Owner {
             Ok(coalesce(activity, call))
         })?;
         Ok(())
-    }
-}
-
-pub(super) fn fit_store(state: &mut Store) -> Result<()> {
-    let mut fields = 0;
-    let mut bytes = 0;
-    for launch in state.launches.values() {
-        if let Launch::Pi { activity, .. }
-        | Launch::Codex { activity, .. }
-        | Launch::OpenCode { activity, .. } = launch
-        {
-            for call in activity.iter().filter_map(|a| a.call.as_ref()) {
-                for p in [&call.title, &call.input, &call.output]
-                    .into_iter()
-                    .flatten()
-                {
-                    fields += 1;
-                    bytes += p.text.len();
-                }
-            }
-        }
-    }
-    if bytes > PREVIEW_BUDGET {
-        limit_store(state, PREVIEW_BUDGET / fields.max(1), false);
-    }
-    // Optional previews must not prevent core task state from being saved.
-    if serde_json::to_vec(state)?.len() > crate::STORE_MAX {
-        limit_store(state, 0, false);
-    }
-    if serde_json::to_vec(state)?.len() > crate::STORE_MAX {
-        limit_store(state, 0, true);
-    }
-    Ok(())
-}
-
-fn limit_store(state: &mut Store, limit: usize, remove: bool) {
-    for launch in state.launches.values_mut() {
-        if let Launch::Pi { activity, .. }
-        | Launch::Codex { activity, .. }
-        | Launch::OpenCode { activity, .. } = launch
-        {
-            for activity in activity {
-                if remove {
-                    activity.call = None;
-                } else if let Some(call) = &mut activity.call {
-                    call.limit(limit);
-                }
-            }
-        }
     }
 }
 
@@ -466,83 +394,7 @@ mod tests {
     }
 
     #[test]
-    fn optional_details_degrade_before_core_store_or_wire_state() {
-        let mut state = Store {
-            schema: crate::STORE_VERSION,
-            view: crate::model::View {
-                sequence: 7,
-                store: "a".repeat(32),
-                source: None,
-                runs: vec![],
-            },
-            next: 1,
-            starts: Default::default(),
-            launches: Default::default(),
-            workflows: Default::default(),
-            codex_workflows: Default::default(),
-            opencode_workflows: Default::default(),
-            browser_actions: Default::default(),
-            providers: Default::default(),
-            agent_settings: Default::default(),
-        };
-        for index in 0..5 {
-            state.view.runs.push(crate::model::Run {
-                id: format!("r{index}"),
-                source: "s1".into(),
-                kind: "agent".into(),
-                question: None,
-                status: crate::model::Status::Complete,
-                output: metldr_conversation::Content::flat("x".repeat(8_000)).unwrap(),
-                error: None,
-                corrections: Vec::new(),
-            });
-        }
-        for index in 0..2 {
-            let activity = (0..32)
-                .map(|id| {
-                    let mut call = Call::new(&format!("{id:0128}")).unwrap();
-                    call.input = Some(Preview::text(&"i".repeat(1_024), 1_024));
-                    call.output = Some(Preview::text(&"o".repeat(2_048), 2_048));
-                    Activity {
-                        tool: "read".into(),
-                        phase: "completed".into(),
-                        outcome: (index == 0).then(|| "succeeded".into()),
-                        call: Some(call),
-                    }
-                })
-                .collect();
-            let launch = if index == 0 {
-                Launch::Codex {
-                    input_digest: "d".into(),
-                    workflow: "w".into(),
-                    selection: None,
-                    activity,
-                }
-            } else {
-                Launch::OpenCode {
-                    input_digest: "d".into(),
-                    workflow: "w".into(),
-                    selection: None,
-                    activity,
-                }
-            };
-            state.launches.insert(format!("r{index}"), launch);
-        }
-        let core = serde_json::to_value(&state.view).unwrap();
-        assert!(serde_json::to_vec(&state).unwrap().len() > crate::STORE_MAX);
-        fit_store(&mut state).unwrap();
-        assert!(serde_json::to_vec(&state).unwrap().len() <= crate::STORE_MAX);
-        assert_eq!(serde_json::to_value(&state.view).unwrap(), core);
-        assert!(state.launches.values().all(|launch| match launch {
-            Launch::Codex { activity, .. } | Launch::OpenCode { activity, .. } =>
-                activity.len() == 32,
-            _ => false,
-        }));
-        assert!(matches!(
-            state.launches.get("r0"),
-            Some(Launch::Codex { activity, .. }) if activity[0].outcome.as_deref() == Some("succeeded")
-        ));
-
+    fn optional_details_degrade_before_core_wire_state() {
         let mut report = json!({"tool":"read","phase":"completed","outcome":"succeeded","call":{"id":"c".repeat(128),"input":{"text":"a".repeat(1_024),"truncated":false}}});
         let mut wire = json!({"view":{"output":"x".repeat(crate::FRAME_MAX - 8_000),"runs":[{"activity":vec![report.clone();64]}]}});
         let output = wire["view"]["output"].clone();

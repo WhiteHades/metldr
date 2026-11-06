@@ -59,7 +59,7 @@ fn owner(
             disk,
             state,
             browser_view: BTreeMap::new(),
-            record_history: Some(history),
+            record_history: history,
             history_pins: Default::default(),
             settings: Default::default(),
             agent_runtime: Default::default(),
@@ -129,7 +129,7 @@ fn ask(owner: &Owner, id: &str) -> Request {
 }
 
 fn history(owner: &Owner) -> &History {
-    owner.record_history.as_ref().unwrap()
+    &owner.record_history
 }
 
 fn conversation(owner: &Owner, action: crate::model::ConversationAction) -> Command {
@@ -227,12 +227,12 @@ fn complete(
 
 // This fixture reopens one exact projection; normal native startup recovery is still separate.
 fn reopen(
-    mut owner_before: Owner,
+    owner_before: Owner,
     address: SocketAddr,
     run: &str,
 ) -> Result<(Owner, mpsc::Receiver<Event>, Arc<Mutex<Vec<u8>>>)> {
     assert!(owner_before.operations.is_empty());
-    owner_before.record_history.take();
+    drop(owner_before.record_history);
     let mut history = History::open(
         &owner_before.disk.directory.join("history.redb"),
         owner_before.disk.lease(),

@@ -3,11 +3,11 @@ use crate::{
     agent_model::{Binding as PiBinding, Launch},
     agent_settings::{Kind, Profile, Receipt, Selection as AgentSelection},
     flow::{Event, Owner},
-    model::{Command, Page, Request, Source, Status, Store},
+    model::{Command, Page, Request, Source, Status},
     store::Disk,
     transport::Transport,
 };
-use redb::{ReadableDatabase, ReadableTable};
+use redb::ReadableDatabase;
 use std::{
     collections::BTreeMap,
     fs, io,
@@ -166,7 +166,7 @@ fn setup(
         disk,
         state,
         browser_view: BTreeMap::new(),
-        record_history: Some(history),
+        record_history: history,
         history_pins: Default::default(),
         settings: Default::default(),
         agent_runtime: Default::default(),
@@ -200,9 +200,9 @@ fn stop(owner: &mut Owner) {
     }
 }
 
-fn reopen(mut owner: Owner) -> crate::Result<Owner> {
+fn reopen(owner: Owner) -> crate::Result<Owner> {
     assert!(owner.operations.is_empty());
-    drop(owner.record_history.take());
+    drop(owner.record_history);
     let mut history = History::open(
         &owner.disk.directory.join("history.redb"),
         owner.disk.lease(),
@@ -211,7 +211,7 @@ fn reopen(mut owner: Owner) -> crate::Result<Owner> {
     let state = history.edit(|edit| edit.project(&scope, None))?;
     Ok(Owner {
         state,
-        record_history: Some(history),
+        record_history: history,
         history_pins: Default::default(),
         browser_view: BTreeMap::new(),
         agent_runtime: Default::default(),
@@ -223,7 +223,7 @@ fn reopen(mut owner: Owner) -> crate::Result<Owner> {
 }
 
 fn task(owner: &mut Owner, run: &str) -> crate::Result<super::edit::NativeTask> {
-    let history = owner.record_history.as_mut().unwrap();
+    let history = &mut owner.record_history;
     let selection = history.selection()?;
     history.edit(|edit| {
         edit.current_execution(&selection, run)
@@ -309,7 +309,7 @@ fn seed_bound_and_terminal(owner: &mut Owner, run: &str, dir: &PathBuf) -> crate
         }
         _ => (),
     }
-    let history = owner.record_history.as_mut().unwrap();
+    let history = &mut owner.record_history;
     let selection = history.selection()?;
     history.edit(|edit| {
         edit.current_execution(&selection, &task.run.id)
@@ -336,7 +336,7 @@ fn actual_owner_native_starts_are_record_durable_and_snapshot_compatible() -> cr
             command: scoped(&owner, engine.initial(&source)),
         })?;
         let run = owner.state.view.runs.last().unwrap().id.clone();
-        let prepared_receipt = saved_start(owner.record_history.as_ref().unwrap(), &request)?;
+        let prepared_receipt = saved_start(&owner.record_history, &request)?;
         assert_eq!(owner.operations.len(), 1);
         assert!(owner.operations.contains_key(&run));
         let first = task(&mut owner, &run)?;
@@ -366,7 +366,7 @@ fn actual_owner_native_starts_are_record_durable_and_snapshot_compatible() -> cr
         };
         assert_eq!(revision, 2);
         assert_eq!(first.run.source, source);
-        let history = owner.record_history.as_mut().unwrap();
+        let history = &mut owner.record_history;
         let selection = history.selection()?;
         let initial_target = history.edit(|edit| {
             edit.current_execution(&selection, &run)
@@ -404,7 +404,7 @@ fn actual_owner_native_starts_are_record_durable_and_snapshot_compatible() -> cr
         };
         assert_eq!(next_revision, 4);
         assert_eq!(next_task.run.source, source);
-        let history = owner.record_history.as_mut().unwrap();
+        let history = &mut owner.record_history;
         let selected = history.selection()?;
         assert_eq!(
             history.edit(|edit| edit
@@ -419,9 +419,7 @@ fn actual_owner_native_starts_are_record_durable_and_snapshot_compatible() -> cr
             v: crate::WIRE_VERSION,
             request: "new-capture".into(),
             command: Command::Conversation {
-                scope: crate::history_io::Scope::from(
-                    &owner.record_history.as_ref().unwrap().selection()?,
-                ),
+                scope: crate::history_io::Scope::from(&owner.record_history.selection()?),
                 action: crate::model::ConversationAction::Capture {
                     expected_source: Some(source.clone()),
                     page: Page {
@@ -437,7 +435,7 @@ fn actual_owner_native_starts_are_record_durable_and_snapshot_compatible() -> cr
         assert_ne!(owner.state.view.source.as_ref().unwrap().id, source);
 
         owner = reopen(owner)?;
-        let saved = saved_start(owner.record_history.as_ref().unwrap(), &request)?;
+        let saved = saved_start(&owner.record_history, &request)?;
         assert_eq!(saved.run, run);
         owner.request(Request {
             v: crate::WIRE_VERSION,
@@ -479,7 +477,7 @@ fn actual_owner_native_starts_are_record_durable_and_snapshot_compatible() -> cr
                 .any(|frame| frame["kind"] == "error")
         );
 
-        let original_selection = owner.record_history.as_ref().unwrap().selection()?;
+        let original_selection = owner.record_history.selection()?;
         owner.request(Request {
             v: crate::WIRE_VERSION,
             request: "remove-global-profile".into(),
@@ -501,12 +499,7 @@ fn actual_owner_native_starts_are_record_durable_and_snapshot_compatible() -> cr
             },
         })?;
         assert_ne!(
-            owner
-                .record_history
-                .as_ref()
-                .unwrap()
-                .selection()?
-                .conversation,
+            owner.record_history.selection()?.conversation,
             original_selection.conversation
         );
 
@@ -519,7 +512,7 @@ fn actual_owner_native_starts_are_record_durable_and_snapshot_compatible() -> cr
                 action: engine.initial(&source),
             },
         })?;
-        let replay = saved_start(owner.record_history.as_ref().unwrap(), &request)?;
+        let replay = saved_start(&owner.record_history, &request)?;
         assert_eq!(replay.run, prepared_receipt.run);
         assert_eq!(replay.conversation, prepared_receipt.conversation);
         assert_eq!(replay.format, prepared_receipt.format);
@@ -583,7 +576,7 @@ fn native_start_publication_failure_and_corrupt_followup_never_dispatch() -> cra
         );
         assert!(owner.operations.is_empty());
         assert!(frames.lock().unwrap().is_empty());
-        let history = owner.record_history.as_mut().unwrap();
+        let history = &mut owner.record_history;
         let selection = history.selection()?;
         let run = saved_start(history, "publish-fails")?.run;
         assert_eq!(
@@ -615,9 +608,8 @@ fn native_start_publication_failure_and_corrupt_followup_never_dispatch() -> cra
         let run = corrupt.state.view.runs.last().unwrap().id.clone();
         stop(&mut corrupt);
         let workflow = seed_bound_and_terminal(&mut corrupt, &run, &bound_dir.0)?;
-        let history = corrupt.record_history.as_ref().unwrap();
         let number = run.rsplit(':').next().unwrap().parse::<u64>()?;
-        let history = corrupt.record_history.as_ref().unwrap();
+        let history = &corrupt.record_history;
         let write = history.db.begin_write()?;
         assert!(
             write
@@ -640,42 +632,8 @@ fn native_start_publication_failure_and_corrupt_followup_never_dispatch() -> cra
         assert!(corrupt.operations.is_empty());
         assert!(corrupt_frames.lock().unwrap().is_empty());
         assert_eq!(corrupt.state.view.runs.len(), count);
-        let read = corrupt.record_history.as_ref().unwrap().db.begin_read()?;
+        let read = corrupt.record_history.db.begin_read()?;
         assert!(read.open_table(STARTS)?.get("corrupt-followup")?.is_none());
-    }
-    Ok(())
-}
-
-fn native_start_keeps_the_snapshot_execution_path_working() -> crate::Result<()> {
-    for engine in [Engine::Pi, Engine::Codex, Engine::OpenCode] {
-        let directory = Directory::new()?;
-        let (mut owner, _rx, _, _) = setup(engine, &directory)?;
-        drop(owner.record_history.take());
-        owner.disk.save(&owner.state)?;
-        let source = owner.state.view.source.as_ref().unwrap().id.clone();
-        let scope = crate::tests::owner_scope(&owner);
-        let action = engine.initial(&source);
-        match engine {
-            Engine::Pi => owner.pi_start("snapshot-start", &scope, action)?,
-            Engine::Codex => owner.codex_start("snapshot-start", &scope, action)?,
-            Engine::OpenCode => owner.opencode_start("snapshot-start", &scope, action)?,
-        }
-        let run = owner.state.view.runs.last().unwrap().id.clone();
-        assert!(owner.operations.contains_key(&run));
-        assert_eq!(
-            owner
-                .state
-                .launches
-                .get(&run)
-                .unwrap()
-                .input_digest()
-                .is_some(),
-            true
-        );
-        let saved: Store = serde_json::from_slice(&fs::read(directory.0.join("snapshot.json"))?)?;
-        saved.validate()?;
-        assert!(saved.launches.contains_key(&run));
-        stop(&mut owner);
     }
     Ok(())
 }
@@ -728,5 +686,5 @@ fn actual_owner_native_start_admission_and_failure_boundaries() -> crate::Result
     }
     actual_owner_native_starts_are_record_durable_and_snapshot_compatible()?;
     native_start_publication_failure_and_corrupt_followup_never_dispatch()?;
-    native_start_keeps_the_snapshot_execution_path_working()
+    Ok(())
 }

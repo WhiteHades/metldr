@@ -57,7 +57,7 @@ fn owner(disk: Disk, state: Store, history: History) -> Owner {
         disk,
         state,
         browser_view: BTreeMap::new(),
-        record_history: Some(history),
+        record_history: history,
         history_pins: Default::default(),
         settings: Default::default(),
         agent_runtime: Default::default(),
@@ -134,13 +134,10 @@ fn record_settings_reload_admit_replay_and_reject_stale_aggregate() -> Result<()
         "settings refresh dropped the viewed older native task"
     );
 
-    let stale_profile = profile(owner.record_history.as_ref().unwrap())?;
-    let (stale_providers, stale_agents) = owner
-        .record_history
-        .as_mut()
-        .unwrap()
-        .edit(|edit| edit.settings(&scope))?;
-    let start_sequence = profile(owner.record_history.as_ref().unwrap())?.sequence;
+    let stale_profile = profile(&owner.record_history)?;
+    let (stale_providers, stale_agents) =
+        owner.record_history.edit(|edit| edit.settings(&scope))?;
+    let start_sequence = profile(&owner.record_history)?.sequence;
     let executable = directory.0.join("owned-agent");
     fs::write(&executable, b"#! /bin/sh\nexit 0\n")?;
     #[cfg(unix)]
@@ -153,7 +150,7 @@ fn record_settings_reload_admit_replay_and_reject_stale_aggregate() -> Result<()
         workspace: directory.0.clone(),
     };
     owner.agent_save("settings-save:1", 0, agent_profile.clone())?;
-    let after_save = profile(owner.record_history.as_ref().unwrap())?;
+    let after_save = profile(&owner.record_history)?;
     assert_eq!(after_save.sequence, start_sequence + 1);
     assert_eq!(after_save.agents.slot(Kind::Opencode).revision, 1);
     let saved_slot = after_save.agents.slot(Kind::Opencode);
@@ -167,7 +164,7 @@ fn record_settings_reload_admit_replay_and_reject_stale_aggregate() -> Result<()
     fs::remove_file(&executable)?;
     owner.agent_save("settings-save:1", 0, agent_profile.clone())?;
     assert_eq!(
-        profile(owner.record_history.as_ref().unwrap())?.sequence,
+        profile(&owner.record_history)?.sequence,
         after_save.sequence
     );
     let changed_profile = AgentProfile::Opencode {
@@ -186,13 +183,13 @@ fn record_settings_reload_admit_replay_and_reject_stale_aggregate() -> Result<()
     );
     owner.refresh_saved_settings()?;
     assert_eq!(
-        profile(owner.record_history.as_ref().unwrap())?.sequence,
+        profile(&owner.record_history)?.sequence,
         after_save.sequence
     );
 
     let expected = owner.state.agent_settings.slot(Kind::Opencode).revision;
     owner.agent_remove("settings-remove:1", Kind::Opencode, expected)?;
-    let after_remove = profile(owner.record_history.as_ref().unwrap())?;
+    let after_remove = profile(&owner.record_history)?;
     assert_eq!(after_remove.sequence, after_save.sequence + 1);
     assert_eq!(
         after_remove.agents.slot(Kind::Opencode).revision,
@@ -205,7 +202,7 @@ fn record_settings_reload_admit_replay_and_reject_stale_aggregate() -> Result<()
     assert_eq!(receipt.digest.len(), 64);
     owner.agent_remove("settings-remove:1", Kind::Opencode, expected)?;
     assert_eq!(
-        profile(owner.record_history.as_ref().unwrap())?.sequence,
+        profile(&owner.record_history)?.sequence,
         after_remove.sequence
     );
     assert_eq!(
@@ -219,7 +216,7 @@ fn record_settings_reload_admit_replay_and_reject_stale_aggregate() -> Result<()
         viewed_runs
     );
 
-    let current = profile(owner.record_history.as_ref().unwrap())?;
+    let current = profile(&owner.record_history)?;
     assert_ne!(
         serde_json::to_value(&current.agents)?,
         serde_json::to_value(&stale_profile.agents)?
@@ -233,7 +230,7 @@ fn record_settings_reload_admit_replay_and_reject_stale_aggregate() -> Result<()
         Some("provider-save-next")
     );
     assert_eq!(current.providers.retired, stale_providers.retired);
-    let stale_replacement = owner.record_history.as_mut().unwrap().edit(|edit| {
+    let stale_replacement = owner.record_history.edit(|edit| {
         let result = edit.replace_settings(
             &scope,
             &stale_providers,
@@ -248,7 +245,7 @@ fn record_settings_reload_admit_replay_and_reject_stale_aggregate() -> Result<()
         stale_replacement.is_err(),
         "caught settings rejection must poison the edit"
     );
-    let after_rejection = profile(owner.record_history.as_ref().unwrap())?;
+    let after_rejection = profile(&owner.record_history)?;
     assert_eq!(after_rejection.sequence, current.sequence);
     assert_eq!(
         serde_json::to_value(&after_rejection.providers)?,
@@ -266,7 +263,7 @@ fn record_settings_reload_admit_replay_and_reject_stale_aggregate() -> Result<()
         removed: current.providers.retired.clone(),
         failed: false,
     })?;
-    let cleaned = profile(owner.record_history.as_ref().unwrap())?;
+    let cleaned = profile(&owner.record_history)?;
     assert_eq!(cleaned.sequence, current.sequence + 1);
     assert!(cleaned.providers.retired.is_empty());
     assert!(cleaned.providers.pending.is_some());
@@ -275,7 +272,7 @@ fn record_settings_reload_admit_replay_and_reject_stale_aggregate() -> Result<()
         request: Some("settings-load:1".into()),
         profiles: Vec::new(),
     })?;
-    let loaded = profile(owner.record_history.as_ref().unwrap())?;
+    let loaded = profile(&owner.record_history)?;
     assert_eq!(loaded.sequence, cleaned.sequence + 1);
     assert!(owner.settings.job.is_none());
     let pending = loaded.providers.pending.clone().unwrap();
@@ -290,7 +287,7 @@ fn record_settings_reload_admit_replay_and_reject_stale_aggregate() -> Result<()
         pending,
         result: Ok(provider),
     })?;
-    let completed = profile(owner.record_history.as_ref().unwrap())?;
+    let completed = profile(&owner.record_history)?;
     assert_eq!(completed.sequence, loaded.sequence + 1);
     assert!(completed.providers.pending.is_none());
     assert!(completed.providers.retired.is_empty());
@@ -307,7 +304,7 @@ fn record_settings_reload_admit_replay_and_reject_stale_aggregate() -> Result<()
     assert!(owner.settings.job.is_none());
     assert_eq!(completed.next, stale_profile.next);
     assert_eq!(fs::read(directory.0.join("snapshot.json"))?, snapshot);
-    let stale_provider = owner.record_history.as_mut().unwrap().edit(|edit| {
+    let stale_provider = owner.record_history.edit(|edit| {
         edit.replace_settings(
             &scope,
             &stale_providers,
@@ -317,10 +314,7 @@ fn record_settings_reload_admit_replay_and_reject_stale_aggregate() -> Result<()
         )
     });
     assert!(stale_provider.is_err());
-    assert_eq!(
-        profile(owner.record_history.as_ref().unwrap())?.sequence,
-        completed.sequence
-    );
+    assert_eq!(profile(&owner.record_history)?.sequence, completed.sequence);
 
     drop(owner);
     let reopened = History::open(&history_path, Disk::lock(directory.0.clone())?.lease())?;
