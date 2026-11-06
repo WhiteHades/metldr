@@ -26,20 +26,19 @@ pub(super) struct Pending {
     pub(super) answer: SyncSender<InputAnswer>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub(super) struct State {
-    pub(super) run: String,
     pub(super) pending: BTreeMap<String, Pending>,
 }
 
 impl State {
-    pub(super) fn public(&self) -> Result<Value> {
+    pub(super) fn public(&self, run: &str) -> Result<Value> {
         let pending = self
             .pending
             .iter()
             .map(|(request, pending)| json!({"request":request,"prompt":prompt(&pending.prompt)}))
             .collect::<Vec<_>>();
-        let value = json!({"run":self.run,"pending":pending});
+        let value = json!({"run":run,"pending":pending});
         if serde_json::to_vec(&value)?.len() > 32 * 1024 {
             return Err("Codex input view exceeds bound".into());
         }
@@ -114,7 +113,7 @@ impl Owner {
             return Ok(());
         }
         let fallback_answer = answer.clone();
-        let previous = self.codex_input.clone();
+        let previous = self.codex_input.get(run).cloned();
         let mut next = self.native_input_state(run)?;
         let request = match next.id() {
             Ok(request) => request,
@@ -124,31 +123,22 @@ impl Owner {
         };
         if self
             .codex_input
-            .as_ref()
-            .is_some_and(|state| state.run == run && state.pending.len() >= 8)
+            .get(run)
+            .is_some_and(|state| state.pending.len() >= 8)
         {
             return self.fail_codex_input(run, fallback_answer, None);
         }
         if self
             .codex_input
-            .as_ref()
-            .is_some_and(|state| state.run == run && state.pending.values().any(|p| p.key == key))
+            .get(run)
+            .is_some_and(|state| state.pending.values().any(|p| p.key == key))
         {
             return self.fail_codex_input(run, fallback_answer, None);
         }
-        if self
-            .codex_input
-            .as_ref()
-            .is_none_or(|state| state.run != run)
-        {
-            self.codex_input = Some(State {
-                run: run.into(),
-                pending: BTreeMap::new(),
-            });
-        }
+        self.codex_input.entry(run.into()).or_default();
         let state = self
             .codex_input
-            .as_mut()
+            .get_mut(run)
             .ok_or("missing Codex input state")?;
         if state.pending.contains_key(&request) {
             return self.fail_codex_input(run, fallback_answer, None);
@@ -161,7 +151,7 @@ impl Owner {
                 answer,
             },
         );
-        let projected = match state.public() {
+        let projected = match state.public(run) {
             Ok(value) => value,
             Err(error) => {
                 return self.fail_codex_input(run, fallback_answer, Some(&error.to_string()));
@@ -174,7 +164,14 @@ impl Owner {
                 let _ = fallback_answer.try_send(InputAnswer::Cancel);
                 return Err(error);
             }
-            self.codex_input = previous;
+            match previous {
+                Some(state) => {
+                    self.codex_input.insert(run.into(), state);
+                }
+                None => {
+                    self.codex_input.remove(run);
+                }
+            }
             self.stop_native_record_inputs(
                 run,
                 "Codex input could not be presented",
@@ -210,8 +207,7 @@ impl Owner {
         }
         let state = self
             .codex_input
-            .as_ref()
-            .filter(|state| state.run == run)
+            .get(run)
             .ok_or("Codex input request is stale")?;
         let pending = state
             .pending
@@ -224,7 +220,7 @@ impl Owner {
         let next = self.native_input_state(run)?;
         let (request, pending) = self
             .codex_input
-            .as_mut()
+            .get_mut(run)
             .ok_or("Codex input request is stale")?
             .pending
             .remove_entry(request)
@@ -233,7 +229,7 @@ impl Owner {
         {
             if !crate::flow::fatal(error.as_ref()) {
                 self.codex_input
-                    .as_mut()
+                    .get_mut(run)
                     .ok_or("Codex input request is stale")?
                     .pending
                     .insert(request, pending);
@@ -247,29 +243,39 @@ impl Owner {
     }
 
     pub(super) fn codex_input_withdraw(&mut self, run: &str, key: &InputId) -> Result<()> {
-        if self.codex_input.as_ref().is_none_or(|state| {
-            state.run != run || !state.pending.values().any(|pending| &pending.key == key)
-        }) {
+        if self
+            .codex_input
+            .get(run)
+            .is_none_or(|state| !state.pending.values().any(|pending| &pending.key == key))
+        {
             return Ok(());
         }
         let next = self.native_input_state(run)?;
         let state = self
             .codex_input
-            .as_mut()
+            .get_mut(run)
             .ok_or("missing Codex input state")?;
         let removed: Vec<_> = state
             .pending
             .extract_if(.., |_, pending| &pending.key == key)
             .collect();
-        let empty = self.codex_input.take_if(|state| state.pending.is_empty());
+        let empty = if self
+            .codex_input
+            .get(run)
+            .is_some_and(|state| state.pending.is_empty())
+        {
+            self.codex_input.remove_entry(run)
+        } else {
+            None
+        };
         if let Err(error) = self.commit_native_input(run, crate::agent_settings::Kind::Codex, next)
         {
             if !crate::flow::fatal(error.as_ref()) {
-                if let Some(state) = empty {
-                    self.codex_input = Some(state);
+                if let Some((run, state)) = empty {
+                    self.codex_input.insert(run, state);
                 }
                 self.codex_input
-                    .as_mut()
+                    .get_mut(run)
                     .ok_or("missing Codex input state")?
                     .pending
                     .extend(removed);
@@ -279,24 +285,16 @@ impl Owner {
         Ok(())
     }
 
-    pub(super) fn clear_codex_input(&mut self, run: &str) {
-        if self
-            .codex_input
-            .as_ref()
-            .is_some_and(|state| state.run == run)
-        {
-            self.codex_input = None;
-        }
-    }
-
     pub(super) fn disconnect_codex_input(&mut self) -> Result<()> {
-        let Some(run) = self.codex_input.as_ref().map(|state| state.run.clone()) else {
-            return Ok(());
-        };
-        if !self.operations.contains_key(&run) {
-            self.clear_codex_input(&run);
-            return self.publish();
+        let runs: Vec<_> = self.codex_input.keys().cloned().collect();
+        for run in runs {
+            if !self.operations.contains_key(&run) {
+                self.codex_input.remove(&run);
+                self.publish()?;
+            } else {
+                self.stop_native_record_inputs(&run, "Codex controller disconnected", None, false)?;
+            }
         }
-        self.stop_native_record_inputs(&run, "Codex controller disconnected", None, false)
+        Ok(())
     }
 }

@@ -204,7 +204,7 @@ impl Owner {
             return Err(error);
         }
         self.cancel_browser_approval(run);
-        self.cancel_inputs(run, pending);
+        pending.cancel();
         Ok(())
     }
 }

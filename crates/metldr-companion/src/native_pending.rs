@@ -5,33 +5,29 @@ use crate::{
 };
 
 pub(super) struct PendingInputs {
-    pi_ui: Option<pi_ui::State>,
+    run: String,
+    pi_ui: Option<pi_ui::Active>,
     codex_input: Option<codex_input::State>,
     permissions: Vec<(String, PendingPermission)>,
 }
 
+impl PendingInputs {
+    pub(super) fn cancel(self) {
+        drop(self.pi_ui);
+        drop(self.codex_input);
+        for (_, pending) in self.permissions {
+            let _ = pending.ack.send(None);
+        }
+    }
+}
+
 impl Owner {
     pub(super) fn detach_inputs(&mut self, run: &str) -> PendingInputs {
-        let pi_ui = self
-            .pi_ui
-            .as_ref()
-            .filter(|state| state.run == run)
-            .cloned();
-        if pi_ui.is_some() {
-            self.clear_pi_ui(run);
-        }
-        let codex_input = if self
-            .codex_input
-            .as_ref()
-            .is_some_and(|state| state.run == run)
-        {
-            self.codex_input.take()
-        } else {
-            None
-        };
+        let pi_ui = self.pi_ui.get_mut(run).map(pi_ui::State::detach);
+        let codex_input = self.codex_input.remove(run);
         let permissions = self.take_native_permissions(run);
-
         PendingInputs {
+            run: run.into(),
             pi_ui,
             codex_input,
             permissions,
@@ -40,18 +36,14 @@ impl Owner {
 
     pub(super) fn restore_inputs(&mut self, pending: PendingInputs) {
         if let Some(pi_ui) = pending.pi_ui {
-            self.pi_ui = Some(pi_ui);
+            self.pi_ui
+                .entry(pending.run.clone())
+                .or_default()
+                .restore(pi_ui);
         }
         if let Some(codex_input) = pending.codex_input {
-            self.codex_input = Some(codex_input);
+            self.codex_input.insert(pending.run, codex_input);
         }
         self.native_permissions.extend(pending.permissions);
-    }
-
-    pub(super) fn cancel_inputs(&mut self, run: &str, pending: PendingInputs) {
-        self.restore_inputs(pending);
-        self.clear_pi_ui(run);
-        self.clear_codex_input(run);
-        self.cancel_native_permissions(run);
     }
 }
