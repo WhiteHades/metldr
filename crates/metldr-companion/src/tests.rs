@@ -231,7 +231,6 @@ mod tests {
         let before = saved_run(&mut owner, &run);
         assert_eq!(before.status, Status::Cancelled);
         let sequence = owner.record_history.edit(|edit| edit.sequence()).unwrap();
-        // Inject directly: this worker cannot send a chunk after its own settlement.
         owner
             .text(
                 &run,

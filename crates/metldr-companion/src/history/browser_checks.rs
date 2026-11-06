@@ -1398,7 +1398,18 @@ fn browser_transport_sibling_waiters_keep_run_ownership() {
                     );
                     assert!(events_a.blocking_recv().is_none());
                     assert!(call(owner, &a, command()).blocking_recv().unwrap().is_err());
-                    let detached = call(owner, &a, BrowserOperation::Detach { tab: 7 });
+                    let mut detached = call(owner, &a, BrowserOperation::Detach { tab: 7 });
+                    owner.browser_io_event(
+                        &a,
+                        7,
+                        None,
+                        "Runtime.executionContextsCleared".into(),
+                        json!({}),
+                    );
+                    assert!(matches!(
+                        detached.try_recv(),
+                        Err(oneshot::error::TryRecvError::Empty)
+                    ));
                     owner.browser_io_reply(
                         &a,
                         3,
@@ -1455,140 +1466,4 @@ fn browser_transport_sibling_waiters_keep_run_ownership() {
             },
         );
     }
-}
-
-#[test]
-fn browser_transport_correlates_replies_and_fails_closed_on_detach() {
-    use crate::browser_io::{Call, Operation, Slot, WireReply};
-    use serde_json::json;
-    with_owner(false, |owner, proposal| {
-        let run = proposal.run;
-        let (slot, mut events) = Slot::new(7);
-        owner.operations.get_mut(&run).unwrap().browser_io = Some(Box::new(slot));
-        let (ack, mut reply) = tokio::sync::oneshot::channel();
-        owner
-            .browser_io_call(Call {
-                run: run.clone(),
-                operation: Operation::Command {
-                    tab: 7,
-                    session: None,
-                    method: "Runtime.enable".into(),
-                    params: json!({}),
-                },
-                ack,
-            })
-            .unwrap();
-        owner.browser_io_reply(
-            "stale-run",
-            1,
-            WireReply::Ok {
-                value: json!({"wrong":true}),
-            },
-        );
-        assert!(matches!(
-            reply.try_recv(),
-            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
-        ));
-        owner.browser_io_reply(
-            &run,
-            2,
-            WireReply::Ok {
-                value: json!({"wrong":true}),
-            },
-        );
-        assert!(matches!(
-            reply.try_recv(),
-            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
-        ));
-        owner.browser_io_reply(
-            &run,
-            1,
-            WireReply::Ok {
-                value: json!({"right":true}),
-            },
-        );
-        assert_eq!(
-            reply.blocking_recv().unwrap().unwrap(),
-            json!({"right":true})
-        );
-        owner.browser_io_event(
-            &run,
-            7,
-            None,
-            "Runtime.consoleAPICalled".into(),
-            json!({"executionContextId":1}),
-        );
-        assert_eq!(
-            events.blocking_recv().unwrap().method,
-            "Runtime.consoleAPICalled"
-        );
-        let (ack, reply) = tokio::sync::oneshot::channel();
-        owner
-            .browser_io_call(Call {
-                run: run.clone(),
-                operation: Operation::Command {
-                    tab: 7,
-                    session: None,
-                    method: "Runtime.enable".into(),
-                    params: json!({}),
-                },
-                ack,
-            })
-            .unwrap();
-        owner.browser_io_event(
-            &run,
-            7,
-            None,
-            "metldr.detached".into(),
-            json!({"reason":"fixture"}),
-        );
-        assert!(reply.blocking_recv().unwrap().is_err());
-        assert!(events.blocking_recv().is_none());
-        assert!(
-            owner.operations[&run].browser_io.is_some(),
-            "retain the run's cleanup channel"
-        );
-        let (ack, reply) = tokio::sync::oneshot::channel();
-        owner
-            .browser_io_call(Call {
-                run: run.clone(),
-                operation: Operation::Command {
-                    tab: 7,
-                    session: None,
-                    method: "Runtime.enable".into(),
-                    params: json!({}),
-                },
-                ack,
-            })
-            .unwrap();
-        assert!(reply.blocking_recv().unwrap().is_err());
-        let (ack, reply) = tokio::sync::oneshot::channel();
-        owner
-            .browser_io_call(Call {
-                run: run.clone(),
-                operation: Operation::Detach { tab: 7 },
-                ack,
-            })
-            .unwrap();
-        owner.browser_io_event(
-            &run,
-            7,
-            None,
-            "Runtime.executionContextsCleared".into(),
-            json!({}),
-        );
-        owner.browser_io_reply(
-            &run,
-            3,
-            WireReply::Ok {
-                value: json!({"detached":true}),
-            },
-        );
-        assert_eq!(
-            reply.blocking_recv().unwrap().unwrap(),
-            json!({"detached":true})
-        );
-        owner.browser_io_finish(&run);
-        assert!(owner.operations[&run].browser_io.is_none());
-    });
 }

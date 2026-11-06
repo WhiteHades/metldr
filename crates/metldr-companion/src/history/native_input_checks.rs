@@ -625,7 +625,6 @@ fn native_input_records_reserve_publish_cancel_and_keep_payloads_volatile() -> R
     assert!(stale.pi_ui.is_empty());
     stop_owner(&mut stale);
 
-    // Publication fails after the durable edit. The fatal path cancels waiters and keeps that edit.
     let (directory, mut failed, _, run) = make_owner("pi")?;
     let answer = pi_offer(&mut failed, &run, 1)?;
     let request = failed.pi_ui.get(&run).unwrap().public(&run)?["pending"][0]["request"]
@@ -683,7 +682,6 @@ fn native_input_records_reserve_publish_cancel_and_keep_payloads_volatile() -> R
     failed.record_history = reopened;
     stop_owner(&mut failed);
 
-    // A stale/missing run row is a fatal history failure before an answer can be delivered.
     let (_directory, mut corrupt, _, run) = make_owner("pi")?;
     let answer = pi_offer(&mut corrupt, &run, 7)?;
     let request = corrupt.pi_ui.get(&run).unwrap().public(&run)?["pending"][0]["request"]
@@ -830,7 +828,6 @@ fn native_input_records_reserve_publish_cancel_and_keep_payloads_volatile() -> R
 }
 
 fn select_other_fixture(history: &mut History) -> Result<super::Selection> {
-    // Seed a different selected conversation without relaxing production admission.
     let write = history.db.begin_write()?;
     let mut profile: Profile = {
         let metadata = write.open_table(META)?;

@@ -294,7 +294,6 @@ impl Owner {
             slot.cleanup = true;
             slot.end();
         }
-        // Install the waiter before exposing the command to the extension.
         slot.pending.insert(id, call.ack);
         if let Err(error) = self.emit(
             json!({"v":crate::WIRE_VERSION,"kind":"browser_rpc","call":id,
