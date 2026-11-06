@@ -468,7 +468,6 @@ mod checks {
             pi_ui: Default::default(),
             codex_input: Default::default(),
             browser_approval: None,
-            browser_io: None,
             browser_route: None,
             responses_route: None,
             google_route: None,
@@ -501,6 +500,7 @@ mod checks {
                 stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 worker: std::thread::spawn(|| {}),
                 correction: None,
+                browser_io: None,
             },
         );
         assert!(
@@ -508,6 +508,7 @@ mod checks {
                 .agent_save("blocked-task", 0, profile.clone())
                 .is_err()
         );
+        owner.browser_io_finish("active");
         owner
             .operations
             .remove("active")

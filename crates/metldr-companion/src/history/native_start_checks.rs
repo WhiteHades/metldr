@@ -181,7 +181,6 @@ fn setup(
         pi_ui: Default::default(),
         codex_input: Default::default(),
         browser_approval: None,
-        browser_io: None,
         browser_route: None,
         responses_route: None,
         google_route: None,
@@ -191,12 +190,12 @@ fn setup(
 }
 
 fn stop(owner: &mut Owner) {
-    for (run, operation) in std::mem::take(&mut owner.operations) {
+    for (_, mut operation) in std::mem::take(&mut owner.operations) {
         operation
             .stop
             .store(true, std::sync::atomic::Ordering::Relaxed);
+        drop(operation.browser_io.take());
         operation.worker.join().expect("owned native worker");
-        owner.browser_io_finish(&run);
     }
 }
 

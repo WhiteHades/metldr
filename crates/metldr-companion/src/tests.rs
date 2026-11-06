@@ -168,6 +168,7 @@ mod tests {
                     stop: Arc::new(AtomicBool::new(true)),
                     worker,
                     correction: None,
+                    browser_io: None,
                 },
             )]),
             tx,
@@ -178,7 +179,6 @@ mod tests {
             pi_ui: Default::default(),
             codex_input: Default::default(),
             browser_approval: None,
-            browser_io: None,
             browser_route: None,
             responses_route: None,
             google_route: None,
@@ -192,6 +192,7 @@ mod tests {
                 stop: Arc::new(AtomicBool::new(false)),
                 worker: thread::spawn(|| {}),
                 correction: None,
+                browser_io: None,
             },
         );
         let worker = owner.operations[&run].worker.thread().id();
@@ -230,7 +231,6 @@ mod tests {
         let before = saved_run(&mut owner, &run);
         assert_eq!(before.status, Status::Cancelled);
         let sequence = owner.record_history.edit(|edit| edit.sequence()).unwrap();
-        // Inject directly: this worker cannot send a chunk after its own settlement.
         owner
             .text(
                 &run,
@@ -312,7 +312,6 @@ mod tests {
             pi_ui: Default::default(),
             codex_input: Default::default(),
             browser_approval: None,
-            browser_io: None,
             browser_route: None,
             responses_route: None,
             google_route: None,
@@ -526,6 +525,7 @@ mod tests {
                     stop: stop.clone(),
                     worker: thread::spawn(|| {}),
                     correction: None,
+                    browser_io: None,
                 },
             )]),
             tx,
@@ -536,7 +536,6 @@ mod tests {
             pi_ui: Default::default(),
             codex_input: Default::default(),
             browser_approval: None,
-            browser_io: None,
             browser_route: None,
             responses_route: None,
             google_route: None,
@@ -653,6 +652,7 @@ mod tests {
                 stop: second_stop.clone(),
                 worker: thread::spawn(|| {}),
                 correction: None,
+                browser_io: None,
             },
         );
 

@@ -77,8 +77,7 @@ pub(super) struct Notice {
 }
 
 pub(super) struct Slot {
-    pub run: String,
-    pub tab: i32,
+    tab: i32,
     events: Option<mpsc::Sender<Notice>>,
     cleanup: bool,
     pending: BTreeMap<u64, oneshot::Sender<Reply>>,
@@ -88,11 +87,10 @@ pub(super) struct Slot {
 }
 
 impl Slot {
-    pub fn new(run: String, tab: i32) -> (Self, mpsc::Receiver<Notice>) {
+    pub fn new(tab: i32) -> (Self, mpsc::Receiver<Notice>) {
         let (events, rx) = mpsc::channel(64);
         (
             Self {
-                run,
                 tab,
                 events: Some(events),
                 cleanup: false,
@@ -110,6 +108,12 @@ impl Slot {
         for (_, ack) in std::mem::take(&mut self.pending) {
             let _ = ack.send(Err("browser transport ended".into()));
         }
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.end();
     }
 }
 
@@ -154,10 +158,13 @@ impl Owner {
                 }
                 _ => None,
             };
-            let slot = self
+            let operation = self
+                .operations
+                .get_mut(&call.run)
+                .ok_or("browser transport is unavailable")?;
+            let slot = operation
                 .browser_io
                 .as_mut()
-                .filter(|s| s.run == call.run)
                 .ok_or("browser transport is unavailable")?;
             if slot.cleanup {
                 return Err("browser cleanup is already pending".into());
@@ -165,10 +172,6 @@ impl Owner {
             if slot.events.is_none() && !matches!(call.operation, Operation::Detach { .. }) {
                 return Err("browser event stream ended; only cleanup is available".into());
             }
-            let operation = self
-                .operations
-                .get(&call.run)
-                .ok_or("browser transport run is stale")?;
             if operation.stop.load(std::sync::atomic::Ordering::Acquire)
                 && !matches!(call.operation, Operation::Detach { .. })
             {
@@ -274,20 +277,23 @@ impl Owner {
             Ok(id) => id,
             Err(error) => {
                 let _ = call.ack.send(Err(error.to_string()));
-                if error.downcast_ref::<std::io::Error>().is_some()
-                    || crate::history::is_failure(error.as_ref())
-                {
+                if crate::flow::fatal(error.as_ref()) {
                     return Err(error);
                 }
                 return Ok(());
             }
         };
-        let slot = self.browser_io.as_mut().unwrap();
+        let slot = self
+            .operations
+            .get_mut(&call.run)
+            .unwrap()
+            .browser_io
+            .as_mut()
+            .unwrap();
         if matches!(call.operation, Operation::Detach { .. }) {
             slot.cleanup = true;
             slot.end();
         }
-        // Install the waiter before exposing the command to the extension.
         slot.pending.insert(id, call.ack);
         if let Err(error) = self.emit(
             json!({"v":crate::WIRE_VERSION,"kind":"browser_rpc","call":id,
@@ -300,7 +306,10 @@ impl Owner {
     }
 
     pub(super) fn browser_io_reply(&mut self, run: &str, call: u64, result: WireReply) {
-        if let Some(slot) = self.browser_io.as_mut().filter(|s| s.run == run)
+        if let Some(slot) = self
+            .operations
+            .get_mut(run)
+            .and_then(|o| o.browser_io.as_mut())
             && let Some(ack) = slot.pending.remove(&call)
         {
             let result = match result {
@@ -320,9 +329,10 @@ impl Owner {
         params: Value,
     ) {
         let Some(slot) = self
-            .browser_io
-            .as_ref()
-            .filter(|s| s.run == run && !s.cleanup)
+            .operations
+            .get_mut(run)
+            .and_then(|o| o.browser_io.as_mut())
+            .filter(|s| !s.cleanup)
         else {
             return;
         };
@@ -344,17 +354,13 @@ impl Owner {
                     .is_err()
             })
         {
-            if let Some(slot) = self.browser_io.as_mut() {
-                slot.end();
-            }
+            slot.end();
         }
     }
 
     pub(super) fn browser_io_finish(&mut self, run: &str) {
-        if self.browser_io.as_ref().is_some_and(|s| s.run == run)
-            && let Some(mut slot) = self.browser_io.take()
-        {
-            slot.end();
+        if let Some(operation) = self.operations.get_mut(run) {
+            drop(operation.browser_io.take());
         }
     }
 }

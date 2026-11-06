@@ -49,8 +49,7 @@ impl Owner {
             target,
             text,
         };
-        let (slot, events) = crate::browser_io::Slot::new(run.clone(), job.target.tab);
-        self.browser_io = Some(slot);
+        let (slot, events) = crate::browser_io::Slot::new(job.target.tab);
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = stop.clone();
         let tx = self.tx.clone();
@@ -61,6 +60,7 @@ impl Owner {
                 stop,
                 worker,
                 correction: None,
+                browser_io: Some(Box::new(slot)),
             },
         );
         self.emit(self.started_reply(request, scope, &run)?)

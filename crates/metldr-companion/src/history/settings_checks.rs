@@ -72,7 +72,6 @@ fn owner(disk: Disk, state: Store, history: History) -> Owner {
         pi_ui: Default::default(),
         codex_input: Default::default(),
         browser_approval: None,
-        browser_io: None,
         browser_route: None,
         responses_route: None,
         google_route: None,
@@ -159,7 +158,6 @@ fn record_settings_reload_admit_replay_and_reject_stale_aggregate() -> Result<()
     assert_eq!(save_receipt.expected_revision, 0);
     assert_eq!(save_receipt.digest.len(), 64);
 
-    // Replay must use the saved receipt after a stale cache and a removed executable.
     owner.state.agent_settings = stale_agents.clone();
     fs::remove_file(&executable)?;
     owner.agent_save("settings-save:1", 0, agent_profile.clone())?;
@@ -257,7 +255,6 @@ fn record_settings_reload_admit_replay_and_reject_stale_aggregate() -> Result<()
     );
     assert_eq!(fs::read(directory.0.join("snapshot.json"))?, snapshot);
 
-    // These are owned completion messages, without a credential worker or credential store.
     owner.settings.job = Some(std::thread::spawn(|| {}));
     owner.provider_completed(crate::provider_settings::Completion::Cleaned {
         removed: current.providers.retired.clone(),

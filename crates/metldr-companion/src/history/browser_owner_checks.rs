@@ -119,6 +119,7 @@ fn make_owner(directory: &Directory) -> crate::Result<(Owner, String)> {
                     stop: Arc::new(AtomicBool::new(false)),
                     worker: std::thread::spawn(|| {}),
                     correction: None,
+                    browser_io: None,
                 },
             )]),
             tx,
@@ -129,7 +130,6 @@ fn make_owner(directory: &Directory) -> crate::Result<(Owner, String)> {
             pi_ui: Default::default(),
             codex_input: Default::default(),
             browser_approval: None,
-            browser_io: None,
             browser_route: None,
             responses_route: None,
             google_route: None,
@@ -180,11 +180,12 @@ fn approve_dispatch_settle(
     })?;
     let dispatched = reply.recv()?.map_err(std::io::Error::other)?;
     if let Intent::Navigate { destination } = &dispatched.proposal.intent {
-        let (slot, _events) = crate::browser_io::Slot::new(
-            dispatched.proposal.run.clone(),
-            dispatched.proposal.binding.tab,
-        );
-        owner.browser_io = Some(slot);
+        let (slot, _events) = crate::browser_io::Slot::new(dispatched.proposal.binding.tab);
+        owner
+            .operations
+            .get_mut(&dispatched.proposal.run)
+            .unwrap()
+            .browser_io = Some(Box::new(slot));
         owner.browser_view.clear();
         let (ack, mut rpc_reply) = tokio::sync::oneshot::channel();
         owner.browser_io_call(crate::browser_io::Call {
@@ -476,6 +477,7 @@ fn actual_owner_browser_lifecycle_is_record_durable_and_fails_closed() -> crate:
     );
     assert!(reply.recv()?.is_err());
     assert!(failed_owner.browser_approval.is_none());
+    failed_owner.browser_io_finish(&failed_run);
     failed_owner
         .operations
         .remove(&failed_run)
@@ -539,6 +541,7 @@ fn actual_owner_browser_lifecycle_is_record_durable_and_fails_closed() -> crate:
     assert!(super::is_failure(error.as_ref()));
     assert!(reply.recv()?.is_err());
     assert!(frames.lock().unwrap().is_empty());
+    corrupt.browser_io_finish(&corrupt_run);
     corrupt
         .operations
         .remove(&corrupt_run)

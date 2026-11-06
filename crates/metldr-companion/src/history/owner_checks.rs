@@ -77,7 +77,6 @@ fn owner(
             pi_ui: Default::default(),
             codex_input: Default::default(),
             browser_approval: None,
-            browser_io: None,
             browser_route: None,
             responses_route: None,
             google_route: None,
@@ -225,8 +224,7 @@ fn complete(
     }
 }
 
-// This fixture reopens one exact projection; normal native startup recovery is still separate.
-fn reopen(
+fn reopen_projection(
     owner_before: Owner,
     address: SocketAddr,
     run: &str,
@@ -401,7 +399,7 @@ fn actual_owner_admission_stream_and_durable_retry() -> Result<()> {
         assert_eq!(read.open_table(CONTEXT)?.len()?, 21);
     }
     let last = retained.last().unwrap().0.clone();
-    let (mut owner, rx, wire) = reopen(owner, address, &last)?;
+    let (mut owner, rx, wire) = reopen_projection(owner, address, &last)?;
     owner.request(Request {
         v: crate::WIRE_VERSION,
         request: "open-earliest".into(),
@@ -560,7 +558,7 @@ fn actual_owner_commit_failure_and_restart_before_dispatch() -> Result<()> {
                 profile(history(&owner))?.next,
                 before["next"].as_u64().unwrap() + 1
             );
-            let (mut owner, rx, wire) = reopen(owner, address, &run)?;
+            let (mut owner, rx, wire) = reopen_projection(owner, address, &run)?;
             let mut recovered = owner.state.clone();
             crate::recovery::interrupt(&mut recovered)?;
             assert_eq!(recovered.view.runs[0].status, Status::Interrupted);

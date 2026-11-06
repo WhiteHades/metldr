@@ -157,6 +157,7 @@ pub(super) struct Operation {
     pub(super) stop: Arc<AtomicBool>,
     pub(super) worker: JoinHandle<()>,
     pub(super) correction: Option<crate::native_correction::Slot>,
+    pub(super) browser_io: Option<Box<crate::browser_io::Slot>>,
 }
 #[derive(Clone)]
 pub(super) struct Subscription {
@@ -184,7 +185,6 @@ pub(super) struct Owner {
     pub(super) pi_ui: BTreeMap<String, crate::pi_ui::State>,
     pub(super) codex_input: BTreeMap<String, crate::codex_input::State>,
     pub(super) browser_approval: Option<crate::browser_owner::PendingApproval>,
-    pub(super) browser_io: Option<crate::browser_io::Slot>,
     pub(super) browser_route: Option<crate::https_profile::Profile>,
     pub(super) responses_route: Option<crate::https_profile::Profile>,
     pub(super) google_route: Option<crate::https_profile::Profile>,
@@ -541,14 +541,14 @@ impl Owner {
         result: std::result::Result<(), String>,
         disconnected: bool,
     ) -> Result<()> {
-        let operation = self.operations.remove(run).ok_or_else(|| {
+        let mut operation = self.operations.remove(run).ok_or_else(|| {
             if self.operations.is_empty() {
                 "settlement without operation"
             } else {
                 "settlement run mismatch"
             }
         })?;
-        self.browser_io_finish(run);
+        drop(operation.browser_io.take());
         operation
             .worker
             .join()
