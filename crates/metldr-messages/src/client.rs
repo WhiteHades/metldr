@@ -142,7 +142,7 @@ impl Client {
         {
             return Err("Messages endpoint did not return an event stream".into());
         }
-        let mut sse = sse::Sse::default();
+        let mut sse = sse::Sse::new("Messages");
         let mut state = stream::State::new(&self.model);
         let mut bytes = 0usize;
         let mut rendered = String::new();

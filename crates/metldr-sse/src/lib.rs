@@ -1,15 +1,37 @@
-use crate::Result;
+#![doc = include_str!("../README.md")]
 
-#[derive(Default)]
-pub(super) struct Sse {
+type Result<T> = std::result::Result<T, String>;
+
+#[cfg(test)]
+mod checks;
+
+pub struct Sse {
+    provider: &'static str,
     line: Vec<u8>,
     data: String,
     event: String,
     started: bool,
     after_cr: bool,
+    bound: usize,
 }
 
 impl Sse {
+    pub fn new(provider: &'static str) -> Self {
+        Self::with_bound(provider, 131_072)
+    }
+
+    pub fn with_bound(provider: &'static str, bound: usize) -> Self {
+        Self {
+            provider,
+            line: Vec::new(),
+            data: String::new(),
+            event: String::new(),
+            started: false,
+            after_cr: false,
+            bound,
+        }
+    }
+
     pub fn byte(&mut self, byte: u8) -> Result<Option<(String, String)>> {
         if self.after_cr && byte == b'\n' {
             self.after_cr = false;
@@ -17,13 +39,14 @@ impl Sse {
         }
         self.after_cr = byte == b'\r';
         if !matches!(byte, b'\r' | b'\n') {
-            if self.line.len() >= 131_072 {
-                return Err("Chat SSE line exceeds bound".into());
+            if self.line.len() >= self.bound {
+                return Err(format!("{} SSE line exceeds bound", self.provider));
             }
             self.line.push(byte);
             return Ok(None);
         }
-        let line = std::str::from_utf8(&self.line).map_err(|_| "Chat SSE is not UTF8")?;
+        let line = std::str::from_utf8(&self.line)
+            .map_err(|_| format!("{} SSE is not UTF8", self.provider))?;
         let line = if self.started {
             line
         } else {
@@ -43,8 +66,8 @@ impl Sse {
             let value = value.strip_prefix(' ').unwrap_or(value);
             match field {
                 "data" => {
-                    if self.data.len().saturating_add(value.len() + 1) > 131_072 {
-                        return Err("Chat SSE event exceeds bound".into());
+                    if self.data.len().saturating_add(value.len() + 1) > self.bound {
+                        return Err(format!("{} SSE event exceeds bound", self.provider));
                     }
                     self.data.push_str(value);
                     self.data.push('\n');
@@ -62,7 +85,7 @@ impl Sse {
         if self.line.is_empty() && self.data.is_empty() && self.event.is_empty() {
             Ok(())
         } else {
-            Err("Chat SSE ended within an event".into())
+            Err(format!("{} SSE ended within an event", self.provider))
         }
     }
 }

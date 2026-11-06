@@ -69,7 +69,7 @@ fn replay(events: &[Value], chunk_size: usize) -> Result<(Turn, String)> {
             )
         })
         .collect();
-    let mut sse = sse::Sse::default();
+    let mut sse = sse::Sse::new("Responses");
     let mut state = stream::State::default();
     let mut text = String::new();
     for chunk in stream.as_bytes().chunks(chunk_size) {
@@ -152,7 +152,7 @@ fn rejects_partial_calls_identity_changes_and_false_completion() {
     let mut after = valid.clone();
     after.push(json!({"type":"response.in_progress","sequence_number":999}));
     assert!(replay(&after, 4096).is_err());
-    let mut sse = sse::Sse::default();
+    let mut sse = sse::Sse::new("Responses");
     for &byte in b"data: {}" {
         sse.byte(byte).unwrap();
     }
@@ -458,7 +458,7 @@ fn generated_progress_preserves_closed_values_and_requires_terminal_agreement() 
                 )
             })
             .collect();
-        let mut decoder = sse::Sse::with_bound(1_048_576);
+        let mut decoder = sse::Sse::with_bound("Responses", 1_048_576);
         let mut state = stream::State::with_limits(393_216, 65_536, true);
         let mut progress = Vec::new();
         for chunk in wire.as_bytes().chunks(size) {

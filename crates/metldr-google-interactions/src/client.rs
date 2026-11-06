@@ -145,7 +145,7 @@ impl Client {
         {
             return Err("Google Interactions endpoint did not return an event stream".into());
         }
-        let mut sse = sse::Sse::default();
+        let mut sse = sse::Sse::new("Google");
         let mut state = stream::State::default();
         let mut bytes = 0usize;
         let mut rendered = String::new();

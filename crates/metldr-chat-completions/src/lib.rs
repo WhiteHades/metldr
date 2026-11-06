@@ -4,7 +4,7 @@
 mod checks;
 mod client;
 mod reasoning;
-mod sse;
+use metldr_sse as sse;
 mod stream;
 #[cfg(test)]
 mod stream_checks;

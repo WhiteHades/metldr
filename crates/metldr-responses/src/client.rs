@@ -238,7 +238,7 @@ impl Client {
         {
             return Err("Responses endpoint did not return an event stream".into());
         }
-        let mut sse = sse::Sse::with_bound(bounds.sse);
+        let mut sse = sse::Sse::with_bound("Responses", bounds.sse);
         let mut state =
             stream::State::with_limits(bounds.argument, bounds.events, bounds.pause_at_call);
         let mut bytes = 0usize;

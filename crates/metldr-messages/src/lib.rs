@@ -3,7 +3,7 @@
 #[cfg(test)]
 mod checks;
 mod client;
-mod sse;
+use metldr_sse as sse;
 mod stream;
 
 pub use client::Client;

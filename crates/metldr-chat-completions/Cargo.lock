@@ -558,6 +558,7 @@ version = "0.1.0"
 dependencies = [
  "metldr-browser-tools",
  "metldr-conversation",
+ "metldr-sse",
  "reqwest",
  "serde_json",
  "tokio",
@@ -570,6 +571,10 @@ dependencies = [
  "serde",
  "serde_json",
 ]
+
+[[package]]
+name = "metldr-sse"
+version = "0.1.0"
 
 [[package]]
 name = "mio"
