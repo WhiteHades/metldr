@@ -33,8 +33,8 @@ impl Owner {
 
     pub(super) fn native_input_active(&mut self, run: &str, kind: Kind) -> Result<bool> {
         if self
-            .operation
-            .as_ref()
+            .operations
+            .get(run)
             .is_none_or(|op| op.stop.load(Ordering::Acquire))
         {
             return Ok(false);
@@ -44,7 +44,7 @@ impl Owner {
 
     pub(super) fn native_input_status(&mut self, run: &str, kind: Kind) -> Result<Option<Status>> {
         let result: Result<Option<Status>> = (|| {
-            if self.operation.as_ref().is_none_or(|op| op.run != run) {
+            if !self.operations.contains_key(run) {
                 return Ok(None);
             }
             if let Some(history) = &mut self.record_history {
@@ -130,7 +130,7 @@ impl Owner {
         error: Option<&str>,
         publish: bool,
     ) -> Result<()> {
-        let Some(op) = self.operation.as_ref().filter(|op| op.run == run) else {
+        let Some(op) = self.operations.get(run) else {
             return Ok(());
         };
         op.stop.store(true, Ordering::Release);
@@ -168,7 +168,7 @@ impl Owner {
     }
 
     pub(super) fn abort_native_inputs(&mut self, run: &str) {
-        if let Some(op) = self.operation.as_ref().filter(|op| op.run == run) {
+        if let Some(op) = self.operations.get(run) {
             op.stop.store(true, Ordering::Release);
         }
         let pending = self.detach_inputs(run);

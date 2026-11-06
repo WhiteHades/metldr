@@ -61,12 +61,14 @@ fn owner(
             agent_runtime: Default::default(),
             fixture: None,
             subscribers: BTreeMap::new(),
-            operation: Some(Operation {
-                run,
-                stop: Arc::new(AtomicBool::new(false)),
-                worker,
-                correction: None,
-            }),
+            operations: BTreeMap::from([(
+                run.clone(),
+                Operation {
+                    stop: Arc::new(AtomicBool::new(false)),
+                    worker,
+                    correction: None,
+                },
+            )]),
             tx,
             pi_profile: None,
             codex_profile: None,
@@ -210,8 +212,7 @@ fn actual_owner_native_callbacks_bind_persist_and_fail_closed() -> Result<()> {
         let state = history.edit(|edit| edit.project(&selection, Some(&run)))?;
         let snapshot = fs::read(directory.0.join("snapshot.json"))?;
         let (mut owner, frames) = owner(disk, state, history);
-        let active = owner.operation.as_ref().unwrap().run.clone();
-        assert_eq!(active, run);
+        assert!(owner.operations.contains_key(&run));
         let ack = |owner: &mut Owner| {
             let (tx, rx) = mpsc::sync_channel(1);
             let result = match engine {
@@ -274,8 +275,8 @@ fn actual_owner_native_callbacks_bind_persist_and_fail_closed() -> Result<()> {
             assert_ne!(fs::read(directory.0.join("snapshot.json"))?, snapshot);
             assert!(!frames.lock().unwrap().is_empty());
             owner
-                .operation
-                .take()
+                .operations
+                .remove(&run)
                 .unwrap()
                 .worker
                 .join()
@@ -302,8 +303,8 @@ fn actual_owner_native_callbacks_bind_persist_and_fail_closed() -> Result<()> {
             ));
             assert_eq!(fs::read(directory.0.join("snapshot.json"))?, snapshot);
             owner
-                .operation
-                .take()
+                .operations
+                .remove(&run)
                 .unwrap()
                 .worker
                 .join()
@@ -339,8 +340,8 @@ fn actual_owner_native_callbacks_bind_persist_and_fail_closed() -> Result<()> {
             assert!(frames.lock().unwrap().is_empty());
             assert_eq!(fs::read(directory.0.join("snapshot.json"))?, snapshot);
             owner
-                .operation
-                .take()
+                .operations
+                .remove(&run)
                 .unwrap()
                 .worker
                 .join()
@@ -539,8 +540,8 @@ fn actual_owner_native_callbacks_bind_persist_and_fail_closed() -> Result<()> {
             assert!(stale_ack.is_err());
         }
         owner
-            .operation
-            .take()
+            .operations
+            .remove(&run)
             .unwrap()
             .worker
             .join()

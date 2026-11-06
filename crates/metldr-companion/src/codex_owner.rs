@@ -90,12 +90,14 @@ impl Owner {
         let (correction, corrections) = crate::native_correction::channel(&run, &tx);
         let worker =
             thread::spawn(move || codex::execute(job, worker_stop, tx, events, corrections));
-        self.operation = Some(Operation {
-            run: run.clone(),
-            stop,
-            worker,
-            correction: Some(correction),
-        });
+        self.operations.insert(
+            run.clone(),
+            Operation {
+                stop,
+                worker,
+                correction: Some(correction),
+            },
+        );
         self.emit(self.started_reply(id, scope, &run)?)
     }
 

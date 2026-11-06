@@ -126,12 +126,14 @@ mod tests {
                 address: "127.0.0.1:1".parse().unwrap(),
             }),
             subscribers: BTreeMap::new(),
-            operation: Some(Operation {
-                run: run.clone(),
-                stop: Arc::new(AtomicBool::new(true)),
-                worker,
-                correction: None,
-            }),
+            operations: BTreeMap::from([(
+                run.clone(),
+                Operation {
+                    stop: Arc::new(AtomicBool::new(true)),
+                    worker,
+                    correction: None,
+                },
+            )]),
             tx,
             pi_profile: None,
             codex_profile: None,
@@ -148,26 +150,51 @@ mod tests {
             record_history: None,
             history_pins: Default::default(),
         };
-        assert!(owner.settled("stale", Err("stale".into()), false).is_err());
-        assert_eq!(
-            owner
-                .operation
-                .as_ref()
-                .map(|operation| operation.run.as_str()),
-            Some(run.as_str())
+        let sibling = owner.state.id().unwrap();
+        let mut sibling_record = owner.state.view.runs[0].clone();
+        sibling_record.id = sibling.clone();
+        sibling_record.status = Status::Running;
+        sibling_record.output = Default::default();
+        owner.state.view.runs.push(sibling_record);
+        owner
+            .state
+            .starts
+            .insert("fixture:sibling".into(), sibling.clone());
+        owner
+            .state
+            .launches
+            .insert(sibling.clone(), owner.state.launches[&run].clone());
+        owner.state.validate().unwrap();
+        owner.disk.save(&owner.state).unwrap();
+        owner.operations.insert(
+            sibling.clone(),
+            Operation {
+                stop: Arc::new(AtomicBool::new(false)),
+                worker: thread::spawn(|| {}),
+                correction: None,
+            },
         );
+        let worker = owner.operations[&run].worker.thread().id();
+        let sibling_worker = owner.operations[&sibling].worker.thread().id();
+        assert!(owner.settled("stale", Err("stale".into()), false).is_err());
+        assert!(owner.operations.contains_key(&run));
         assert!(
             owner
                 .agent_settled("stale", crate::agent::Outcome::Cancelled, false, true)
                 .is_err()
         );
+        assert!(owner.operations.contains_key(&run));
+        assert_eq!(owner.operations.len(), 2);
+        assert_eq!(owner.operations[&run].worker.thread().id(), worker);
         assert_eq!(
-            owner
-                .operation
-                .as_ref()
-                .map(|operation| operation.run.as_str()),
-            Some(run.as_str())
+            owner.operations[&sibling].worker.thread().id(),
+            sibling_worker
         );
+        owner.settled(&sibling, Ok(()), false).unwrap();
+        assert_eq!(owner.operations.len(), 1);
+        assert_eq!(owner.operations[&run].worker.thread().id(), worker);
+        assert_eq!(owner.state.view.runs[0].status, Status::StopRequested);
+        assert_eq!(owner.state.view.runs[1].status, Status::Complete);
         let Event::Text { run: id, change } = rx.recv().unwrap() else {
             panic!("chunk must precede settlement");
         };
@@ -180,7 +207,7 @@ mod tests {
             panic!("settlement must follow the queued chunk");
         };
         owner.settled(&id, result, false).unwrap();
-        assert!(owner.operation.is_none());
+        assert!(owner.operations.is_empty());
         assert_eq!(owner.state.view.runs[0].status, Status::Cancelled);
         let before = fs::read(&snapshot).unwrap();
         assert_eq!(before, serde_json::to_vec(&owner.state).unwrap());
@@ -254,7 +281,7 @@ mod tests {
             browser_view: BTreeMap::new(),
             fixture: None,
             subscribers: BTreeMap::new(),
-            operation: None,
+            operations: BTreeMap::new(),
             tx,
             pi_profile: None,
             codex_profile: None,
@@ -442,12 +469,14 @@ mod tests {
             browser_view: BTreeMap::new(),
             fixture: None,
             subscribers: BTreeMap::new(),
-            operation: Some(Operation {
-                run: run.clone(),
-                stop: stop.clone(),
-                worker: thread::spawn(|| {}),
-                correction: None,
-            }),
+            operations: BTreeMap::from([(
+                run.clone(),
+                Operation {
+                    stop: stop.clone(),
+                    worker: thread::spawn(|| {}),
+                    correction: None,
+                },
+            )]),
             tx,
             pi_profile: None,
             codex_profile: None,

@@ -78,9 +78,9 @@ impl Owner {
 
     fn browser_operation(&self, run: &str) -> Result<()> {
         if self
-            .operation
-            .as_ref()
-            .is_none_or(|op| op.run != run || op.stop.load(Ordering::Acquire))
+            .operations
+            .get(run)
+            .is_none_or(|op| op.stop.load(Ordering::Acquire))
         {
             return Err("browser operation is stale or stopped".into());
         }
@@ -175,11 +175,7 @@ impl Owner {
             } => {
                 let result = (|| -> Result<Action> {
                     let record = self.saved_browser_action(&action)?;
-                    if self
-                        .operation
-                        .as_ref()
-                        .is_none_or(|op| op.run != record.proposal.run)
-                    {
+                    if !self.operations.contains_key(&record.proposal.run) {
                         return Err("browser result came from a stale operation".into());
                     }
                     if self.record_history.is_some() {

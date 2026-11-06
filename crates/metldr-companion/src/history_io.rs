@@ -104,7 +104,7 @@ impl Owner {
     }
 
     pub(super) fn conversation_idle(&self) -> bool {
-        self.operation.is_none()
+        self.operations.is_empty()
             && self.settings.job.is_none()
             && self.native_permissions.is_empty()
             && self.pi_ui.is_none()

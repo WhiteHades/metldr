@@ -111,9 +111,9 @@ impl Owner {
         let result = (|| {
             if self.record_history.is_none()
                 || self
-                    .operation
-                    .as_ref()
-                    .is_none_or(|active| active.run != run || active.stop.load(Ordering::Acquire))
+                    .operations
+                    .get(run)
+                    .is_none_or(|active| active.stop.load(Ordering::Acquire))
             {
                 return Err("presentation has no active history owner".into());
             }

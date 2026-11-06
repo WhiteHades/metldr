@@ -18,9 +18,9 @@ impl Owner {
     ) -> Result<()> {
         let proposed = Receipt::pending(request, scope.epoch, text)?;
         let channel = self
-            .operation
-            .as_ref()
-            .filter(|op| op.run == run && !op.stop.load(Ordering::Acquire))
+            .operations
+            .get(run)
+            .filter(|op| !op.stop.load(Ordering::Acquire))
             .and_then(|op| op.correction.as_ref())
             .and_then(|slot| {
                 slot.ready
@@ -88,8 +88,8 @@ impl Owner {
                 .is_err()
             {
                 if let Some(slot) = self
-                    .operation
-                    .as_mut()
+                    .operations
+                    .get_mut(run)
                     .and_then(|op| op.correction.as_mut())
                 {
                     slot.ready = None;
@@ -109,9 +109,8 @@ impl Owner {
             return Ok(());
         }
         let slot = self
-            .operation
-            .as_mut()
-            .filter(|op| op.run == run)
+            .operations
+            .get_mut(run)
             .and_then(|op| op.correction.as_mut())
             .ok_or("native correction slot is absent")?;
         if slot.ready.as_ref() == Some(&target) {
@@ -129,9 +128,9 @@ impl Owner {
         ack: SyncSender<bool>,
     ) -> Result<()> {
         let ready = self
-            .operation
-            .as_ref()
-            .filter(|op| op.run == run && !op.stop.load(Ordering::Acquire))
+            .operations
+            .get(run)
+            .filter(|op| !op.stop.load(Ordering::Acquire))
             .and_then(|op| op.correction.as_ref())
             .is_some_and(|slot| slot.ready.as_ref() == Some(&target));
         let result = if ready {
@@ -166,7 +165,7 @@ impl Owner {
         request: &str,
         outcome: Phase,
     ) -> Result<()> {
-        if self.operation.as_ref().is_none_or(|op| op.run != run) || outcome.unresolved() {
+        if !self.operations.contains_key(run) || outcome.unresolved() {
             return Err("correction outcome has no matching owned run".into());
         }
         self.record_execution(run, |edit, execution| {
@@ -188,9 +187,8 @@ impl Owner {
 
     pub(crate) fn correction_closed(&mut self, run: &str) -> Result<()> {
         let slot = self
-            .operation
-            .as_mut()
-            .filter(|op| op.run == run)
+            .operations
+            .get_mut(run)
             .and_then(|op| op.correction.as_mut());
         if slot.is_none_or(|slot| slot.ready.take().is_none()) {
             return Ok(());
@@ -199,12 +197,11 @@ impl Owner {
     }
 
     pub(crate) fn correction_public(&self, state: &Store) -> Value {
-        let Some((op, run, slot)) = self.operation.as_ref().and_then(|op| {
-            let run = state
-                .view
-                .runs
-                .iter()
-                .find(|run| run.id == op.run && !run.status.terminal())?;
+        let Some((op, run, slot)) = state.view.runs.iter().find_map(|run| {
+            if run.status.terminal() {
+                return None;
+            }
+            let op = self.operations.get(&run.id)?;
             Some((op, run, op.correction.as_ref()?))
         }) else {
             return Value::Null;

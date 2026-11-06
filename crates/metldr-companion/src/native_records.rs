@@ -12,11 +12,7 @@ impl Owner {
         run: &str,
         change: impl FnOnce(&mut Run, &mut Launch, &mut NativeWorkflow) -> Result<bool>,
     ) -> Result<bool> {
-        if self
-            .operation
-            .as_ref()
-            .is_none_or(|operation| operation.run != run)
-        {
+        if !self.operations.contains_key(run) {
             return Err("native callback came from a stale operation".into());
         }
         if self.record_history.is_some() {

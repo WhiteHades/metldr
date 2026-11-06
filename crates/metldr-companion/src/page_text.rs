@@ -115,7 +115,7 @@ impl Owner {
             Started(String, String),
         }
         let admission = if self.record_history.is_some() {
-            let unavailable = self.operation.is_some();
+            let unavailable = !self.operations.is_empty();
             self.record_change(|edit, _| {
                 if unavailable {
                     return Err("another run is active".into());
@@ -156,7 +156,7 @@ impl Owner {
                 Ok((Admission::Started(run, input), Some(projected)))
             })?
         } else {
-            if self.operation.is_some() || self.state.view.runs.len() >= 16 {
+            if !self.operations.is_empty() || self.state.view.runs.len() >= 16 {
                 return Err("another run is active or saved run capacity reached".into());
             }
             let source = self
@@ -252,12 +252,14 @@ impl Owner {
                 result,
             });
         });
-        self.operation = Some(Operation {
-            run: run.clone(),
-            stop,
-            worker,
-            correction: None,
-        });
+        self.operations.insert(
+            run.clone(),
+            Operation {
+                stop,
+                worker,
+                correction: None,
+            },
+        );
         self.emit(self.started_reply(id, scope, &run)?)
     }
 }

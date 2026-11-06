@@ -144,7 +144,7 @@ impl Owner {
         if self.record_history.is_some() {
             self.require_conversation(scope)?;
         }
-        if self.operation.is_some() {
+        if !self.operations.is_empty() {
             return Err("another run is active".into());
         }
         let (run, body) = if self.record_history.is_some() {
@@ -259,12 +259,14 @@ impl Owner {
                 result,
             });
         });
-        self.operation = Some(Operation {
-            run: run.clone(),
-            stop,
-            worker,
-            correction: None,
-        });
+        self.operations.insert(
+            run.clone(),
+            Operation {
+                stop,
+                worker,
+                correction: None,
+            },
+        );
         self.emit(self.started_reply(id, scope, &run)?)
     }
 
@@ -285,9 +287,7 @@ impl Owner {
             edit.put_run(&execution, record)?;
             Ok(((), Some(edit.project(scope, Some(run))?)))
         });
-        if let Some(operation) = &self.operation
-            && operation.run == run
-        {
+        if let Some(operation) = self.operations.get(run) {
             operation.stop.store(true, Ordering::Release);
         }
         if let Err(error) = saved {

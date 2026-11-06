@@ -105,7 +105,7 @@ impl Owner {
             let status = self.native_input_status(run, crate::agent_settings::Kind::Pi)?;
             if status.is_none()
                 || (status == Some(Status::StopRequested)
-                    && self.operation.as_ref().is_none_or(|operation| {
+                    && self.operations.get(run).is_none_or(|operation| {
                         !operation.stop.load(std::sync::atomic::Ordering::Acquire)
                     }))
             {
@@ -113,7 +113,7 @@ impl Owner {
             }
         }
         let mut next = self.native_input_state(run)?;
-        let active = self.operation.as_ref().is_some_and(|op| op.run == run)
+        let active = self.operations.contains_key(run)
             && next
                 .launches
                 .get(run)
@@ -179,7 +179,7 @@ impl Owner {
                 )?;
                 return Ok(());
             }
-            if let Some(op) = &self.operation {
+            if let Some(op) = self.operations.get(run) {
                 op.stop.store(true, std::sync::atomic::Ordering::Release);
             }
             self.pi_ui = previous;
@@ -255,45 +255,50 @@ impl Owner {
     }
 
     pub(super) fn disconnect_pi_ui(&mut self) -> Result<()> {
-        if self.record_history.is_some() {
-            let Some(run) = self
-                .operation
-                .as_ref()
-                .map(|operation| operation.run.clone())
-            else {
-                return Ok(());
-            };
-            let state = self.native_input_state(&run)?;
-            return if matches!(
-                state.launches.get(&run),
+        let runs: Vec<_> = self.operations.keys().cloned().collect();
+        for run in runs {
+            if let Some(history) = &mut self.record_history {
+                let pi = history.edit(|edit| {
+                    let Some(execution) = edit.native_execution(&run)? else {
+                        return Ok(false);
+                    };
+                    Ok(matches!(
+                        edit.native_task(&execution, &run)?.launch,
+                        crate::agent_model::Launch::Pi { .. }
+                    ))
+                })?;
+                if pi {
+                    self.stop_native_record_inputs(
+                        &run,
+                        "Pi controller disconnected",
+                        None,
+                        false,
+                    )?;
+                }
+                continue;
+            }
+            if !matches!(
+                self.state.launches.get(&run),
                 Some(crate::agent_model::Launch::Pi { .. })
             ) {
-                self.stop_native_record_inputs(&run, "Pi controller disconnected", None, false)
-            } else {
-                Ok(())
-            };
+                continue;
+            }
+            // Stop must be visible to the worker before its reply channels disappear.
+            self.operations[&run]
+                .stop
+                .store(true, std::sync::atomic::Ordering::Release);
+            let mut next = self.state.clone();
+            if let Some(record) = next.view.runs.iter_mut().find(|r| r.id == run)
+                && !record.status.terminal()
+            {
+                record.status = Status::StopRequested;
+            }
+            next.prevent_browser(&run, "Pi controller disconnected")?;
+            self.cancel_browser_approval(&run);
+            self.cancel_native_permissions(&run);
+            self.clear_pi_ui(&run);
+            self.persist(next)?;
         }
-        let Some(op) = self.operation.as_ref().filter(|op| {
-            matches!(
-                self.state.launches.get(&op.run),
-                Some(crate::agent_model::Launch::Pi { .. })
-            )
-        }) else {
-            return Ok(());
-        };
-        let run = op.run.clone();
-        // Stop must be visible to the worker before its reply channels disappear.
-        op.stop.store(true, std::sync::atomic::Ordering::Release);
-        let mut next = self.state.clone();
-        if let Some(record) = next.view.runs.iter_mut().find(|r| r.id == run)
-            && !record.status.terminal()
-        {
-            record.status = Status::StopRequested;
-        }
-        next.prevent_browser(&run, "Pi controller disconnected")?;
-        self.cancel_browser_approval(&run);
-        self.cancel_native_permissions(&run);
-        self.clear_pi_ui(&run);
-        self.persist(next)
+        Ok(())
     }
 }

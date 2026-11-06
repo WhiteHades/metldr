@@ -202,12 +202,10 @@ impl Owner {
             let _ = answer.try_send(InputAnswer::Cancel);
             return Ok(());
         }
-        if let Some(operation) = &self.operation {
-            if operation.run == run {
-                operation
-                    .stop
-                    .store(true, std::sync::atomic::Ordering::Release);
-            }
+        if let Some(operation) = self.operations.get(run) {
+            operation
+                .stop
+                .store(true, std::sync::atomic::Ordering::Release);
         }
         let _ = answer.try_send(InputAnswer::Cancel);
         self.clear_codex_input(run);
@@ -309,7 +307,7 @@ impl Owner {
         let Some(run) = self.codex_input.as_ref().map(|state| state.run.clone()) else {
             return Ok(());
         };
-        let Some(operation) = self.operation.as_ref().filter(|op| op.run == run) else {
+        let Some(operation) = self.operations.get(&run) else {
             self.clear_codex_input(&run);
             return self.publish();
         };

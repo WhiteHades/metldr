@@ -166,9 +166,8 @@ impl Owner {
                 return Err("browser event stream ended; only cleanup is available".into());
             }
             let operation = self
-                .operation
-                .as_ref()
-                .filter(|op| op.run == call.run)
+                .operations
+                .get(&call.run)
                 .ok_or("browser transport run is stale")?;
             if operation.stop.load(std::sync::atomic::Ordering::Acquire)
                 && !matches!(call.operation, Operation::Detach { .. })

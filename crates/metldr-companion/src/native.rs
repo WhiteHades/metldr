@@ -126,7 +126,7 @@ pub(super) fn run() -> Result<()> {
         browser_view: BTreeMap::new(),
         fixture: config.fixture,
         subscribers: BTreeMap::new(),
-        operation: None,
+        operations: BTreeMap::new(),
         tx,
         pi_profile: fixture_profiles.0,
         codex_profile: fixture_profiles.1,
@@ -171,7 +171,7 @@ pub(super) fn run() -> Result<()> {
     loop {
         owner.expire_history();
         owner.settings.check_deadline()?;
-        if closed && owner.operation.is_none() && owner.settings.job.is_none() {
+        if closed && owner.operations.is_empty() && owner.settings.job.is_none() {
             break;
         }
         if !closed {
@@ -232,10 +232,11 @@ pub(super) fn run() -> Result<()> {
                     }
                     closed = true;
                     input_error = error;
-                    if let Some(operation) = &owner.operation {
+                    for operation in owner.operations.values() {
                         operation.stop.store(true, Ordering::Release);
                     }
-                    if let Some(run) = owner.operation.as_ref().map(|op| op.run.clone()) {
+                    let runs: Vec<_> = owner.operations.keys().cloned().collect();
+                    for run in runs {
                         owner.cancel_browser_approval(&run);
                         owner.cancel_native_permissions(&run);
                     }
