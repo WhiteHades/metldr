@@ -12,6 +12,30 @@ use std::{
 
 mod view;
 
+pub(super) fn fatal(error: &(dyn std::error::Error + Send + Sync + 'static)) -> bool {
+    error.downcast_ref::<io::Error>().is_some() || crate::history::is_failure(error)
+}
+
+pub(super) fn acknowledge<T>(
+    ack: SyncSender<std::result::Result<T, String>>,
+    result: Result<T>,
+) -> Result<()> {
+    match result {
+        Ok(value) => {
+            let _ = ack.send(Ok(value));
+            Ok(())
+        }
+        Err(error) => {
+            let _ = ack.send(Err(error.to_string()));
+            if fatal(error.as_ref()) {
+                Err(error)
+            } else {
+                Ok(())
+            }
+        }
+    }
+}
+
 pub(super) enum Event {
     CorrectionReady {
         run: String,
@@ -223,8 +247,7 @@ impl Owner {
         let id = request.request;
         let result = self.command(&id, request.command);
         if let Err(e) = result {
-            // Storage and transport failures are fatal; never continue after a failed commit.
-            if e.downcast_ref::<io::Error>().is_some() || crate::history::is_failure(e.as_ref()) {
+            if fatal(e.as_ref()) {
                 return Err(e);
             }
             if let Some(error) = e.downcast_ref::<crate::history_io::ReadError>() {

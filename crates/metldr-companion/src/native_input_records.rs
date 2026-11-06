@@ -2,14 +2,10 @@ use crate::{
     Result,
     agent_model::Launch,
     agent_settings::Kind,
-    flow::Owner,
+    flow::{Owner, fatal},
     model::{Status, Store},
 };
 use std::sync::atomic::Ordering;
-
-pub(super) fn fatal(error: &(dyn std::error::Error + Send + Sync + 'static)) -> bool {
-    error.downcast_ref::<std::io::Error>().is_some() || crate::history::is_failure(error)
-}
 
 fn matches_kind(launch: &Launch, kind: Kind) -> bool {
     matches!(

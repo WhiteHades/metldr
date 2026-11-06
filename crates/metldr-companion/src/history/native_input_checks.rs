@@ -215,7 +215,7 @@ async fn codex_input_replies_and_withdrawals_preserve_owned_waiters() -> Result<
             },
         )
         .unwrap_err();
-    assert!(!crate::native_input_records::fatal(error.as_ref()));
+    assert!(!crate::flow::fatal(error.as_ref()));
     assert!(
         receivers
             .iter()
@@ -242,7 +242,7 @@ async fn codex_input_replies_and_withdrawals_preserve_owned_waiters() -> Result<
     let error = owner
         .codex_input_withdraw(&run, inputs[1].id())
         .unwrap_err();
-    assert!(!crate::native_input_records::fatal(error.as_ref()));
+    assert!(!crate::flow::fatal(error.as_ref()));
     assert!(matches!(
         receivers[1].try_recv(),
         Err(mpsc::TryRecvError::Empty)
@@ -285,7 +285,7 @@ async fn codex_input_replies_and_withdrawals_preserve_owned_waiters() -> Result<
             },
         )
         .unwrap_err();
-    assert!(crate::native_input_records::fatal(error.as_ref()));
+    assert!(crate::flow::fatal(error.as_ref()));
     assert_eq!(sequence(&owner)?, before + 1);
     assert!(owner.codex_input.is_none());
     assert!(matches!(

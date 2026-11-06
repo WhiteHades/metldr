@@ -164,7 +164,7 @@ impl Owner {
             self.commit_native_input(run, crate::agent_settings::Kind::Pi, next)
         })();
         if let Err(error) = result {
-            if crate::native_input_records::fatal(error.as_ref()) {
+            if crate::flow::fatal(error.as_ref()) {
                 return Err(error);
             }
             self.pi_ui = previous;
@@ -211,7 +211,7 @@ impl Owner {
             .remove(request)
             .ok_or("stale Pi UI request")?;
         if let Err(error) = self.commit_native_input(run, crate::agent_settings::Kind::Pi, next) {
-            if !crate::native_input_records::fatal(error.as_ref()) {
+            if !crate::flow::fatal(error.as_ref()) {
                 self.pi_ui
                     .as_mut()
                     .ok_or("missing Pi UI state")?
