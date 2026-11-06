@@ -1,10 +1,13 @@
-.PHONY: rust check-rust check-codex check-pi check-opencode check-browser-tools check-sse check-responses check-google check-messages check-chat check-credentials check-conversation check-panel panel-wasm check-companion companion
+.PHONY: rust check-rust check-rune check-codex check-pi check-opencode check-browser-tools check-sse check-responses check-google check-messages check-chat check-credentials check-conversation check-panel panel-wasm check-companion companion
 
 rust:
 	npm run build:rust
 
 check-rust:
 	node scripts/build-rust.mjs --check
+
+check-rune:
+	cargo test --locked --manifest-path prototypes/rune-frontend/Cargo.toml --lib
 
 check-codex:
 	cargo test --locked --manifest-path crates/metldr-codex-session/Cargo.toml
