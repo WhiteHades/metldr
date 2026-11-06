@@ -1,4 +1,5 @@
 import { watchChat } from './scripts/build-chat.mjs'
+import { copySandboxAssets } from './scripts/copy-sandbox-assets.mjs'
 import { defineConfig, normalizePath, type Plugin } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import tailwindcss from '@tailwindcss/vite'
@@ -62,35 +63,15 @@ const chatDevelopment = (): Plugin => ({
   },
 })
 
-const copyWasmAssets = () => ({
+const copyWasmAssets = (): Plugin => ({
   name: 'copy-wasm-assets',
+  configureServer() {
+    copySandboxAssets('public/assets')
+  },
   writeBundle() {
-    if (!isContentBuild) {
-      const assetsDir = resolve('dist/assets')
-      if (!existsSync(assetsDir)) {
-         // mkdirSync(assetsDir, { recursive: true })
-      }
-
-      const filesToCopy = [
-        { src: 'node_modules/pdfjs-dist/build/pdf.worker.min.mjs', dest: 'dist/assets/pdf.worker.min.js' },
-        { src: 'node_modules/voy-search/voy_search_bg.wasm', dest: 'dist/assets/voy_search_bg.wasm' },
-      ]
-
-      filesToCopy.forEach(({ src, dest }) => {
-        try {
-          const sourcePath = resolve(src)
-          const destPath = resolve(dest)
-          if (existsSync(sourcePath)) {
-            copyFileSync(sourcePath, destPath)
-            console.log(`Copied ${src} to ${dest}`)
-          } else {
-             console.warn(`Source file not found: ${src}`)
-          }
-        } catch (e) {
-             console.error(`Failed to copy ${src}:`, e)
-        }
-      })
-    }
+    copySandboxAssets('dist/assets')
+    copyFileSync(resolve('node_modules/pdfjs-dist/build/pdf.worker.min.mjs'),
+      resolve('dist/assets/pdf.worker.min.js'))
   }
 })
 
