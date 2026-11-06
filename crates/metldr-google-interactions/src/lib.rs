@@ -7,20 +7,13 @@ mod sse;
 mod stream;
 
 pub use client::Client;
-pub use metldr_browser_tools::Invocation;
+pub use metldr_browser_tools::{Invocation, Prompt};
 use metldr_conversation::TextEvent;
 use serde_json::{Value, json};
 use std::sync::atomic::AtomicBool;
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 const TEXT_MAX: usize = 8_192;
-
-pub struct Prompt<'a> {
-    pub instruction: &'a str,
-    pub title: &'a str,
-    pub url: &'a str,
-    pub text: &'a str,
-}
 
 pub struct Conversation {
     client: Client,
