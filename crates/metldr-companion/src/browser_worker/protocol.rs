@@ -25,55 +25,25 @@ impl Protocol {
         instruction: &str,
         stop: &AtomicBool,
     ) -> Result<Self> {
+        let prompt = metldr_browser_tools::Prompt {
+            instruction,
+            title: &source.title,
+            url: &source.url,
+            text: &source.text,
+        };
         match route {
-            Route::Messages(profile) => {
-                let conversation =
-                    profile
-                        .messages_client(stop)?
-                        .start(metldr_messages::Prompt {
-                            instruction,
-                            title: &source.title,
-                            url: &source.url,
-                            text: &source.text,
-                        })?;
-                Ok(Self::Messages { conversation })
-            }
-            Route::Google(profile) => {
-                let conversation =
-                    profile
-                        .google_client(stop)?
-                        .start(metldr_google_interactions::Prompt {
-                            instruction,
-                            title: &source.title,
-                            url: &source.url,
-                            text: &source.text,
-                        })?;
-                Ok(Self::Google { conversation })
-            }
-            Route::Responses(profile) => {
-                let conversation =
-                    profile
-                        .responses_client(stop)?
-                        .start(metldr_responses::Prompt {
-                            instruction,
-                            title: &source.title,
-                            url: &source.url,
-                            text: &source.text,
-                        })?;
-                Ok(Self::Responses { conversation })
-            }
-            Route::Chat(profile) => {
-                let conversation =
-                    profile
-                        .chat_client(stop)?
-                        .start(metldr_chat_completions::Prompt {
-                            instruction,
-                            title: &source.title,
-                            url: &source.url,
-                            text: &source.text,
-                        })?;
-                Ok(Self::Chat { conversation })
-            }
+            Route::Messages(profile) => Ok(Self::Messages {
+                conversation: profile.messages_client(stop)?.start(prompt)?,
+            }),
+            Route::Google(profile) => Ok(Self::Google {
+                conversation: profile.google_client(stop)?.start(prompt)?,
+            }),
+            Route::Responses(profile) => Ok(Self::Responses {
+                conversation: profile.responses_client(stop)?.start(prompt)?,
+            }),
+            Route::Chat(profile) => Ok(Self::Chat {
+                conversation: profile.chat_client(stop)?.start(prompt)?,
+            }),
         }
     }
 
