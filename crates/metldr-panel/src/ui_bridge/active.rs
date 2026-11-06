@@ -150,7 +150,9 @@ impl UiActiveRun {
 impl Active {
     async fn watch(&self, mut stream: RunStream, emit: Function) -> Result<(), FlowError> {
         self.core.ensure_current()?;
-        let mut observing = std::pin::pin!(self.core.stream(&self.native, &mut stream, &emit));
+        let mut deliver = |event| emit_event(event, &emit);
+        let mut observing =
+            std::pin::pin!(self.core.stream(&self.native, &mut stream, &mut deliver));
         std::future::poll_fn(|context| {
             let mut state = self.observation.borrow_mut();
             match &mut *state {
