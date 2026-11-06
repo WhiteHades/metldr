@@ -240,20 +240,22 @@ impl Owner {
         if !pending.prompt.accepts(&answer) {
             return Err("Codex input answer is invalid".into());
         }
-        let mut state = self
-            .codex_input
-            .clone()
-            .ok_or("Codex input request is stale")?;
-        let pending = state
-            .pending
-            .remove(request)
-            .ok_or("Codex input request is stale")?;
         let next = self.native_input_state(run)?;
-        let previous = self.codex_input.replace(state);
+        let (request, pending) = self
+            .codex_input
+            .as_mut()
+            .ok_or("Codex input request is stale")?
+            .pending
+            .remove_entry(request)
+            .ok_or("Codex input request is stale")?;
         if let Err(error) = self.commit_native_input(run, crate::agent_settings::Kind::Codex, next)
         {
             if !crate::native_input_records::fatal(error.as_ref()) {
-                self.codex_input = previous;
+                self.codex_input
+                    .as_mut()
+                    .ok_or("Codex input request is stale")?
+                    .pending
+                    .insert(request, pending);
             }
             return Err(error);
         }
@@ -269,22 +271,29 @@ impl Owner {
         }) {
             return Ok(());
         }
-        let previous = self.codex_input.clone();
         let next = self.native_input_state(run)?;
         let state = self
             .codex_input
             .as_mut()
             .ok_or("missing Codex input state")?;
-        state.pending.retain(|_, pending| &pending.key != key);
-        if state.pending.is_empty() {
-            self.codex_input = None;
-        }
+        let removed: Vec<_> = state
+            .pending
+            .extract_if(.., |_, pending| &pending.key == key)
+            .collect();
+        let empty = self.codex_input.take_if(|state| state.pending.is_empty());
         if self.record_history.is_some() {
             if let Err(error) =
                 self.commit_native_input(run, crate::agent_settings::Kind::Codex, next)
             {
                 if !crate::native_input_records::fatal(error.as_ref()) {
-                    self.codex_input = previous;
+                    if let Some(state) = empty {
+                        self.codex_input = Some(state);
+                    }
+                    self.codex_input
+                        .as_mut()
+                        .ok_or("missing Codex input state")?
+                        .pending
+                        .extend(removed);
                 }
                 return Err(error);
             }

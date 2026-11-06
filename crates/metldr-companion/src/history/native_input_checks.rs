@@ -144,6 +144,160 @@ fn stop_owner(owner: &mut Owner) {
     }
 }
 
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn codex_input_replies_and_withdrawals_preserve_owned_waiters() -> Result<()> {
+    use metldr_codex_session::{CodexSession, Event as NativeEvent, InputAnswer, Thread};
+    use std::os::unix::fs::PermissionsExt;
+
+    let (directory, mut owner, _, run) = make_owner("codex")?;
+    let executable = directory.0.join("input-peer");
+    let send = |value: serde_json::Value| {
+        format!(
+            "printf '%s\\n' '{}'\n",
+            value.to_string().replace('\'', "'\\''")
+        )
+    };
+    let mut script = format!(
+        "#!/bin/sh\nread -r line\n{}read -r line\nread -r line\n{}",
+        send(serde_json::json!({"id":1,"result":{}})),
+        send(serde_json::json!({"id":2,"result":{
+            "thread":{"id":"thread-1","sessionId":"owned-session"},
+            "model":"fixture","modelProvider":"fixture","cwd":directory.0
+        }})),
+    );
+    for id in 1..=4 {
+        script.push_str(&send(serde_json::json!({
+            "id":id,"method":"mcpServer/elicitation/request","params":{
+                "threadId":"thread-1","mode":"form","serverName":"owned",
+                "message":"Owned input","requestedSchema":{"type":"object","properties":{}}
+            }
+        })));
+    }
+    script.push_str("while read -r line; do :; done\n");
+    fs::write(&executable, script)?;
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o700))?;
+    let mut session =
+        CodexSession::open(&executable, &directory.0, Thread::New { tools: vec![] }).await?;
+    let mut inputs = Vec::new();
+    for _ in 0..4 {
+        let NativeEvent::Input(input) = session.next_event().await? else {
+            panic!("owned input request");
+        };
+        inputs.push(input);
+    }
+    let mut receivers = Vec::new();
+    for input in &inputs[..2] {
+        let (answer, receiver) = mpsc::sync_channel(1);
+        owner.codex_input_offer(&run, input.id().clone(), input.prompt().clone(), answer)?;
+        receivers.push(receiver);
+    }
+    let request = owner.codex_input.as_ref().unwrap().public()?["pending"][0]["request"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut stale = owner.record_history.as_ref().unwrap().selection()?;
+    stale.epoch += 1;
+    let subscription = crate::flow::Subscription {
+        scope: stale,
+        run: run.clone(),
+    };
+    owner
+        .subscribers
+        .insert("stale-input-view".into(), subscription.clone());
+    let error = owner
+        .codex_input_reply(
+            "retry",
+            &run,
+            &request,
+            crate::codex_input::Answer::Accept {
+                value: BTreeMap::new(),
+            },
+        )
+        .unwrap_err();
+    assert!(!crate::native_input_records::fatal(error.as_ref()));
+    assert!(
+        receivers
+            .iter()
+            .all(|r| matches!(r.try_recv(), Err(mpsc::TryRecvError::Empty)))
+    );
+    owner.subscribers.clear();
+    owner.codex_input_reply(
+        "reply",
+        &run,
+        &request,
+        crate::codex_input::Answer::Accept {
+            value: BTreeMap::new(),
+        },
+    )?;
+    assert!(matches!(receivers[0].try_recv()?, InputAnswer::Accept(value) if value.is_empty()));
+    assert!(matches!(
+        receivers[1].try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+
+    owner
+        .subscribers
+        .insert("stale-input-view".into(), subscription);
+    let error = owner
+        .codex_input_withdraw(&run, inputs[1].id())
+        .unwrap_err();
+    assert!(!crate::native_input_records::fatal(error.as_ref()));
+    assert!(matches!(
+        receivers[1].try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    owner.subscribers.clear();
+    owner.codex_input_withdraw(&run, inputs[1].id())?;
+    assert!(owner.codex_input.is_none());
+    assert!(matches!(
+        receivers[1].try_recv(),
+        Err(mpsc::TryRecvError::Disconnected)
+    ));
+
+    for input in &inputs[2..] {
+        let (answer, receiver) = mpsc::sync_channel(1);
+        owner.codex_input_offer(&run, input.id().clone(), input.prompt().clone(), answer)?;
+        receivers.push(receiver);
+    }
+    owner.codex_input_withdraw(&run, inputs[2].id())?;
+    assert!(matches!(
+        receivers[2].try_recv(),
+        Err(mpsc::TryRecvError::Disconnected)
+    ));
+    assert!(matches!(
+        receivers[3].try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    let request = owner.codex_input.as_ref().unwrap().public()?["pending"][0]["request"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let before = sequence(&owner)?;
+    owner.transport.fail_next_emit();
+    let error = owner
+        .codex_input_reply(
+            "failed-publication",
+            &run,
+            &request,
+            crate::codex_input::Answer::Accept {
+                value: BTreeMap::new(),
+            },
+        )
+        .unwrap_err();
+    assert!(crate::native_input_records::fatal(error.as_ref()));
+    assert_eq!(sequence(&owner)?, before + 1);
+    assert!(owner.codex_input.is_none());
+    assert!(matches!(
+        receivers[3].try_recv(),
+        Err(mpsc::TryRecvError::Disconnected)
+    ));
+    stop_owner(&mut owner);
+    let exit = session.close().await?;
+    assert!(!exit.forced && exit.code == Some(0));
+    Ok(())
+}
+
 #[test]
 fn native_corrections_fence_duplicates_stop_and_uncertain_session_reuse() -> Result<()> {
     use crate::native_correction::{Phase, Target, channel};
