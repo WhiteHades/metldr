@@ -241,6 +241,97 @@ fn reopen_projection(
 }
 
 #[test]
+fn watches_keep_their_run_when_the_visible_run_changes() -> Result<()> {
+    let directory = Directory::new()?;
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    listener.set_nonblocking(true)?;
+    let (mut owner, rx, wire) = setup(&directory, listener.local_addr()?)?;
+    owner.request(ask(&owner, "older-answer"))?;
+    let older = owner.state.view.runs[0].id.clone();
+    let (socket, _) = receive_request(&listener)?;
+    complete(&mut owner, &rx, socket, "Older answer")?;
+    owner.request(ask(&owner, "active-answer"))?;
+    let active = owner.state.view.runs[0].id.clone();
+    let (socket, _) = receive_request(&listener)?;
+    let before = profile(history(&owner))?.sequence;
+    for (request, run) in [("watch-active", &active), ("watch-older", &older)] {
+        owner.request(Request {
+            v: crate::WIRE_VERSION,
+            request: request.into(),
+            command: conversation(
+                &owner,
+                crate::model::ConversationAction::Watch { run: run.clone() },
+            ),
+        })?;
+    }
+    assert_eq!(profile(history(&owner))?.sequence, before);
+    assert_eq!(owner.subscribers.len(), 1);
+    assert!(owner.subscribers.contains_key("watch-active"));
+    assert_eq!(owner.operations.len(), 1);
+    wire.lock().unwrap().clear();
+    owner.request(Request {
+        v: crate::WIRE_VERSION,
+        request: "remove-provider".into(),
+        command: Command::ProviderRemove {
+            protocol: crate::provider_settings::Protocol::Messages,
+            expected_revision: 0,
+        },
+    })?;
+    let published = frames(&wire)?;
+    let visible = owner.state.view.runs[0].id.clone();
+    wire.lock().unwrap().clear();
+    complete(&mut owner, &rx, socket, "Active answer")?;
+    let completed = frames(&wire)?;
+    assert!(owner.subscribers.is_empty());
+    assert_eq!(visible, older);
+    assert_eq!(published.len(), 3);
+    assert_eq!(published[0]["request"], Value::Null);
+    assert_eq!(published[0]["kind"], "changed");
+    assert_eq!(published[0]["view"]["runs"][0]["id"], older);
+    assert_eq!(published[2]["request"], "remove-provider");
+    assert_eq!(published[2]["view"]["runs"][0]["id"], older);
+    assert_eq!(published[1]["request"], "watch-active");
+    assert_eq!(published[1]["ended"], false);
+    assert_eq!(
+        published[1]["view"]["runs"][0]["id"], active,
+        "watch must retain its requested run after a terminal sibling is viewed"
+    );
+    let terminal = completed
+        .iter()
+        .find(|frame| frame["request"] == "watch-active" && frame["ended"] == true)
+        .ok_or("terminal watch frame absent")?;
+    assert_eq!(terminal["view"]["runs"][0]["id"], active);
+    assert_eq!(terminal["view"]["runs"][0]["status"], "complete");
+    let scope = history(&owner).selection()?;
+    let before = profile(history(&owner))?.sequence;
+    for (request, run) in [
+        ("watch-closed", active.as_str()),
+        ("watch-missing", "missing"),
+    ] {
+        owner.subscribers.insert(
+            request.into(),
+            crate::flow::Subscription {
+                scope: scope.clone(),
+                run: run.into(),
+            },
+        );
+    }
+    wire.lock().unwrap().clear();
+    owner.publish()?;
+    let closed = frames(&wire)?;
+    assert_eq!(closed.len(), 3);
+    assert_eq!(closed[1]["request"], "watch-closed");
+    assert_eq!(closed[1]["ended"], true);
+    assert_eq!(closed[1]["view"]["runs"][0]["id"], active);
+    assert_eq!(closed[2]["request"], "watch-missing");
+    assert_eq!(closed[2]["kind"], "error");
+    assert!(owner.subscribers.is_empty());
+    assert_eq!(profile(history(&owner))?.sequence, before);
+    assert_eq!(owner.state.view.runs[0].id, active);
+    Ok(())
+}
+
+#[test]
 fn native_choices_survive_a_flat_result_without_loading_native_runs() -> Result<()> {
     use crate::agent_settings::Kind;
     for kind in [Kind::Pi, Kind::Codex, Kind::Opencode] {

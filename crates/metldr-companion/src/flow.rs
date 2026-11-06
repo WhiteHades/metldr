@@ -219,6 +219,51 @@ impl Owner {
         )?;
         self.emit(reply)
     }
+    fn reply_watch(&mut self, request: &str, subscription: &Subscription) -> Result<bool> {
+        self.require_conversation(&subscription.scope)?;
+        if let Some(run) = self
+            .state
+            .view
+            .runs
+            .iter()
+            .find(|run| run.id == subscription.run)
+        {
+            let ended = run.status.terminal();
+            self.reply_view(Some(request), "view", ended)?;
+            return Ok(ended);
+        }
+        let (history, view) = self.view_parts();
+        let profiles = view.native_fingerprints()?;
+        let (reply, ended) = history.edit(|edit| {
+            let state = edit.project(&subscription.scope, Some(&subscription.run))?;
+            let ended = state
+                .view
+                .runs
+                .iter()
+                .find(|run| run.id == subscription.run)
+                .ok_or("watched run is absent")?
+                .status
+                .terminal();
+            let runs: Vec<_> = state.view.runs.iter().map(|run| run.id.as_str()).collect();
+            let actions = edit.browser_view(&subscription.scope, &runs)?;
+            let choices =
+                edit.native_choices(&subscription.scope, state.view.source.as_ref(), &profiles)?;
+            Ok((
+                view.reply(
+                    &state,
+                    Some(request),
+                    "view",
+                    ended,
+                    &actions,
+                    &subscription.scope,
+                    &choices,
+                )?,
+                ended,
+            ))
+        })?;
+        self.emit(reply)?;
+        Ok(ended)
+    }
     pub(super) fn publish(&mut self) -> Result<()> {
         self.reply_view(None, "changed", false)?;
         let subscriptions: Vec<_> = self
@@ -227,19 +272,15 @@ impl Owner {
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         for (request, subscription) in subscriptions {
-            self.require_conversation(&subscription.scope)?;
-            let run = subscription.run;
-            let ended = self
-                .state
-                .view
-                .runs
-                .iter()
-                .find(|r| r.id == run)
-                .is_some_and(|r| r.status.terminal());
-            self.reply_view(Some(&request), "view", ended)?;
-            if ended {
-                self.subscribers.remove(&request);
+            match self.reply_watch(&request, &subscription) {
+                Ok(false) => continue,
+                Ok(true) => {}
+                Err(error) if fatal(error.as_ref()) => return Err(error),
+                Err(_) => {
+                    self.emit(json!({"v":crate::WIRE_VERSION,"request":request,"kind":"error","message":"watched run is unavailable"}))?;
+                }
             }
+            self.subscribers.remove(&request);
         }
         self.prune_pi_ui();
         Ok(())

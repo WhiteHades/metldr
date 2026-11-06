@@ -240,23 +240,6 @@ async fn codex_input_replies_and_withdrawals_preserve_owned_waiters() -> Result<
     owner
         .subscribers
         .insert("stale-input-view".into(), subscription.clone());
-    let error = owner
-        .codex_input_reply(
-            "retry",
-            &run,
-            &request,
-            crate::codex_input::Answer::Accept {
-                value: BTreeMap::new(),
-            },
-        )
-        .unwrap_err();
-    assert!(!crate::flow::fatal(error.as_ref()));
-    assert!(
-        receivers
-            .iter()
-            .all(|r| matches!(r.try_recv(), Err(mpsc::TryRecvError::Empty)))
-    );
-    owner.subscribers.clear();
     owner.codex_input_reply(
         "reply",
         &run,
@@ -265,6 +248,7 @@ async fn codex_input_replies_and_withdrawals_preserve_owned_waiters() -> Result<
             value: BTreeMap::new(),
         },
     )?;
+    assert!(owner.subscribers.is_empty());
     assert!(matches!(receivers[0].try_recv()?, InputAnswer::Accept(value) if value.is_empty()));
     assert!(matches!(
         receivers[1].try_recv(),
@@ -274,16 +258,8 @@ async fn codex_input_replies_and_withdrawals_preserve_owned_waiters() -> Result<
     owner
         .subscribers
         .insert("stale-input-view".into(), subscription);
-    let error = owner
-        .codex_input_withdraw(&run, inputs[1].id())
-        .unwrap_err();
-    assert!(!crate::flow::fatal(error.as_ref()));
-    assert!(matches!(
-        receivers[1].try_recv(),
-        Err(mpsc::TryRecvError::Empty)
-    ));
-    owner.subscribers.clear();
     owner.codex_input_withdraw(&run, inputs[1].id())?;
+    assert!(owner.subscribers.is_empty());
     assert!(owner.codex_input.is_empty());
     assert!(matches!(
         receivers[1].try_recv(),
@@ -1126,14 +1102,8 @@ fn same_provider_pi_inputs_keep_sibling_waiters() -> Result<()> {
             run: a.clone(),
         },
     );
-    let error = owner
-        .pi_ui_reply("rollback", &a, &request_a, Answer::Select("yes".into()))
-        .unwrap_err();
-    assert!(!crate::flow::fatal(error.as_ref()));
-    assert!(matches!(first.try_recv(), Err(mpsc::TryRecvError::Empty)));
-    assert!(matches!(second.try_recv(), Err(mpsc::TryRecvError::Empty)));
-    owner.subscribers.clear();
     owner.pi_ui_change(&a, Change::Withdraw { key: 1 })?;
+    assert!(owner.subscribers.is_empty());
     assert!(matches!(
         first.try_recv(),
         Err(mpsc::TryRecvError::Disconnected)
@@ -1230,14 +1200,8 @@ async fn same_provider_codex_inputs_keep_sibling_waiters() -> Result<()> {
             run: a.clone(),
         },
     );
-    let error = owner
-        .codex_input_reply("rollback", &a, &request_a, answer())
-        .unwrap_err();
-    assert!(!crate::flow::fatal(error.as_ref()));
-    assert!(matches!(first.try_recv(), Err(mpsc::TryRecvError::Empty)));
-    assert!(matches!(second.try_recv(), Err(mpsc::TryRecvError::Empty)));
-    owner.subscribers.clear();
     owner.codex_input_withdraw(&a, input.id())?;
+    assert!(owner.subscribers.is_empty());
     assert!(matches!(
         first.try_recv(),
         Err(mpsc::TryRecvError::Disconnected)
