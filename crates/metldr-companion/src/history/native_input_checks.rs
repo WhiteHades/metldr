@@ -1026,6 +1026,12 @@ fn paired_owner(
     [String; 2],
 )> {
     let (directory, mut original, first) = input_fixture(engine, false)?;
+    let second = add_native_sibling(&mut original, &first)?;
+    let (owner, frames) = import_owner(&directory, original, &first)?;
+    Ok((directory, owner, frames, [first, second]))
+}
+
+fn add_native_sibling(original: &mut crate::model::Store, first: &str) -> Result<String> {
     let mut run = original
         .view
         .runs
@@ -1036,7 +1042,7 @@ fn paired_owner(
     run.id = original.id()?;
     let second = run.id.clone();
     let workflow_id = original.id()?;
-    let mut launch = original.launches[&first].clone();
+    let mut launch = original.launches[first].clone();
     match &mut launch {
         crate::agent_model::Launch::Pi { workflow, .. } => {
             let mut value = original.workflows[workflow].clone();
@@ -1062,8 +1068,7 @@ fn paired_owner(
     original.launches.insert(second.clone(), launch);
     original.view.runs.push(run);
     original.validate()?;
-    let (owner, frames) = import_owner(&directory, original, &first)?;
-    Ok((directory, owner, frames, [first, second]))
+    Ok(second)
 }
 
 fn last_view(frames: &Arc<std::sync::Mutex<Vec<u8>>>) -> Result<serde_json::Value> {
@@ -1286,6 +1291,59 @@ async fn same_provider_codex_inputs_keep_sibling_waiters() -> Result<()> {
     owner.codex_input_reply("sibling", &b, &request_b, answer())?;
     assert!(matches!(second.try_recv()?, InputAnswer::Accept(value) if value.is_empty()));
     stop_owner(&mut owner);
+    {
+        let (directory, mut original, a) = input_fixture("codex", false)?;
+        let b = add_native_sibling(&mut original, &a)?;
+        let c = add_native_sibling(&mut original, &a)?;
+        let (mut owner, frames) = import_owner(&directory, original, &a)?;
+        let (answer_a, replied) = mpsc::sync_channel(1);
+        owner.codex_input_offer(
+            &a,
+            inputs[2].id().clone(),
+            inputs[2].prompt().clone(),
+            answer_a,
+        )?;
+        let request = last_view(&frames)?["codex_input"]["pending"][0]["request"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        owner.codex_input_reply("empty-registered-owner", &a, &request, answer())?;
+        assert!(matches!(replied.try_recv()?, InputAnswer::Accept(value) if value.is_empty()));
+        let (answer_b, pending) = mpsc::sync_channel(1);
+        owner.codex_input_offer(
+            &b,
+            inputs[2].id().clone(),
+            inputs[2].prompt().clone(),
+            answer_b,
+        )?;
+        owner.disconnect_codex_input()?;
+        for run in [&a, &b] {
+            assert!(
+                owner.operations[run]
+                    .stop
+                    .load(std::sync::atomic::Ordering::Acquire)
+            );
+            assert_eq!(
+                owner.native_input_status(run, crate::agent_settings::Kind::Codex)?,
+                Some(Status::StopRequested)
+            );
+        }
+        assert!(matches!(
+            pending.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
+        assert!(owner.codex_input.is_empty());
+        assert!(
+            !owner.operations[&c]
+                .stop
+                .load(std::sync::atomic::Ordering::Acquire)
+        );
+        assert_eq!(
+            owner.native_input_status(&c, crate::agent_settings::Kind::Codex)?,
+            Some(Status::Running)
+        );
+        stop_owner(&mut owner);
+    }
     let exit = session.close().await?;
     assert!(!exit.forced && exit.code == Some(0));
     Ok(())
