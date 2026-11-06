@@ -140,7 +140,7 @@ impl Owner {
         let result =
             self.commit_native_input(run, kind.ok_or("invalid native permission agent")?, next);
         if let Err(error) = result {
-            if crate::native_input_records::fatal(error.as_ref()) {
+            if crate::flow::fatal(error.as_ref()) {
                 return Err(error);
             }
             let ack = self
@@ -179,7 +179,7 @@ impl Owner {
             .ok_or("resolved native permission disappeared")?;
         let result = self.commit_native_input(run, kind, next);
         if let Err(error) = result {
-            if crate::native_input_records::fatal(error.as_ref()) {
+            if crate::flow::fatal(error.as_ref()) {
                 return Err(error);
             }
             self.native_permissions.insert(request, pending);
@@ -232,7 +232,7 @@ impl Owner {
             .ok_or("stale native permission request")?;
         let result = self.commit_native_input(run, kind, next);
         if let Err(error) = result {
-            if !crate::native_input_records::fatal(error.as_ref()) {
+            if !crate::flow::fatal(error.as_ref()) {
                 self.native_permissions.insert(index, pending);
             }
             return Err(error);

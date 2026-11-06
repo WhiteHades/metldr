@@ -170,7 +170,7 @@ impl Owner {
         drop(projected);
         if let Err(error) = self.commit_native_input(run, crate::agent_settings::Kind::Codex, next)
         {
-            if crate::native_input_records::fatal(error.as_ref()) {
+            if crate::flow::fatal(error.as_ref()) {
                 let _ = fallback_answer.try_send(InputAnswer::Cancel);
                 return Err(error);
             }
@@ -231,7 +231,7 @@ impl Owner {
             .ok_or("Codex input request is stale")?;
         if let Err(error) = self.commit_native_input(run, crate::agent_settings::Kind::Codex, next)
         {
-            if !crate::native_input_records::fatal(error.as_ref()) {
+            if !crate::flow::fatal(error.as_ref()) {
                 self.codex_input
                     .as_mut()
                     .ok_or("Codex input request is stale")?
@@ -264,7 +264,7 @@ impl Owner {
         let empty = self.codex_input.take_if(|state| state.pending.is_empty());
         if let Err(error) = self.commit_native_input(run, crate::agent_settings::Kind::Codex, next)
         {
-            if !crate::native_input_records::fatal(error.as_ref()) {
+            if !crate::flow::fatal(error.as_ref()) {
                 if let Some(state) = empty {
                     self.codex_input = Some(state);
                 }

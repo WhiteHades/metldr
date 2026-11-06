@@ -1,12 +1,9 @@
 use crate::{
     Result,
     browser_action::{Action, Outcome, Proposal},
-    flow::Owner,
+    flow::{Owner, acknowledge},
 };
-use std::{
-    io,
-    sync::{atomic::Ordering, mpsc::SyncSender},
-};
+use std::sync::{atomic::Ordering, mpsc::SyncSender};
 
 type Reply = SyncSender<std::result::Result<Action, String>>;
 
@@ -111,7 +108,7 @@ impl Owner {
                     Ok((action, true)) => {
                         let review = match budget.as_ref().map(Budget::pause).transpose() {
                             Ok(review) => review,
-                            Err(error) => return reply(ack, Err(error)),
+                            Err(error) => return acknowledge(ack, Err(error)),
                         };
                         self.browser_approval = Some(PendingApproval {
                             run: action.proposal.run,
@@ -121,7 +118,7 @@ impl Owner {
                         });
                         Ok(())
                     }
-                    Err(error) => reply(ack, Err(error)),
+                    Err(error) => acknowledge(ack, Err(error)),
                 }
             }
             Event::Dispatch {
@@ -137,7 +134,7 @@ impl Owner {
                         edit.dispatch_browser(execution, &action, revision)
                     })
                 })();
-                reply(ack, result)
+                acknowledge(ack, result)
             }
             Event::Observed {
                 action,
@@ -155,7 +152,7 @@ impl Owner {
                         edit.settle_browser(execution, &action, revision, outcome)
                     })
                 })();
-                reply(ack, result)
+                acknowledge(ack, result)
             }
         }
     }
@@ -187,25 +184,6 @@ impl Owner {
             && let Some(pending) = self.browser_approval.take()
         {
             pending.reply(Err("browser action stopped before dispatch".into()));
-        }
-    }
-}
-
-fn reply(ack: Reply, result: Result<Action>) -> Result<()> {
-    match result {
-        Ok(record) => {
-            let _ = ack.send(Ok(record));
-            Ok(())
-        }
-        Err(error) => {
-            let _ = ack.send(Err(error.to_string()));
-            if error.downcast_ref::<io::Error>().is_some()
-                || crate::history::is_failure(error.as_ref())
-            {
-                Err(error)
-            } else {
-                Ok(())
-            }
         }
     }
 }

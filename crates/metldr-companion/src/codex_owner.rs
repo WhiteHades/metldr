@@ -144,21 +144,6 @@ impl Owner {
                 .ok_or("Codex workflow revision exhausted")?;
             Ok(true)
         });
-        match result {
-            Ok(ready) => {
-                let _ = ack.send(Ok(ready));
-                Ok(())
-            }
-            Err(error) => {
-                let _ = ack.send(Err(error.to_string()));
-                if error.downcast_ref::<std::io::Error>().is_some()
-                    || crate::history::is_failure(error.as_ref())
-                {
-                    Err(error)
-                } else {
-                    Ok(())
-                }
-            }
-        }
+        crate::flow::acknowledge(ack, result)
     }
 }
