@@ -36,6 +36,7 @@ mod native_tools;
 mod owner;
 mod pi_ui;
 mod providers;
+mod run;
 mod run_details;
 mod run_reference;
 mod saved_source;
@@ -490,113 +491,10 @@ impl UiBridge {
     }
 
     pub async fn run(&self, request: UiRunRequest, emit: Function) -> Result<(), JsValue> {
-        self.core.ensure_current().map_err(js_error)?;
-        if request.thread != self.core.scope.conversation {
-            return Err(crate::err(
-                "The UI request belongs to another conversation.",
-            ));
-        }
-        if self.core.page.settings_blocked() {
-            return Err(js_error(FlowError::HistoryBusy));
-        }
         self.core
-            .owner
-            .borrow_mut()
-            .begin(&request.id)
-            .map_err(js_error)?;
-        self.core.page.notify_settings();
-        let prepared = async {
-            let Some(view) = self.core.prepare_current().await? else {
-                return Ok(None);
-            };
-            if view.runs.iter().any(|run| !run.status.is_terminal()) {
-                return Err(FlowError::HistoryBusy);
-            }
-            let source = view.source().cloned().ok_or(FlowError::NoSource)?;
-            let destination =
-                composer::resolve(&view, &request.destination).map_err(FlowError::InvalidInput)?;
-            let messages = vec![AgUiMessage::User {
-                id: request.message.clone(),
-                content: request.text.as_str().into(),
-            }];
-            let stream = RunStream::new(request.thread, request.id.clone(), messages)
-                .map_err(FlowError::InvalidInput)?;
-            Ok::<_, FlowError>(Some((source, destination, stream)))
-        }
-        .await;
-        let (source, destination, mut stream) = match prepared {
-            Ok(Some(value)) => value,
-            Ok(None) => {
-                self.core.owner.borrow_mut().not_sent();
-                self.core.page.notify_settings();
-                return Ok(());
-            }
-            Err(error) => {
-                self.core.owner.borrow_mut().not_sent();
-                self.core.page.notify_settings();
-                return Err(js_error(error));
-            }
-        };
-        self.core.ensure_current().map_err(js_error)?;
-        let flow = self.core.flow();
-        let started = composer::dispatch(
-            &flow,
-            self.core.scope.clone(),
-            source,
-            destination,
-            request.text,
-            &request.mode,
-        )
-        .await;
-        let native = match started {
-            Ok(native) => native,
-            Err(error) => {
-                self.core.owner.borrow_mut().start_failed(&error);
-                self.core.page.notify_settings();
-                return Err(js_error(error));
-            }
-        };
-        self.core.ensure_current().map_err(js_error)?;
-        if !self.core.flow().same_connection(&flow) {
-            return Err(js_error(FlowError::HistoryStale));
-        }
-        let stop = self.core.owner.borrow_mut().accepted(native.clone());
-        self.core.page.notify_settings();
-        let result = async {
-            let events = stream
-                .accept_question(&native)
-                .map_err(FlowError::Protocol)?;
-            emit_events(events, &emit)?;
-            if stop {
-                flow.request_stop(self.core.scope.clone(), native.clone())
-                    .await?;
-            }
-            self.core.stream(&native, &mut stream, &emit).await
-        }
-        .await;
-        match result {
-            Ok(()) => self.core.owner.borrow_mut().finished(&native),
-            Err(error) => {
-                if self.core.ensure_current().is_ok()
-                    && self.core.flow().same_connection(&flow)
-                    && !matches!(error, FlowError::Disconnected)
-                {
-                    let _ = flow
-                        .request_stop(self.core.scope.clone(), native.clone())
-                        .await;
-                }
-                if self.core.ensure_current().is_ok() {
-                    self.core
-                        .owner
-                        .borrow_mut()
-                        .run_uncertain(&request.id, &native);
-                }
-                self.core.page.notify_settings();
-                return Err(js_error(error));
-            }
-        }
-        self.core.page.notify_settings();
-        Ok(())
+            .run(request, |event| emit_event(event, &emit))
+            .await
+            .map_err(js_error)
     }
 
     pub async fn stop(&self, id: String) -> Result<String, JsValue> {
@@ -818,7 +716,7 @@ impl Core {
         &self,
         native: &RunId,
         stream: &mut RunStream,
-        emit: &Function,
+        emit: &mut impl FnMut(Event) -> Result<(), FlowError>,
     ) -> Result<(), FlowError> {
         loop {
             self.ensure_current()?;
@@ -873,7 +771,7 @@ impl Core {
         view: PageView,
         native: &RunId,
         stream: &mut RunStream,
-        emit: &Function,
+        emit: &mut impl FnMut(Event) -> Result<(), FlowError>,
     ) -> Result<bool, FlowError> {
         let view = self.accept(view)?;
         let run = view
@@ -881,17 +779,17 @@ impl Core {
             .iter()
             .find(|run| run.id == *native)
             .ok_or_else(|| FlowError::Protocol("The watched UI run is missing.".into()))?;
-        emit_events(stream.push(run).map_err(FlowError::Protocol)?, emit)?;
+        for event in stream.push(run).map_err(FlowError::Protocol)? {
+            emit(event)?;
+        }
         Ok(run.status.is_terminal())
     }
 }
 
-fn emit_events(events: Vec<Event>, emit: &Function) -> Result<(), FlowError> {
-    for event in events {
-        let encoded = bounded_json(&event)?;
-        emit.call1(&JsValue::UNDEFINED, &encoded.into())
-            .map_err(|_| FlowError::Host("The UI event consumer disconnected.".into()))?;
-    }
+fn emit_event(event: Event, emit: &Function) -> Result<(), FlowError> {
+    let encoded = bounded_json(&event)?;
+    emit.call1(&JsValue::UNDEFINED, &encoded.into())
+        .map_err(|_| FlowError::Host("The UI event consumer disconnected.".into()))?;
     Ok(())
 }
 
