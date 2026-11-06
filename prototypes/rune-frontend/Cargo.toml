@@ -1,0 +1,19 @@
+[package]
+name = "metldr-rune-probe"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+rune = { path = "../../vendor/rune/crates/rune", default-features = false, features = ["accessibility", "embedded-fonts", "webgl"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "=0.2.128"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[workspace]
