@@ -1,4 +1,4 @@
-.PHONY: rust check-rust check-codex check-pi check-opencode check-browser-tools check-responses check-google check-messages check-chat check-credentials check-conversation check-panel panel-wasm check-companion companion
+.PHONY: rust check-rust check-codex check-pi check-opencode check-browser-tools check-sse check-responses check-google check-messages check-chat check-credentials check-conversation check-panel panel-wasm check-companion companion
 
 rust:
 	npm run build:rust
@@ -17,6 +17,9 @@ check-opencode:
 
 check-browser-tools:
 	cargo test --locked --manifest-path crates/metldr-browser-tools/Cargo.toml
+
+check-sse:
+	cargo test --locked --manifest-path crates/metldr-sse/Cargo.toml
 
 check-responses:
 	cargo test --locked --manifest-path crates/metldr-responses/Cargo.toml
