@@ -148,6 +148,7 @@ fn with_owner_seed(
                 stop: Arc::new(AtomicBool::new(false)),
                 worker: std::thread::spawn(|| {}),
                 correction: None,
+                browser_io: None,
             },
         )]),
         tx,
@@ -158,7 +159,6 @@ fn with_owner_seed(
         pi_ui: Default::default(),
         codex_input: Default::default(),
         browser_approval: None,
-        browser_io: None,
         browser_route: None,
         responses_route: None,
         record_history: history,
@@ -167,7 +167,8 @@ fn with_owner_seed(
         chat_route: None,
     };
     check(&mut owner, proposal);
-    for (_, operation) in std::mem::take(&mut owner.operations) {
+    for (_, mut operation) in std::mem::take(&mut owner.operations) {
+        drop(operation.browser_io.take());
         operation.worker.join().unwrap();
     }
     drop(owner);
@@ -596,6 +597,7 @@ fn saved_fixture_start_replays_but_cannot_retarget_https() {
             let source = owner.state.view.source.as_ref().unwrap().id.clone();
             let fixture = crate::https_profile::Config::Fixture.bind(address).unwrap();
             owner.browser_route = Some(fixture);
+            owner.browser_io_finish(&proposal.run);
             owner
                 .operations
                 .remove(&proposal.run)
@@ -734,6 +736,7 @@ fn saved_fixture_start_replays_but_cannot_retarget_https() {
             },
             move |owner, proposal| {
                 set_route(owner, kind, Some(profile));
+                owner.browser_io_finish(&proposal.run);
                 owner
                     .operations
                     .remove(&proposal.run)
@@ -1242,13 +1245,226 @@ fn browser_restart_never_replays_approved_or_dispatched_actions() {
 }
 
 #[test]
+fn browser_transport_sibling_waiters_keep_run_ownership() {
+    use crate::browser_io::{Call, Operation as BrowserOperation, Slot, WireReply};
+    use serde_json::json;
+    use tokio::sync::{mpsc::error::TryRecvError, oneshot};
+
+    for mode in 0..3 {
+        let sibling = std::cell::OnceCell::new();
+        with_owner_seed(
+            false,
+            |state, proposal| {
+                let id = state.id().unwrap();
+                let mut run = state.view.runs[0].clone();
+                run.id = id.clone();
+                state.view.runs.push(run);
+                state
+                    .launches
+                    .insert(id.clone(), state.launches[&proposal.run].clone());
+                sibling.set(id).unwrap();
+            },
+            |owner, proposal| {
+                let a = proposal.run;
+                let b = sibling.get().unwrap();
+                let selection = owner.record_history.selection().unwrap();
+                owner
+                    .record_history
+                    .edit(|edit| edit.current_execution(&selection, b))
+                    .unwrap();
+                owner.operations.insert(
+                    b.clone(),
+                    Operation {
+                        stop: Arc::new(AtomicBool::new(false)),
+                        worker: std::thread::spawn(|| {}),
+                        correction: None,
+                        browser_io: None,
+                    },
+                );
+                let (transport, frames) = crate::transport::Transport::captured();
+                owner.transport = transport;
+                let command = || BrowserOperation::Command {
+                    tab: 7,
+                    session: None,
+                    method: "Runtime.enable".into(),
+                    params: json!({}),
+                };
+                let call = |owner: &mut Owner, run: &str, operation| {
+                    let (ack, reply) = oneshot::channel();
+                    owner
+                        .browser_io_call(Call {
+                            run: run.into(),
+                            operation,
+                            ack,
+                        })
+                        .unwrap();
+                    reply
+                };
+                let (slot, mut events_a) = Slot::new(7);
+                owner.operations.get_mut(&a).unwrap().browser_io = Some(Box::new(slot));
+                let mut reply_a = call(owner, &a, command());
+                let (slot, mut events_b) = Slot::new(7);
+                owner.operations.get_mut(b).unwrap().browser_io = Some(Box::new(slot));
+                assert!(
+                    matches!(reply_a.try_recv(), Err(oneshot::error::TryRecvError::Empty)),
+                    "first browser waiter must survive sibling registration"
+                );
+                let mut reply_b = call(owner, b, command());
+                let bytes = frames.lock().unwrap().clone();
+                let mut cursor = std::io::Cursor::new(bytes);
+                for run in [&a, b] {
+                    let bytes = crate::wire::read_raw(&mut cursor, crate::FRAME_MAX)
+                        .unwrap()
+                        .unwrap();
+                    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                    assert_eq!(value["run"], run.as_str());
+                    assert_eq!(value["call"], 1);
+                }
+                for (run, id) in [("stale-run", 1), (a.as_str(), 2)] {
+                    owner.browser_io_reply(run, id, WireReply::Ok { value: json!({}) });
+                }
+                assert!(matches!(
+                    reply_a.try_recv(),
+                    Err(oneshot::error::TryRecvError::Empty)
+                ));
+                assert!(matches!(
+                    reply_b.try_recv(),
+                    Err(oneshot::error::TryRecvError::Empty)
+                ));
+                owner.browser_io_reply(&a, 1, WireReply::Ok { value: json!("a") });
+                assert_eq!(reply_a.blocking_recv().unwrap().unwrap(), json!("a"));
+                assert!(matches!(
+                    reply_b.try_recv(),
+                    Err(oneshot::error::TryRecvError::Empty)
+                ));
+                owner.browser_io_reply(b, 1, WireReply::Ok { value: json!("b") });
+                assert_eq!(reply_b.blocking_recv().unwrap().unwrap(), json!("b"));
+
+                let mut pending_b = call(owner, b, command());
+                if mode == 1 {
+                    let (ack, failed) = oneshot::channel();
+                    owner.transport.fail_next_emit();
+                    let error = owner
+                        .browser_io_call(Call {
+                            run: a.clone(),
+                            operation: command(),
+                            ack,
+                        })
+                        .unwrap_err();
+                    assert!(crate::flow::fatal(error.as_ref()));
+                    assert!(failed.blocking_recv().unwrap().is_err());
+                    assert!(events_a.blocking_recv().is_none());
+                } else if mode == 2 {
+                    let pending_a = call(owner, &a, command());
+                    let worker = std::thread::spawn(move || {
+                        let runtime = tokio::runtime::Builder::new_current_thread()
+                            .enable_time()
+                            .build()
+                            .unwrap();
+                        let result = runtime.block_on(async {
+                            tokio::time::timeout(std::time::Duration::from_secs(2), pending_a).await
+                        });
+                        assert_eq!(
+                            result
+                                .expect("settlement must end transport before joining worker")
+                                .unwrap()
+                                .unwrap_err(),
+                            "browser transport ended"
+                        );
+                    });
+                    std::mem::replace(&mut owner.operations.get_mut(&a).unwrap().worker, worker)
+                        .join()
+                        .unwrap();
+                    owner.settled(&a, Ok(()), false).unwrap();
+                    assert!(events_a.blocking_recv().is_none());
+                } else {
+                    let pending_a = call(owner, &a, command());
+                    owner.browser_io_event(
+                        &a,
+                        7,
+                        None,
+                        "Runtime.consoleAPICalled".into(),
+                        json!({}),
+                    );
+                    assert_eq!(
+                        events_a.blocking_recv().unwrap().method,
+                        "Runtime.consoleAPICalled"
+                    );
+                    assert!(matches!(events_b.try_recv(), Err(TryRecvError::Empty)));
+                    owner.browser_io_event(&a, 7, None, "metldr.detached".into(), json!({}));
+                    assert_eq!(
+                        pending_a.blocking_recv().unwrap().unwrap_err(),
+                        "browser transport ended"
+                    );
+                    assert!(events_a.blocking_recv().is_none());
+                    assert!(call(owner, &a, command()).blocking_recv().unwrap().is_err());
+                    let detached = call(owner, &a, BrowserOperation::Detach { tab: 7 });
+                    owner.browser_io_reply(
+                        &a,
+                        3,
+                        WireReply::Ok {
+                            value: json!({"detached":true}),
+                        },
+                    );
+                    assert_eq!(
+                        detached.blocking_recv().unwrap().unwrap(),
+                        json!({"detached":true})
+                    );
+                    owner.browser_io_finish(&a);
+                }
+                assert_eq!(
+                    call(owner, &a, command())
+                        .blocking_recv()
+                        .unwrap()
+                        .unwrap_err(),
+                    "browser transport is unavailable"
+                );
+                assert!(matches!(
+                    pending_b.try_recv(),
+                    Err(oneshot::error::TryRecvError::Empty)
+                ));
+                owner.browser_io_event(
+                    b,
+                    7,
+                    None,
+                    "Runtime.executionContextsCleared".into(),
+                    json!({}),
+                );
+                assert_eq!(
+                    events_b.blocking_recv().unwrap().method,
+                    "Runtime.executionContextsCleared"
+                );
+                owner.browser_io_reply(
+                    b,
+                    2,
+                    WireReply::Ok {
+                        value: json!("still b"),
+                    },
+                );
+                assert_eq!(
+                    pending_b.blocking_recv().unwrap().unwrap(),
+                    json!("still b")
+                );
+                assert!(
+                    owner
+                        .operations
+                        .values()
+                        .all(|operation| !operation.stop.load(Ordering::Acquire))
+                );
+                owner.browser_io_finish(b);
+            },
+        );
+    }
+}
+
+#[test]
 fn browser_transport_correlates_replies_and_fails_closed_on_detach() {
     use crate::browser_io::{Call, Operation, Slot, WireReply};
     use serde_json::json;
     with_owner(false, |owner, proposal| {
         let run = proposal.run;
-        let (slot, mut events) = Slot::new(run.clone(), 7);
-        owner.browser_io = Some(slot);
+        let (slot, mut events) = Slot::new(7);
+        owner.operations.get_mut(&run).unwrap().browser_io = Some(Box::new(slot));
         let (ack, mut reply) = tokio::sync::oneshot::channel();
         owner
             .browser_io_call(Call {
@@ -1329,7 +1545,7 @@ fn browser_transport_correlates_replies_and_fails_closed_on_detach() {
         assert!(reply.blocking_recv().unwrap().is_err());
         assert!(events.blocking_recv().is_none());
         assert!(
-            owner.browser_io.is_some(),
+            owner.operations[&run].browser_io.is_some(),
             "retain the run's cleanup channel"
         );
         let (ack, reply) = tokio::sync::oneshot::channel();
@@ -1373,6 +1589,6 @@ fn browser_transport_correlates_replies_and_fails_closed_on_detach() {
             json!({"detached":true})
         );
         owner.browser_io_finish(&run);
-        assert!(owner.browser_io.is_none());
+        assert!(owner.operations[&run].browser_io.is_none());
     });
 }

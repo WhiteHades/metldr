@@ -66,6 +66,7 @@ fn owner(
                     stop: Arc::new(AtomicBool::new(false)),
                     worker,
                     correction: None,
+                    browser_io: None,
                 },
             )]),
             tx,
@@ -76,7 +77,6 @@ fn owner(
             pi_ui: Default::default(),
             codex_input: Default::default(),
             browser_approval: None,
-            browser_io: None,
             browser_route: None,
             responses_route: None,
             google_route: None,
@@ -272,6 +272,7 @@ fn actual_owner_native_callbacks_bind_persist_and_fail_closed() -> Result<()> {
                 })
             ));
             assert_eq!(fs::read(directory.0.join("snapshot.json"))?, snapshot);
+            owner.browser_io_finish(&run);
             owner
                 .operations
                 .remove(&run)
@@ -309,6 +310,7 @@ fn actual_owner_native_callbacks_bind_persist_and_fail_closed() -> Result<()> {
             assert_eq!(serde_json::to_value(&owner.state)?, before);
             assert!(frames.lock().unwrap().is_empty());
             assert_eq!(fs::read(directory.0.join("snapshot.json"))?, snapshot);
+            owner.browser_io_finish(&run);
             owner
                 .operations
                 .remove(&run)
@@ -510,6 +512,7 @@ fn actual_owner_native_callbacks_bind_persist_and_fail_closed() -> Result<()> {
             stale?;
             assert!(stale_ack.is_err());
         }
+        owner.browser_io_finish(&run);
         owner
             .operations
             .remove(&run)

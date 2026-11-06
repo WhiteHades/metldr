@@ -110,7 +110,6 @@ impl Owner {
             && self.pi_ui.is_empty()
             && self.codex_input.is_empty()
             && self.browser_approval.is_none()
-            && self.browser_io.is_none()
             && self.subscribers.is_empty()
     }
 

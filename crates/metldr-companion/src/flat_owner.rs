@@ -199,6 +199,7 @@ impl Owner {
                 stop,
                 worker,
                 correction: None,
+                browser_io: None,
             },
         );
         self.emit(self.started_reply(id, scope, &run)?)

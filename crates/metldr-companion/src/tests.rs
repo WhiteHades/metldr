@@ -168,6 +168,7 @@ mod tests {
                     stop: Arc::new(AtomicBool::new(true)),
                     worker,
                     correction: None,
+                    browser_io: None,
                 },
             )]),
             tx,
@@ -178,7 +179,6 @@ mod tests {
             pi_ui: Default::default(),
             codex_input: Default::default(),
             browser_approval: None,
-            browser_io: None,
             browser_route: None,
             responses_route: None,
             google_route: None,
@@ -192,6 +192,7 @@ mod tests {
                 stop: Arc::new(AtomicBool::new(false)),
                 worker: thread::spawn(|| {}),
                 correction: None,
+                browser_io: None,
             },
         );
         let worker = owner.operations[&run].worker.thread().id();
@@ -312,7 +313,6 @@ mod tests {
             pi_ui: Default::default(),
             codex_input: Default::default(),
             browser_approval: None,
-            browser_io: None,
             browser_route: None,
             responses_route: None,
             google_route: None,
@@ -526,6 +526,7 @@ mod tests {
                     stop: stop.clone(),
                     worker: thread::spawn(|| {}),
                     correction: None,
+                    browser_io: None,
                 },
             )]),
             tx,
@@ -536,7 +537,6 @@ mod tests {
             pi_ui: Default::default(),
             codex_input: Default::default(),
             browser_approval: None,
-            browser_io: None,
             browser_route: None,
             responses_route: None,
             google_route: None,
@@ -653,6 +653,7 @@ mod tests {
                 stop: second_stop.clone(),
                 worker: thread::spawn(|| {}),
                 correction: None,
+                browser_io: None,
             },
         );
 

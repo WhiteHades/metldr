@@ -77,7 +77,6 @@ fn owner(
             pi_ui: Default::default(),
             codex_input: Default::default(),
             browser_approval: None,
-            browser_io: None,
             browser_route: None,
             responses_route: None,
             google_route: None,

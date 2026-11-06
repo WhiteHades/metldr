@@ -135,7 +135,6 @@ pub(super) fn run() -> Result<()> {
         pi_ui: Default::default(),
         codex_input: Default::default(),
         browser_approval: None,
-        browser_io: None,
         browser_route,
         responses_route,
         google_route,
@@ -217,7 +216,13 @@ pub(super) fn run() -> Result<()> {
                     owner.subscribers.clear();
                     owner.disconnect_pi_ui()?;
                     owner.disconnect_codex_input()?;
-                    if let Some(run) = owner.browser_io.as_ref().map(|s| s.run.clone()) {
+                    let runs: Vec<_> = owner
+                        .operations
+                        .iter()
+                        .filter(|(_, operation)| operation.browser_io.is_some())
+                        .map(|(run, _)| run.clone())
+                        .collect();
+                    for run in runs {
                         owner.browser_io_finish(&run);
                         owner.cancel_browser_approval(&run);
                         owner.cancel_native_permissions(&run);
@@ -227,8 +232,8 @@ pub(super) fn run() -> Result<()> {
                     owner.invalidate_history();
                     owner.disconnect_pi_ui()?;
                     owner.disconnect_codex_input()?;
-                    if let Some(run) = owner.browser_io.as_ref().map(|s| s.run.clone()) {
-                        owner.browser_io_finish(&run);
+                    for operation in owner.operations.values_mut() {
+                        drop(operation.browser_io.take());
                     }
                     closed = true;
                     input_error = error;

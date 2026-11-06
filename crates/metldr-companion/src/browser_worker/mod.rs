@@ -210,8 +210,7 @@ impl Owner {
             run: run.clone(),
             tx: self.tx.clone(),
         };
-        let (slot, events) = Slot::new(run.clone(), source.page.tab);
-        self.browser_io = Some(slot);
+        let (slot, events) = Slot::new(source.page.tab);
         let worker_run = run.clone();
         let instruction = text.to_owned();
         let tx = self.tx.clone();
@@ -250,6 +249,7 @@ impl Owner {
                 stop,
                 worker,
                 correction: None,
+                browser_io: Some(Box::new(slot)),
             },
         );
         self.emit(self.started_reply(id, scope, &run)?)

@@ -131,6 +131,7 @@ fn import_owner(
                         stop: Arc::new(AtomicBool::new(false)),
                         worker: thread::spawn(|| {}),
                         correction: None,
+                        browser_io: None,
                     },
                 )
             })
@@ -143,7 +144,6 @@ fn import_owner(
         pi_ui: Default::default(),
         codex_input: Default::default(),
         browser_approval: None,
-        browser_io: None,
         browser_route: None,
         responses_route: None,
         google_route: None,
@@ -161,7 +161,8 @@ fn sequence(owner: &Owner) -> Result<u64> {
 }
 
 fn stop_owner(owner: &mut Owner) {
-    for (_, operation) in std::mem::take(&mut owner.operations) {
+    for (_, mut operation) in std::mem::take(&mut owner.operations) {
+        drop(operation.browser_io.take());
         operation.worker.join().expect("owned input-check worker");
     }
 }
