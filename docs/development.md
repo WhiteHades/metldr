@@ -21,7 +21,7 @@ The toolbar opens the current page tools. Press Alt+Shift+M to open the browser 
 
 ## Native companion
 
-Provider and installed agent tasks need the native companion, built and registered separately for the extension ID. Linux is the verified native platform. Native installation on Windows and macOS is not verified. Follow the [companion setup guide](../crates/metldr-companion/README.md) to build and register it.
+Provider and installed agent tasks need the native companion, built and registered separately for the extension ID. Linux is the verified native platform. On macOS the companion checks pass, but its use with Chrome is not verified. Native installation on Windows is not verified. Follow the [companion setup guide](../crates/metldr-companion/README.md) to build and register it.
 
 ## Local AI setup
 

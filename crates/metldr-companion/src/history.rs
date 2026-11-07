@@ -15,7 +15,7 @@ pub(crate) use edit::{
     Observed, Selection,
 };
 mod import;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod migrate;
 mod schema;
 mod summary;
@@ -29,7 +29,7 @@ mod browser_owner_checks;
 mod checks;
 #[cfg(test)]
 mod conversation_checks;
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod cutover_checks;
 #[cfg(test)]
 mod edit_checks;
@@ -55,7 +55,7 @@ mod read_checks;
 mod recovery_checks;
 #[cfg(test)]
 mod settings_checks;
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod startup_checks;
 
 pub(crate) fn is_failure(error: &(dyn std::error::Error + Send + Sync + 'static)) -> bool {
@@ -69,13 +69,13 @@ pub(super) struct History {
 
 impl History {
     pub(super) fn load(directory: PathBuf) -> Result<(crate::store::Disk, Self)> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             let disk = crate::store::Disk::lock(directory)?;
             let history = migrate::load(&disk)?;
             Ok((disk, history))
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
             let _ = directory;
             Err(

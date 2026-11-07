@@ -43,7 +43,7 @@ Each group creates one source, 25 runs, three native workflows, three rejected b
 
 The `METLDR_HISTORY_LOAD_JSON` output reports seeding, reopen validation and ten query families. Each query has a first access, three warmups and 30 further observations. Query timings include validation and transaction setup and close. Reopen validation does not imply a cold operating system cache. Use independent paired processes for performance comparisons; observations within one process are correlated. Browser navigation, unfinished runs and legacy IndexedDB need separate workloads.
 
-Process checks that require companion executables are ignored by default. To run the current startup checks on Linux, build the executable and provide its full path:
+Process checks that require companion executables are ignored by default. To run the current startup checks on Linux or macOS, build the executable and provide its full path:
 
 ```sh
 cargo build --locked --manifest-path crates/metldr-companion/Cargo.toml
@@ -54,7 +54,7 @@ METLDR_STARTUP_BINARY="$PWD/crates/metldr-companion/target/debug/metldr-companio
 
 Use the actual output path if `CARGO_TARGET_DIR` is set. The two older executable compatibility checks also require fixture binaries. `METLDR_CUTOVER_OLD_BINARY` must name the earlier wire 9 companion that writes saved schema 8. `METLDR_HISTORY_OLD_BINARY` must name a companion that writes history format 10 through 18. Set `METLDR_HISTORY_EXPECT_FORMAT` to require a specific old format. The format 16 check also reads an independently prepared saved table through both executables. Run those checks explicitly with `--ignored` only when the matching fixtures are available. A skipped compatibility check does not establish upgrade support.
 
-Pair the executable with an extension that implements metldr's native wire version 19. The remaining Vue page tools and complete extension packaging are still being migrated. Linux is the verified native platform. The history loader refuses to start on Windows and macOS until their directory durability and installation checks are complete.
+Pair the executable with an extension that implements metldr's native wire version 19. The remaining Vue page tools and complete extension packaging are still being migrated. Linux is the verified native platform. On macOS the companion checks pass on APFS, including crash recovery at each history migration phase, but Chrome registration and power loss have not been tested. The history loader refuses to start on Windows until its directory durability and installation checks are complete.
 
 Conversations and complete saved results are stored in a local record database. Startup preserves the original snapshot backup before installing the new format. New chat creates an empty conversation, while selecting a saved conversation restores its page and results. Switching is unavailable during active work. A lost confirmation requires an explicit Retry using the same request rather than another creation. Viewing saved work does not change or replay an active task. History search covers the loaded conversation pages, and More loads the next page.
 
@@ -62,7 +62,7 @@ Saved native sessions remain selectable after a model task and browser restart. 
 
 To register the companion with Chrome:
 
-1. Copy the executable to a stable location and create a private state directory owned by your user. On Linux, give the state directory mode `700` and use a directory without a symbolic link.
+1. Copy the executable to a stable location and create a private state directory owned by your user. On Linux and macOS, give the state directory mode `700` and use a directory without a symbolic link.
 2. Save `metldr-companion.json` beside the executable with the configuration below. Replace the example extension ID and absolute paths with your own values. JSON paths must be complete paths.
 
 ```json
@@ -85,7 +85,7 @@ To register the companion with Chrome:
 }
 ```
 
-For Google Chrome on Linux, the user manifest directory is `~/.config/google-chrome/NativeMessagingHosts`. Use [Chrome's native messaging guide](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging) for other browser channels and platform registration paths. Chrome starts the executable and supplies the extension origin. The companion checks the origin against its adjacent configuration and selects a separate state directory for each browser profile.
+For Google Chrome on Linux, the user manifest directory is `~/.config/google-chrome/NativeMessagingHosts`. On macOS, it is `~/Library/Application Support/Google/Chrome/NativeMessagingHosts`. Use [Chrome's native messaging guide](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging) for other browser channels and platform registration paths. Chrome starts the executable and supplies the extension origin. The companion checks the origin against its adjacent configuration and selects a separate state directory for each browser profile.
 
 Provider keys stay in the native credential store. Installed agents keep their own authentication. Configure the desired provider or agent through the paired Rust panel before starting work. An action that loses confirmation remains uncertain and is not repeated automatically.
 
