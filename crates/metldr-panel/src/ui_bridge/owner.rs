@@ -12,6 +12,7 @@ pub(super) enum Owner {
     Starting {
         ui: String,
         stop: bool,
+        dispatched: bool,
     },
     Running {
         ui: String,
@@ -68,8 +69,33 @@ impl Owner {
         *self = Self::Starting {
             ui: ui.into(),
             stop: false,
+            dispatched: false,
         };
         Ok(())
+    }
+
+    pub(super) fn dispatch(&mut self, id: &str) -> Result<(), FlowError> {
+        match self {
+            Self::Starting { ui, dispatched, .. } if ui == id => {
+                *dispatched = true;
+                Ok(())
+            }
+            _ => Err(FlowError::HistoryStale),
+        }
+    }
+
+    pub(super) fn abandon(&mut self, id: &str) -> bool {
+        let dispatched = match self {
+            Self::Starting { ui, dispatched, .. } if ui == id => *dispatched,
+            Self::Running { ui, .. } if ui == id => true,
+            _ => return false,
+        };
+        *self = if dispatched {
+            Self::Uncertain
+        } else {
+            Self::Idle
+        };
+        true
     }
 
     pub(super) fn capture(&mut self) -> Result<(), FlowError> {
@@ -151,9 +177,14 @@ impl Owner {
         }
     }
 
-    pub(super) fn capture_finished(&mut self) {
+    pub(super) fn capture_finished(&mut self) -> bool {
         // Capture saves a source only. The next run reads and checks it again.
-        *self = Self::Idle;
+        if matches!(self, Self::Capturing) {
+            *self = Self::Idle;
+            true
+        } else {
+            false
+        }
     }
 
     pub(super) fn not_sent(&mut self) {
@@ -162,7 +193,7 @@ impl Owner {
 
     pub(super) fn accepted(&mut self, native: RunId) -> bool {
         let old = std::mem::replace(self, Self::Uncertain);
-        if let Self::Starting { ui, stop } = old {
+        if let Self::Starting { ui, stop, .. } = old {
             *self = Self::Running { ui, native };
             stop
         } else {
@@ -172,7 +203,7 @@ impl Owner {
 
     pub(super) fn stop(&mut self, id: &str) -> Result<Stop, FlowError> {
         match self {
-            Self::Starting { ui, stop } if ui == id => {
+            Self::Starting { ui, stop, .. } if ui == id => {
                 *stop = true;
                 Ok(Stop::Pending)
             }
@@ -207,6 +238,37 @@ impl Owner {
 #[cfg(test)]
 mod checks {
     use super::*;
+
+    #[test]
+    fn abandoned_starts_release_only_unsent_owned_work() {
+        let mut owner = Owner::Idle;
+        assert!(!owner.capture_finished());
+        owner.capture().unwrap();
+        assert!(owner.begin("during-capture").is_err());
+        assert!(owner.capture_finished());
+        owner.begin("unsent").unwrap();
+        assert!(!owner.capture_finished());
+        assert!(!owner.abandon("sibling"));
+        assert!(owner.begin("overlap").is_err());
+        assert!(owner.abandon("unsent"));
+        owner.begin("sent").unwrap();
+        assert!(owner.dispatch("sibling").is_err());
+        owner.dispatch("sent").unwrap();
+        assert!(matches!(owner.stop("sent").unwrap(), Stop::Pending));
+        assert!(owner.abandon("sent"));
+        assert!(owner.begin("must-not-replay").is_err());
+        assert!(owner.capture().is_err());
+
+        let native: RunId = serde_json::from_str("\"0123456789abcdef0123456789abcdef:1\"").unwrap();
+        let mut owner = Owner::Idle;
+        owner.begin("running").unwrap();
+        owner.dispatch("running").unwrap();
+        owner.accepted(native.clone());
+        assert!(!owner.abandon("sibling"));
+        assert!(matches!(owner.stop("running").unwrap(), Stop::Native(id) if id == native));
+        assert!(owner.abandon("running"));
+        assert!(owner.begin("must-not-replay").is_err());
+    }
 
     #[test]
     fn stop_during_start_is_retained_and_unknown_receipts_block_replay() {
