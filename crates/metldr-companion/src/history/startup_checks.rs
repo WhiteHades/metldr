@@ -6,7 +6,10 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
-    sync::mpsc::{self, Receiver},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        mpsc::{self, Receiver},
+    },
     thread::{self, JoinHandle},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -22,12 +25,15 @@ struct Directory(PathBuf);
 
 impl Directory {
     fn new() -> Result<Self> {
+        // The clock can repeat across parallel tests; macOS only has microsecond resolution.
+        static NEXT: AtomicU64 = AtomicU64::new(0);
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join(".tmp")
             .join(format!(
-                "history-startup-{}-{}",
+                "history-startup-{}-{}-{}",
                 std::process::id(),
-                SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+                SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
             ));
         fs::create_dir_all(&path)?;
         Ok(Self(path))
