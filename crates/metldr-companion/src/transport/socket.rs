@@ -102,6 +102,8 @@ impl SocketTransport {
             drop(stream);
             return Ok(None);
         }
+        // BSD-derived systems, including macOS, inherit O_NONBLOCK from the listener.
+        stream.set_nonblocking(false)?;
         let reader = stream.try_clone()?;
         let epoch = self.next_epoch;
         self.next_epoch = self
@@ -377,4 +379,54 @@ pub(super) fn bridge(path: &Path, capability: &str, origin: &str) -> Result<()> 
     drop(socket);
     drop(writer);
     Ok(())
+}
+
+#[cfg(test)]
+mod checks {
+    use super::*;
+    use std::sync::mpsc::sync_channel;
+
+    #[test]
+    fn accepted_client_can_send_hello_after_accept() -> Result<()> {
+        let directory = PathBuf::from(format!("/tmp/metldr-socket-{}", std::process::id()));
+        fs::create_dir(&directory)?;
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?;
+        let path = directory.join("bridge.sock");
+        let capability = "a".repeat(64);
+        let mut transport =
+            SocketTransport::new(path.clone(), capability.clone(), "origin".into())?;
+        let mut client = UnixStream::connect(&path)?;
+        let (tx, rx) = sync_channel(4);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let reader = loop {
+            if let Some(reader) = transport.poll(&tx, true)? {
+                break reader;
+            }
+            assert!(Instant::now() < deadline, "listener did not accept");
+            thread::sleep(Duration::from_millis(5));
+        };
+        // The reader must wait for a hello that arrives after accept.
+        thread::sleep(Duration::from_millis(100));
+        let hello = serde_json::to_vec(&json!({
+            "v": WIRE_VERSION,
+            "kind": "bridge_hello",
+            "origin": "origin",
+            "capability": capability,
+        }))?;
+        client.write_all(&(hello.len() as u32).to_ne_bytes())?;
+        client.write_all(&hello)?;
+        let event = rx.recv_timeout(Duration::from_secs(2))?;
+        let Event::Input(Input::Socket { message, .. }) = event else {
+            return Err("expected socket input".into());
+        };
+        assert!(
+            matches!(message, SocketInput::Hello { .. }),
+            "reader closed before the hello arrived"
+        );
+        drop(client);
+        reader.join().map_err(|_| "reader panicked")?;
+        drop(transport);
+        fs::remove_dir_all(directory)?;
+        Ok(())
+    }
 }
